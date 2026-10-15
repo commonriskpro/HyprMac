@@ -1,0 +1,166 @@
+# openspec/config.yaml
+schema_version: "1.0.0"
+schema: spec-driven
+
+platform_requirements:
+  target_os: "macOS 27 (Golden Gate)"
+  os_version_min: "27.0"
+  architecture: "ARM64e (Apple Silicon)"
+  abi: "arm64e preview ABI (-arm64e_preview_abi boot-arg)"
+  sip_requirement: "disabled (CSR_ALLOW_TASK_FOR_PID active)"
+  privilege_levels:
+    injector: "Root (UID 0)"
+    server_hook: "WindowServer (UID 88 / _windowserver)"
+    client: "User Session (UID 501)"
+  compatibility_notes: >-
+    While the primary target is macOS 27 (Golden Gate), the build toolchain
+    uses -target arm64e-apple-macos14.0 and native/injector/main.c checks
+    os_major >= 14 for backward compatibility across Darwin 23+ systems.
+
+artifacts:
+  specifications:
+    - path: "docs/WINDOWSERVER_INJECTION_SPEC.md"
+      title: "WindowServer In-Situ Composition Engine Architecture Specification"
+      description: "Low-level injection invariants, wire protocol, and security baseline"
+    - path: "openspec/changes/windowserver-insitu-composition/proposal.md"
+      title: "WindowServer In-Situ Composition Change Proposal"
+      description: "Problem statement, capabilities, threat model, blast radius, and rollback plan"
+    - path: "openspec/changes/windowserver-insitu-composition/design.md"
+      title: "WindowServer In-Situ Composition Engine Software Design Document"
+      description: "Detailed architecture, Mach task injection mechanics, ARM64e PAC handling, and wire protocol"
+    - path: "openspec/changes/windowserver-insitu-composition/specs/composition-engine.spec.md"
+      title: "Composition Engine Behavioral Specification"
+      description: "Formal RFC 2119 requirements, IPC protocol framing, and Gherkin behavioral scenarios"
+    - path: "openspec/changes/windowserver-insitu-composition/tasks.md"
+      title: "WindowServer In-Situ Composition Implementation Tasks"
+      description: "Phased engineering roadmap, safety checkpoints, and verification gates"
+references:
+  - path: "docs/WINDOWSERVER_INJECTION_SPEC.md"
+    title: "WindowServer In-Situ Injection Specification"
+    status: "canonical"
+
+context: |
+  Tech stack: Swift 5.9, Objective-C / C11, ARM64 / ARM64e Assembly, macOS 27 (Golden Gate).
+  Architecture: Sources/HyprMac (Core, Bridge, Render, Layout, Input, Config, Shell, Session).
+  Low-level subsystems: Mach task injection (mach_vm_write, task_for_pid), WindowServer in-situ hooks,
+  SkyLight.framework (CGS / SLS private APIs), CAWindowServer (QuartzCore).
+  Safety Envelope: Host running with SIP disabled and boot-args -arm64e_preview_abi.
+
+rules:
+  proposal:
+    - Include threat model and rollback plan for all Mach / WindowServer modifications.
+    - Explicitly state blast radius and isolation boundaries.
+  specs:
+    - Use Given/When/Then for behavioral scenarios.
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+  design:
+    - Include sequence diagrams for IPC and Mach injection flows.
+    - Document memory layout, C struct packings, and PAC / ARM64e handling.
+    - Specify fail-safe circuit breakers (e.g. /tmp/hyprmac.safemode).
+  tasks:
+    - Group by phase, use hierarchical numbering (1.1, 1.2, 2.1...).
+    - Ensure zero destructive mutations without an explicit safety checkpoint.
+    - Checkpoint syntax: Checkpoints MUST be declared using `[CHECKPOINT: <name>]`, `**Checkpoint: <criteria>**`, or `### CHECKPOINT: <name>`. A valid checkpoint defines: (1) Precondition verification command/probe, (2) Pass/fail gate criteria, and (3) Explicit rollback action before proceeding to destructive or irreversible operations (e.g. SIP modifications, boot-arg toggles, Mach task memory injection, or in-process dylib loading).
+
+validation:
+  document_structure:
+    proposal:
+      required_sections:
+        - "Intent"
+        - "Scope"
+        - "Capabilities"
+        - "Approach"
+        - "Affected Areas"
+        - "Threat Model & Blast Radius"
+        - "Acceptance Criteria"
+        - "Rollback Plan"
+      required_tables:
+        - name: "Affected Areas"
+          columns: ["Area", "Impact", "Description"]
+        - name: "Threat Model"
+          columns: ["Threat", "Likelihood", "Impact", "Mitigation"]
+        - name: "Acceptance Criteria"
+          columns: ["Criterion", "Target", "Measurement Method"]
+    specs:
+      format: "gherkin"
+      required_keywords:
+        rfc2119: ["MUST", "SHALL", "SHOULD", "MAY"]
+        scenarios: ["Feature", "Scenario", "Given", "When", "Then"]
+    design:
+      required_sections:
+        - "Architecture Overview"
+        - "IPC & Sequence Flow"
+        - "Memory Layout & Struct Alignment"
+        - "Fail-Safe Circuit Breakers"
+      diagram_format: "mermaid"
+    tasks:
+      task_id_pattern: "^\\d+\\.\\d+(\\.\\d+)?$"
+      require_checkpoints: true
+      phase_grouping: true
+      checkpoint_definition:
+        syntax_patterns:
+          - "^\[CHECKPOINT:\\s*(.+)\]$"
+          - "^\*\*Checkpoint:\\s*(.+)\*\*$"
+          - "^###\\s+CHECKPOINT:\\s*(.+)$"
+        required_fields:
+          - "precondition_probe"
+          - "pass_criteria"
+          - "rollback_action"
+        description: "Explicit safety boundary defining precondition verification, pass criteria, and rollback instructions"
+
+lifecycle:
+  states:
+    - draft          # Initial authoring, incomplete
+    - under_review   # Submitted for peer/architectural review
+    - approved       # Design approved, ready for implementation
+    - in_progress    # Active implementation underway
+    - verified       # Implementation complete, verification passed
+    - archived       # Superseded or deprecated
+  transitions:
+    - from: draft
+      to: under_review
+      requires: "All mandatory sections complete per rules"
+    - from: under_review
+      to: approved
+      requires: "Architectural review sign-off"
+    - from: under_review
+      to: draft
+      requires: "Review feedback requires rework"
+    - from: approved
+      to: in_progress
+      requires: "Implementation task started"
+    - from: in_progress
+      to: verified
+      requires: "All acceptance criteria met, verification receipt provided"
+    - from: verified
+      to: archived
+      requires: "Superseded by newer change or no longer applicable"
+    - from: in_progress
+      to: draft
+      requires: "Fundamental design issue discovered during implementation"
+    - from: verified
+      to: draft
+      requires: "Critical regression, specification divergence, or architectural rollback triggered"
+  sign_off:
+    directory: "reviews/"
+    receipt_filename_pattern: "reviews/{change_id}-signoff.md"
+    rollback_rules:
+      - transition: "verified -> draft"
+        authority: "Lead Architect"
+        requires: "Formal regression defect receipt or architectural pivot justification"
+    authorities:
+      - role: "Lead Architect"
+        description: "Primary sign-off authority for architecture, state transitions, and low-level invariants"
+        required_for: ["under_review -> approved", "in_progress -> verified", "verified -> draft"]
+      - role: "Security Reviewer"
+        description: "Authority for Mach injection safety, privilege boundaries, and fail-safe circuit breakers"
+        required_for: ["under_review -> approved", "verified -> draft"]
+    receipt_schema:
+      required_fields:
+        - "change_id"
+        - "reviewer"
+        - "role"
+        - "decision" # approved | rejected | changes_requested
+        - "timestamp"
+        - "invariants_verified"
+        - "residual_risks"

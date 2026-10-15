@@ -1,0 +1,8 @@
+.build/
+build/
+.DS_Store
+*.o
+*.dylib
+*.dSYM/
+reference/
+/tmp/
