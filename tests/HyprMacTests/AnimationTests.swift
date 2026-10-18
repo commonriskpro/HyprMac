@@ -681,4 +681,33 @@ final class AnimationTests: XCTestCase {
         XCTAssertNil(engine.activeWorkspaceAnimation)
         XCTAssertFalse(completed)
     }
+
+    func testAnimateFullscreenStepAndCompletion() {
+        let engine = AnimationEngine()
+        engine.isSimulated = true
+        let start = CGRect(x: 100, y: 100, width: 400, height: 300)
+        let target = CGRect(x: 0, y: 37, width: 1920, height: 1043)
+        var completed = false
+
+        let started = engine.animateFullscreen(
+            windowID: 1005,
+            from: start,
+            to: target,
+            isFullscreen: true
+        ) { _ in
+            completed = true
+        }
+
+        XCTAssertTrue(started)
+        XCTAssertTrue(engine.isAnimating(windowID: 1005))
+
+        // Step through to finish (duration is 0.18s)
+        engine.step(dt: 0.10)
+        XCTAssertFalse(completed)
+        XCTAssertTrue(engine.isAnimating(windowID: 1005))
+
+        engine.step(dt: 0.10)
+        XCTAssertTrue(completed)
+        XCTAssertFalse(engine.isAnimating(windowID: 1005))
+    }
 }

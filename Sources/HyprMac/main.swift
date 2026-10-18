@@ -489,7 +489,8 @@ func computeTilingBounds(bar: HyprBarWindow? = nil) -> CGRect {
     let vis = screen.visibleFrame
     let menuBarHeight = max(0.0, (screenFrame.origin.y + screenFrame.height) - (vis.origin.y + vis.height))
     let effectiveBar = bar ?? HyprBarWindow.shared
-    let barBottomY = effectiveBar?.barBottomY ?? 0.0
+    let rawBarBottomY = effectiveBar?.barBottomY ?? 0.0
+    let barBottomY = rawBarBottomY > 0.0 ? rawBarBottomY : 37.0
 
     let topOrigin = max(menuBarHeight, barBottomY)
     let tilingHeight = max(0.0, screenFrame.height - topOrigin)
@@ -1208,14 +1209,22 @@ func runIntegratedDaemon(configPath: String?) {
 
             if isFullscreen {
                 let fullBounds = computeTilingBounds()
-                wsMgr.setStoredFrame(fullBounds, for: wid)
                 let curBounds = savedFrame ?? engine.currentFrames()[wid] ?? WindowDetector.shared.fastFocusedWindow()?.bounds ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
+                wsMgr.setStoredFrame(fullBounds, for: wid)
 
-                // Recalculate layout for remaining tiled windows
-                let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
-                engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                // 1. Immediately apply physical frame at t = 0
+                WindowDetector.shared.setWindowFrame(windowID: wid, frame: fullBounds)
 
+                // 2. Retile remaining windows asynchronously without blocking
                 let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
+                        engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                    }
+                }
+
+                // 3. Trigger smooth visual animation from curBounds to fullBounds
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: curBounds,
@@ -1223,7 +1232,6 @@ func runIntegratedDaemon(configPath: String?) {
                     isFullscreen: true,
                     borderWindowID: borderWid
                 ) { _ in
-                    WindowDetector.shared.setWindowFrame(windowID: wid, frame: fullBounds)
                     let f = WindowDetector.shared.getFocusedWindow()
                     bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }
@@ -1242,12 +1250,16 @@ func runIntegratedDaemon(configPath: String?) {
                 }
                 wsMgr.setStoredFrame(targetFrame, for: wid)
 
-                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
+                // 1. Immediately apply physical frame at t = 0
+                WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
 
+                // 2. Reapply layout for remaining tiled windows
+                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 var otherFrames = frames
                 otherFrames.removeValue(forKey: wid)
                 engine.applyToSystem(windowFrames: otherFrames, bridge: SkyLightBridge.shared)
 
+                // 3. Animate from fullBounds to targetFrame
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: fullBounds,
@@ -1255,7 +1267,6 @@ func runIntegratedDaemon(configPath: String?) {
                     isFullscreen: false,
                     borderWindowID: borderWid
                 ) { _ in
-                    WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
                     let f = WindowDetector.shared.getFocusedWindow()
                     bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }

@@ -115,6 +115,7 @@ public struct HyprAnimationTree: Equatable, Sendable {
         tree.animations["fadeOut"] = HyprAnimation(node: "fadeOut", enabled: true, duration: 0.146, curveName: "almostLinear")
         tree.animations["fade"] = HyprAnimation(node: "fade", enabled: true, duration: 0.303, curveName: "quick")
         tree.animations["border"] = HyprAnimation(node: "border", enabled: true, duration: 0.539, curveName: "easeOutQuint")
+        tree.animations["fullscreen"] = HyprAnimation(node: "fullscreen", enabled: true, duration: 0.18, curveName: "easeOutQuint")
         tree.animations["workspaces"] = HyprAnimation(node: "workspaces", enabled: false, duration: 0.0, curveName: "almostLinear", style: "fade")
 
         return tree

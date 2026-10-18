@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import Cocoa
+import os
 
 /// Classification of window transitions supported by the animation subsystem.
 public enum AnimationKind: String, Sendable, CaseIterable {
@@ -115,6 +116,7 @@ public final class AnimationEngine {
 
     private let skyLight: SkyLightBridge
     public var isSimulated: Bool = false
+    private let isSteppingLock = OSAllocatedUnfairLock(initialState: false)
 
     public init(
         config: HyprConfig = .default,
@@ -318,6 +320,7 @@ public final class AnimationEngine {
         to targetFrame: CGRect,
         isFullscreen: Bool,
         borderWindowID: CGWindowID? = nil,
+        physicalBaseFrame: CGRect? = nil,
         onComplete: (@MainActor (CGWindowID) -> Void)? = nil
     ) -> Bool {
         guard config.animationsEnabled else {
@@ -333,6 +336,7 @@ public final class AnimationEngine {
             kind: .fullscreen,
             startFrame: startFrame,
             targetFrame: targetFrame,
+            physicalBaseFrame: physicalBaseFrame ?? targetFrame,
             duration: animConfig.duration,
             solver: solver,
             borderWindowID: borderWindowID,
@@ -571,6 +575,9 @@ public final class AnimationEngine {
             HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allResetIDs)
         }
         activeAnimations.removeAll()
+        isSteppingLock.withLock { isStepping in
+            isStepping = false
+        }
         if !isSimulated {
             displayLink.stop()
         }
@@ -809,8 +816,21 @@ public final class AnimationEngine {
     private func ensureDisplayLinkRunning() {
         guard (activeWorkspaceAnimation != nil || !activeAnimations.isEmpty), !displayLink.isRunning, !isSimulated else { return }
         displayLink.start { [weak self] _, dt in
+            guard let self = self else { return }
+            let shouldStep = self.isSteppingLock.withLock { isStepping -> Bool in
+                if isStepping { return false }
+                isStepping = true
+                return true
+            }
+            guard shouldStep else { return }
+
             Task { @MainActor in
-                self?.step(dt: dt)
+                defer {
+                    self.isSteppingLock.withLock { isStepping in
+                        isStepping = false
+                    }
+                }
+                self.step(dt: dt)
             }
         }
     }

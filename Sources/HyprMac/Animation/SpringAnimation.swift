@@ -74,7 +74,7 @@ public final class SpringAnimation: @unchecked Sendable {
         self.initialVelocity = initialVelocity
         self.currentValue = startValue
         self.currentVelocity = initialVelocity
-        self.isSettled = (abs(startValue - targetValue) < 1e-5 && abs(initialVelocity) < 1e-4)
+        self.isSettled = (abs(startValue - targetValue) < 0.005 && abs(initialVelocity) < 1e-4)
     }
 
     /// Reconfigures start, target and initial velocity, resetting elapsed time.
@@ -85,7 +85,7 @@ public final class SpringAnimation: @unchecked Sendable {
         self.currentValue = startValue
         self.currentVelocity = initialVelocity
         self.elapsedTime = 0.0
-        self.isSettled = (abs(startValue - targetValue) < 1e-5 && abs(initialVelocity) < 1e-4)
+        self.isSettled = (abs(startValue - targetValue) < 0.005 && abs(initialVelocity) < 1e-4)
     }
 
     /// Evaluates the analytical solution (position and velocity) at any given elapsed time t >= 0.
@@ -150,7 +150,7 @@ public final class SpringAnimation: @unchecked Sendable {
     @discardableResult
     public func step(
         dt: Double,
-        tolerance: Double = 5e-4,
+        tolerance: Double = 0.005,
         velocityTolerance: Double = 5e-3
     ) -> Double {
         if isSettled { return targetValue }
