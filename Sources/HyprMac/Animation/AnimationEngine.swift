@@ -152,6 +152,7 @@ public final class AnimationEngine {
         startFrame: CGRect? = nil,
         targetFrame: CGRect,
         borderWindowID: CGWindowID? = nil,
+        physicalBaseFrame: CGRect? = nil,
         onComplete: (@MainActor (CGWindowID) -> Void)? = nil
     ) -> Bool {
         guard config.animationsEnabled else {
@@ -179,7 +180,7 @@ public final class AnimationEngine {
             return false
         }
 
-        let physicalBase = existingAnim?.physicalBaseFrame ?? WindowDetector.shared.getWindowBounds(windowID: windowID) ?? initial
+        let physicalBase = physicalBaseFrame ?? existingAnim?.physicalBaseFrame ?? WindowDetector.shared.getWindowBounds(windowID: windowID) ?? initial
 
         let solver = makeSolver(for: animConfig)
         let animation = ActiveWindowAnimation(

@@ -1207,6 +1207,9 @@ func runIntegratedDaemon(configPath: String?) {
             let activeIDs = wsMgr.activeWindowIDs()
             let activeTiledIDs = activeIDs.filter { !km.isFloating(windowID: $0) && !km.isFullscreen(windowID: $0) }
 
+            SkyLightBridge.shared.disableUpdate()
+            defer { SkyLightBridge.shared.reenableUpdate() }
+
             if isFullscreen {
                 let fullBounds = computeTilingBounds()
                 let curBounds = savedFrame ?? engine.currentFrames()[wid] ?? WindowDetector.shared.fastFocusedWindow()?.bounds ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
@@ -1215,16 +1218,15 @@ func runIntegratedDaemon(configPath: String?) {
                 // 1. Immediately apply physical frame at t = 0
                 WindowDetector.shared.setWindowFrame(windowID: wid, frame: fullBounds)
 
-                // 2. Retile remaining windows asynchronously without blocking
-                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
-                        engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
-                    }
+                // 2. Retile remaining windows atomically
+                let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
+                for (otherWid, otherFrame) in frames {
+                    wsMgr.setStoredFrame(otherFrame, for: otherWid)
+                    WindowDetector.shared.setWindowFrame(windowID: otherWid, frame: otherFrame)
                 }
 
                 // 3. Trigger smooth visual animation from curBounds to fullBounds
+                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: curBounds,
@@ -1236,7 +1238,7 @@ func runIntegratedDaemon(configPath: String?) {
                     bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }
             } else {
-                // Restoring from fullscreen
+                // Restoring from fullscreen atomically in a single pass
                 let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
                 let fullBounds = computeTilingBounds()
                 let targetFrame: CGRect
@@ -1250,16 +1252,17 @@ func runIntegratedDaemon(configPath: String?) {
                 }
                 wsMgr.setStoredFrame(targetFrame, for: wid)
 
-                // 1. Immediately apply physical frame at t = 0
+                // 1. Concurrently apply physical frames for ALL windows at t = 0
                 WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
-
-                // 2. Reapply layout for remaining tiled windows
-                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 var otherFrames = frames
                 otherFrames.removeValue(forKey: wid)
-                engine.applyToSystem(windowFrames: otherFrames, bridge: SkyLightBridge.shared)
+                for (otherWid, otherFrame) in otherFrames {
+                    wsMgr.setStoredFrame(otherFrame, for: otherWid)
+                    WindowDetector.shared.setWindowFrame(windowID: otherWid, frame: otherFrame)
+                }
 
-                // 3. Animate from fullBounds to targetFrame
+                // 2. Animate fullscreen window from fullBounds to targetFrame
+                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: fullBounds,
@@ -1269,6 +1272,20 @@ func runIntegratedDaemon(configPath: String?) {
                 ) { _ in
                     let f = WindowDetector.shared.getFocusedWindow()
                     bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
+                }
+
+                // 3. Simultaneously animate remaining windows in unison using the same fullscreen curve
+                for (otherWid, otherTarget) in otherFrames {
+                    let cur = wsMgr.storedFrame(for: otherWid) ?? engine.currentFrames()[otherWid] ?? otherTarget
+                    let bWid = bMgr.overlays[otherWid].flatMap { CGWindowID($0.windowNumber) }
+                    AnimationEngine.shared.animateFullscreen(
+                        windowID: otherWid,
+                        from: cur,
+                        to: otherTarget,
+                        isFullscreen: false,
+                        borderWindowID: bWid,
+                        physicalBaseFrame: otherTarget
+                    )
                 }
             }
         }
