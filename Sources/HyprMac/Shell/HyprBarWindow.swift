@@ -11,6 +11,7 @@ public enum HyprBarStyle: Sendable, Equatable {
 /// Transparent, non-activating system overlay panel displaying the Waybar 3-island floating status bar
 @MainActor
 public final class HyprBarWindow: NSPanel {
+    nonisolated(unsafe) public static weak var shared: HyprBarWindow?
     public let barView: BarView
 
     public var barHeight: CGFloat {
@@ -21,6 +22,16 @@ public final class HyprBarWindow: NSPanel {
         didSet { reposition() }
     }
 
+    /// Bar's bottom edge in CoreGraphics coordinates (top = 0)
+    public var barBottomY: CGFloat {
+        switch barStyle {
+        case .floatingPill(_, let topMargin):
+            return topMargin + barHeight
+        case .docked:
+            return barHeight
+        }
+    }
+
     public weak var targetScreen: NSScreen? {
         didSet { reposition() }
     }
@@ -28,11 +39,13 @@ public final class HyprBarWindow: NSPanel {
     public override var canBecomeKey: Bool { false }
     public override var canBecomeMain: Bool { false }
 
+
+
     public init(
         screen: NSScreen? = NSScreen.main,
-        height: CGFloat = 46.0,
-        style: HyprBarStyle = .floatingPill(horizontalMargin: 10.0, topMargin: 8.0),
-        workspaceCount: Int = 5
+        height: CGFloat = 32.0,
+        style: HyprBarStyle = .floatingPill(horizontalMargin: 8.0, topMargin: 5.0),
+        workspaceCount: Int = 6
     ) {
         self.barHeight = height
         self.barStyle = style
@@ -54,11 +67,15 @@ public final class HyprBarWindow: NSPanel {
         isReleasedWhenClosed = false
         contentView = barView
 
+        Self.shared = self
         reposition()
         setupScreenNotifications()
     }
 
     deinit {
+        if Self.shared === self {
+            Self.shared = nil
+        }
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -77,8 +94,10 @@ public final class HyprBarWindow: NSPanel {
 
     /// Recalculates and repositions the panel anchored to the top of the target monitor
     public func reposition() {
-        let screen = targetScreen ?? NSScreen.main
-        let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        let screen = targetScreen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screenFrame = screen?.frame, screenFrame.width > 0, screenFrame.height > 0 else {
+            return
+        }
 
         let newFrame: NSRect
         switch barStyle {
@@ -87,14 +106,14 @@ public final class HyprBarWindow: NSPanel {
             let x = screenFrame.origin.x + horizontalMargin
             let y = screenFrame.origin.y + screenFrame.height - barHeight - topMargin
             newFrame = NSRect(x: x, y: y, width: width, height: barHeight)
-            barView.cornerRadius = 17.0
+            barView.cornerRadius = 5.0
 
         case .docked:
             let width = screenFrame.width
             let x = screenFrame.origin.x
             let y = screenFrame.origin.y + screenFrame.height - barHeight
             newFrame = NSRect(x: x, y: y, width: width, height: barHeight)
-            barView.cornerRadius = 17.0
+            barView.cornerRadius = 5.0
         }
 
         if frame != newFrame {
@@ -141,9 +160,9 @@ public final class HyprBarWindow: NSPanel {
         let testScreen = NSScreen.main
         let window = HyprBarWindow(
             screen: testScreen,
-            height: 46.0,
-            style: .floatingPill(horizontalMargin: 10.0, topMargin: 8.0),
-            workspaceCount: 5
+            height: 32.0,
+            style: .floatingPill(horizontalMargin: 8.0, topMargin: 5.0),
+            workspaceCount: 6
         )
 
         guard window.contentView === window.barView else {

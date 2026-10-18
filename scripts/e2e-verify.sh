@@ -169,7 +169,6 @@ fi
 # ------------------------------------------------------------------------------
 log_step 4 "Running hypr-inject and Verifying WindowServer Load"
 
-SOCKET_PATH="/tmp/hyprmac-server.sock"
 INJECT_OUT=""
 INJECT_EXIT=0
 
@@ -193,22 +192,35 @@ else
     log_warn "If running in an unprivileged CI environment without root, ensure hook is preloaded."
 fi
 
-# Wait up to 5 seconds for socket availability
-log_info "Waiting for socket ${SOCKET_PATH} to settle..."
-SOCKET_READY=0
+# Wait up to 5 seconds for SHM file availability
+SHM_PATH="/tmp/hyprmac-ipc.shm"
+log_info "Waiting for SHM file ${SHM_PATH} to settle..."
 for i in $(seq 1 10); do
-    if [ -S "${SOCKET_PATH}" ] && nc -z -U "${SOCKET_PATH}" 2>/dev/null; then
-        SOCKET_READY=1
-        break
+    if [ -f "${SHM_PATH}" ]; then
+        SHM_SIZE=$(stat -f%z "${SHM_PATH}" 2>/dev/null || stat -c%s "${SHM_PATH}" 2>/dev/null || true)
+        if [ "${SHM_SIZE}" -eq 65536 ]; then
+            break
+        fi
     fi
     sleep 0.5
 done
 
-if [ "${SOCKET_READY}" -eq 1 ]; then
-    log_pass "HyprServer socket is active and accepting connections (${SOCKET_PATH})"
-else
-    log_fail "HyprServer socket did not become ready within 5 seconds"
+# Verify SHM file exists and has correct size
+if [ ! -f "${SHM_PATH}" ]; then
+    echo "FAIL: SHM file not found at ${SHM_PATH}"
+    log_fail "SHM file not found at ${SHM_PATH}"
+    exit 1
 fi
+
+SHM_SIZE=$(stat -f%z "${SHM_PATH}" 2>/dev/null || stat -c%s "${SHM_PATH}" 2>/dev/null)
+if [ "${SHM_SIZE}" -ne 65536 ]; then
+    echo "FAIL: SHM file size ${SHM_SIZE} != expected 65536"
+    log_fail "SHM file size ${SHM_SIZE} != expected 65536"
+    exit 1
+fi
+
+echo "PASS: SHM IPC file present (${SHM_SIZE} bytes)"
+log_pass "SHM IPC file present (${SHM_SIZE} bytes)"
 
 # ------------------------------------------------------------------------------
 # STEP 5: IPC Smoke Test via CLI and Harness

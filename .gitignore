@@ -6,3 +6,4 @@ build/
 *.dSYM/
 reference/
 /tmp/
+*.bak

@@ -31,7 +31,7 @@ RESET="\x1b[0m"
 
 NUM_WINDOWS=${1:-50}
 DOCS_DIR="/tmp/hyprmac_stress_docs"
-SOCKET_PATH="/tmp/hyprmac-server.sock"
+SHM_PATH="/tmp/hyprmac-ipc.shm"
 
 PASSED_CHECKS=0
 FAILED_CHECKS=0
@@ -75,9 +75,9 @@ echo -e "=======================================================${RESET}"
 log_info "Target Window Count: ${NUM_WINDOWS}"
 
 # ------------------------------------------------------------------------------
-# STEP 0: Verify WindowServer and Socket Baseline
+# STEP 0: Verify WindowServer and IPC Baseline
 # ------------------------------------------------------------------------------
-log_step "Step 0: Establishing Process & Socket Baseline"
+log_step "Step 0: Establishing Process & IPC Baseline"
 
 WS_PID_INITIAL=$(pgrep -x WindowServer || pgrep WindowServer || true)
 if [ -z "${WS_PID_INITIAL}" ]; then
@@ -86,10 +86,15 @@ if [ -z "${WS_PID_INITIAL}" ]; then
 fi
 log_info "Initial WindowServer PID: ${WS_PID_INITIAL}"
 
-if [ -S "${SOCKET_PATH}" ] && nc -z -U "${SOCKET_PATH}" 2>/dev/null; then
-    log_pass "HyprServer socket is active and responsive at ${SOCKET_PATH}"
+if [ -f "${SHM_PATH}" ]; then
+    SHM_SIZE=$(stat -f%z "${SHM_PATH}" 2>/dev/null || stat -c%s "${SHM_PATH}" 2>/dev/null)
+    if [ "${SHM_SIZE}" -eq 65536 ]; then
+        log_pass "HyprServer SHM IPC file is active at ${SHM_PATH} (${SHM_SIZE} bytes)"
+    else
+        log_warn "HyprServer SHM file size ${SHM_SIZE} != expected 65536"
+    fi
 else
-    log_warn "HyprServer socket is not currently responsive at ${SOCKET_PATH}."
+    log_warn "HyprServer SHM IPC file is not currently present at ${SHM_PATH}."
     log_warn "Ensure libhyprserver.dylib is loaded via 'sudo build/hypr-inject' before running full IPC tests."
 fi
 
@@ -222,7 +227,7 @@ fi
 log_step "Step 5: Querying Window States"
 
 VERIFIED_QUERIES=0
-if [ -x "./tests/test_ipc" ] && [ -S "${SOCKET_PATH}" ] && nc -z -U "${SOCKET_PATH}" 2>/dev/null; then
+if [ -x "./tests/test_ipc" ] && [ -f "${SHM_PATH}" ]; then
     # Sample up to 10 windows for query verification
     SAMPLE_COUNT=$((${ACTUAL_COUNT} < 10 ? ${ACTUAL_COUNT} : 10))
     for i in $(seq 0 $((SAMPLE_COUNT - 1))); do
@@ -233,7 +238,7 @@ if [ -x "./tests/test_ipc" ] && [ -S "${SOCKET_PATH}" ] && nc -z -U "${SOCKET_PA
     done
     log_pass "Queried and verified ${VERIFIED_QUERIES}/${SAMPLE_COUNT} sampled windows via IPC test harness"
 else
-    log_info "Socket not connected or test_ipc not available; verified via CoreGraphics layer tags"
+    log_info "SHM IPC not present or test_ipc not available; verified via CoreGraphics layer tags"
     VERIFIED_QUERIES=${ACTUAL_COUNT}
     log_pass "Window hierarchy verified via CoreGraphics"
 fi

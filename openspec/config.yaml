@@ -4,7 +4,7 @@ schema: spec-driven
 
 platform_requirements:
   target_os: "macOS 27 (Golden Gate)"
-  os_version_min: "27.0"
+  os_version_min: "14.0" # Primary target is macOS 27 (Golden Gate), with backward compatibility extending to 14.0 (Sonoma)
   architecture: "ARM64e (Apple Silicon)"
   abi: "arm64e preview ABI (-arm64e_preview_abi boot-arg)"
   sip_requirement: "disabled (CSR_ALLOW_TASK_FOR_PID active)"
@@ -34,16 +34,96 @@ artifacts:
     - path: "openspec/changes/windowserver-insitu-composition/tasks.md"
       title: "WindowServer In-Situ Composition Implementation Tasks"
       description: "Phased engineering roadmap, safety checkpoints, and verification gates"
+  implementation:
+    - path: "native/server_hook/hook.c"
+      title: "WindowServer In-Situ Hook Library"
+      description: "Server-side dylib (libhyprserver.dylib) implementing shared memory IPC (/tmp/hyprmac-ipc.shm) and kqueue socket server (/tmp/hyprmac-server.sock), CGS interposition, and window styling"
+    - path: "native/shared/protocol.h"
+      title: "Shared IPC Wire Protocol"
+      description: "Binary message framing, shared memory IPC layout (/tmp/hyprmac-ipc.shm), socket definitions (/tmp/hyprmac-server.sock), readiness synchronization (/tmp/hyprserver.ready), command definitions (HYPR_CMD_*), payload structures, and error codes"
+    - path: "Sources/HyprMac/Bridge/HyprServerBridge.swift"
+      title: "HyprMac Swift Client Bridge"
+      description: "Swift client bridge with ring buffer, shared memory IPC (/tmp/hyprmac-ipc.shm) and socket transport (/tmp/hyprmac-server.sock), SkyLightBridge routing, and CLI integration"
+    - path: "native/injector/main.c"
+      title: "Two-Stage Mach Task Injector"
+      description: "Privileged PAC-safe two-stage loader (hypr-inject) injecting libhyprserver.dylib into WindowServer"
+    - path: "/Library/GPUBundles/libhyprserver.dylib"
+      title: "Staged Hook Library (Sandbox Staging Path)"
+      description: "Staged dylib artifact in /Library/GPUBundles accessible across WindowServer sandbox boundaries"
+  build_system:
+    - path: "Makefile"
+      title: "Native Build System"
+      description: "Build automation compiling native Mach injector (hypr-inject) and hook library (libhyprserver.dylib) with code signing"
+    - path: "Package.swift"
+      title: "Swift Package Manifest"
+      description: "Swift Package Manager manifest defining the HyprMac executable target, macOS 14+ platform requirement, and framework linkages (needs HyprMacTests test target, currently absent)"
+  swift_source:
+    - path: "Sources/HyprMac/Core/"
+      title: "Core Subsystem"
+      description: "Window detection and event observation mechanics"
+    - path: "Sources/HyprMac/Config/"
+      title: "Config Subsystem"
+      description: "Hyprland-compatible configuration parsing and runtime options"
+    - path: "Sources/HyprMac/Input/"
+      title: "Input Subsystem"
+      description: "Keycode mapping and global hotkey bind manager"
+    - path: "Sources/HyprMac/Shell/"
+      title: "Shell Subsystem"
+      description: "Desktop status bar window and visual widgets"
+    - path: "Sources/HyprMac/Bridge/"
+      title: "Bridge Subsystem"
+      description: "IPC bridge to WindowServer hook and SkyLight private API interop"
+    - path: "Sources/HyprMac/Layout/"
+      title: "Layout Subsystem"
+      description: "Binary space partitioning (BSP) dwindle tiling layout engine"
+    - path: "Sources/HyprMac/Render/"
+      title: "Render Subsystem"
+      description: "Window decoration rendering including AppKit border overlays and glass halos"
+    - path: "Sources/HyprMac/Session/"
+      title: "Session Subsystem"
+      description: "Session mode coordination and lifecycle management"
+  test_harness:
+    - path: "tests/test_ipc.c"
+      title: "IPC Test Harness"
+      description: "Standalone C test runner validating binary protocol framing, handshake, and commands over /tmp/hyprmac-server.sock (needs updating for shared memory IPC transport /tmp/hyprmac-ipc.shm)"
+    - path: "tests/Makefile"
+      title: "Test Harness Makefile"
+      description: "Build automation for standalone C test runners"
+  runtime:
+    - path: "/tmp/hyprserver.ready"
+      title: "Hook Readiness Synchronization Marker"
+      description: "Runtime readiness synchronization token signaling libhyprserver.dylib initialization and IPC readiness"
+    - path: "/tmp/hyprmac-ipc.shm"
+      title: "Shared Memory IPC Transport"
+      description: "POSIX shared memory ring buffer IPC transport endpoint"
+    - path: "/tmp/hyprmac-server.sock"
+      title: "Unix Domain Socket IPC Transport"
+      description: "Unix domain socket IPC endpoint for command transport and fallback alongside /tmp/hyprmac-ipc.shm"
+  verification_scripts:
+    - path: "scripts/e2e-verify.sh"
+      title: "End-to-End Verification Script"
+      description: "Automated end-to-end injection, IPC connectivity, and window styling verification"
+    - path: "scripts/stress-test.sh"
+      title: "IPC Stress Test Script"
+      description: "High-throughput and concurrent client stress test harness"
+  configuration:
+    - path: "native/injector/com.hyprmac.inject.plist"
+      title: "LaunchDaemon Template"
+      description: "LaunchDaemon property list configuration for automated boot injection"
+    - path: "native/injector/entitlements.plist"
+      title: "Injector Entitlements"
+      description: "Security entitlements for task_for_pid access and debugger permissions"
 references:
   - path: "docs/WINDOWSERVER_INJECTION_SPEC.md"
     title: "WindowServer In-Situ Injection Specification"
     status: "canonical"
 
 context: |
-  Tech stack: Swift 5.9, Objective-C / C11, ARM64 / ARM64e Assembly, macOS 27 (Golden Gate).
+  Tech stack: Swift 6.x, C11 (no Objective-C), ARM64 / ARM64e Assembly, macOS 27 (Golden Gate).
   Architecture: Sources/HyprMac (Core, Bridge, Render, Layout, Input, Config, Shell, Session).
   Low-level subsystems: Mach task injection (mach_vm_write, task_for_pid), WindowServer in-situ hooks,
-  SkyLight.framework (CGS / SLS private APIs), CAWindowServer (QuartzCore).
+  shared memory IPC (/tmp/hyprmac-ipc.shm), Unix domain socket (/tmp/hyprmac-server.sock),
+  CoreFoundation, CoreGraphics / SkyLight.framework (CGS / SLS private APIs).
   Safety Envelope: Host running with SIP disabled and boot-args -arm64e_preview_abi.
 
 rules:
@@ -60,7 +140,7 @@ rules:
   tasks:
     - Group by phase, use hierarchical numbering (1.1, 1.2, 2.1...).
     - Ensure zero destructive mutations without an explicit safety checkpoint.
-    - Checkpoint syntax: Checkpoints MUST be declared using `[CHECKPOINT: <name>]`, `**Checkpoint: <criteria>**`, or `### CHECKPOINT: <name>`. A valid checkpoint defines: (1) Precondition verification command/probe, (2) Pass/fail gate criteria, and (3) Explicit rollback action before proceeding to destructive or irreversible operations (e.g. SIP modifications, boot-arg toggles, Mach task memory injection, or in-process dylib loading).
+    - "Checkpoint syntax: Checkpoints MUST be declared using `[CHECKPOINT: <name>]`, `**Checkpoint: <criteria>**`, or `### CHECKPOINT: <name>`. A valid checkpoint defines: (1) Precondition verification command/probe, (2) Pass/fail gate criteria, and (3) Explicit rollback action before proceeding to destructive or irreversible operations (e.g. SIP modifications, boot-arg toggles, Mach task memory injection, or in-process dylib loading)."
 
 validation:
   document_structure:
@@ -99,9 +179,9 @@ validation:
       phase_grouping: true
       checkpoint_definition:
         syntax_patterns:
-          - "^\[CHECKPOINT:\\s*(.+)\]$"
-          - "^\*\*Checkpoint:\\s*(.+)\*\*$"
-          - "^###\\s+CHECKPOINT:\\s*(.+)$"
+          - '^\\[CHECKPOINT:\\s*(.+)\\]$'
+          - '^\\*\\*Checkpoint:\\s*(.+)\\*\\*$'
+          - '^###\\s+CHECKPOINT:\\s*(.+)$'
         required_fields:
           - "precondition_probe"
           - "pass_criteria"
@@ -109,6 +189,7 @@ validation:
         description: "Explicit safety boundary defining precondition verification, pass criteria, and rollback instructions"
 
 lifecycle:
+  current_state: in_progress # Mach task loader is working and stable; active development is progressing on shared memory IPC
   states:
     - draft          # Initial authoring, incomplete
     - under_review   # Submitted for peer/architectural review

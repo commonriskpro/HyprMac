@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/event.h>
 #include <sys/time.h>
 #include <sys/uio.h>
@@ -25,14 +26,30 @@
 #include <mach/mach.h>
 #include <servers/bootstrap.h>
 #include <bootstrap.h>
+#include <dispatch/dispatch.h>
 #if __has_feature(ptrauth_calls)
 #include <ptrauth.h>
 #endif
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 
+static void diag_log(const char *fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (len > 0) {
+        int fd = open("/tmp/hyprserver-diag.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+        if (fd >= 0) {
+            write(fd, buf, len);
+            write(fd, "\n", 1);
+            close(fd);
+        }
+    }
+}
+
 #define HYPR_MAX_CLIENTS 32
-#define CLIENT_READ_BUF_SIZE 4096
 #define CLIENT_WRITE_BUF_SIZE 4096
 #define HYPR_MANAGED_WINDOWS_CAPACITY 4096
 #define HYPR_MAX_DISPLAYS 8
@@ -64,12 +81,6 @@
 #ifndef kCGDisplayDisabledFlag
 #define kCGDisplayDisabledFlag (1 << 9)
 #endif
-
-#pragma pack(push, 1)
-typedef struct {
-    uint32_t window_id;
-} HyprPayloadFocus;
-#pragma pack(pop)
 
 /* ---- Logging & Rotation (Task 1.8) --------------------------------------- */
 
@@ -105,6 +116,11 @@ static void hypr_log(const char *fmt, ...) {
 
 typedef int32_t CGSConnectionID;
 typedef int32_t CGError;
+typedef CGError CGSError;
+
+#ifndef kCGMenuBarWindowLevel
+#define kCGMenuBarWindowLevel 24
+#endif
 
 typedef CGSConnectionID (*fn_SLSMainConnectionID)(void);
 typedef CGError (*fn_SLSGetWindowCount)(CGSConnectionID cid, CGSConnectionID targetCID, int32_t *count);
@@ -120,6 +136,35 @@ typedef CGError (*fn_SLSSetWindowCornerMask)(CGSConnectionID cid, CFTypeRef mask
 typedef CGError (*fn_SLSWindowSetCornerRadius)(CGSConnectionID cid, uint32_t wid, float radius);
 typedef CGError (*fn_SLSSetWindowShadowParameters)(CGSConnectionID cid, uint32_t wid, float standard_deviation, float density, int offset_x, int offset_y);
 typedef CGError (*fn_SLSNewWindow)(CGSConnectionID cid, int type, float x, float y, void *shape, uint32_t *outWid);
+// Transaction API (macOS 27+)
+typedef void *SLSTransactionRef;
+typedef SLSTransactionRef (*fn_SLSTransactionCreate)(CGSConnectionID cid);
+typedef CGError (*fn_SLSTransactionCommit)(SLSTransactionRef tx, uint32_t flags);
+typedef CGError (*fn_SLSSetWindowTransform)(CGSConnectionID cid, uint32_t wid, CGAffineTransform transform);
+typedef void (*fn_SLSTransactionSetWindowTransform)(SLSTransactionRef tx, uint32_t wid, int32_t f0, int32_t f1, const CGAffineTransform *transform);
+typedef void (*fn_SLSTransactionSetWindowCornerRadius)(void *transaction, uint32_t wid, double radius);
+typedef void (*fn_SLSTransactionClearWindowCornerRadius)(void *transaction, uint32_t wid);
+typedef void (*fn_SLSTransactionInvalidateWindowShadow)(void *transaction, uint32_t wid);
+typedef void (*fn_SLSTransactionSetWindowShadowProperties)(void *transaction, uint32_t wid, CFDictionaryRef dict);
+typedef CGError (*fn_SLSInvalidateWindowShadow)(CGSConnectionID cid, uint32_t wid);
+typedef CGSError (*fn_SLSTransactionSetMenuBarOverrideMaximumReveal)(void *transaction, double reveal);
+typedef CGSError (*fn_SLSSetMenuBarSystemOverrideAlpha)(CGSConnectionID cid, uint32_t flags, float alpha);
+typedef CGSError (*fn_SLSResetMenuBarSystemOverrideAlphas)(CGSConnectionID cid);
+typedef CGSError (*fn_SLSInterruptMenuBarReveal)(CGSConnectionID cid, uint32_t flags);
+typedef CGSError (*fn_SLSSetWindowAlpha)(CGSConnectionID cid, uint32_t wid, float alpha);
+typedef void *CGSRegion;
+typedef CGSConnectionID (*fn_CGSDefaultConnection)(void);
+typedef CGError (*fn_CGSNewRegionWithRect)(const CGRect *rect, CGSRegion *outRegion);
+typedef CGError (*fn_CGSReleaseRegion)(CGSRegion region);
+typedef CGError (*fn_CGSOrderWindow)(CGSConnectionID cid, uint32_t wid, int mode, uint32_t relativeToWid);
+typedef CGError (*fn_CGSGetWindowLevel)(CGSConnectionID cid, uint32_t wid, int32_t *level);
+typedef CGError (*fn_CGSSetWindowLevel)(CGSConnectionID cid, uint32_t wid, int32_t level);
+typedef CGError (*fn_CGSReleaseWindow)(CGSConnectionID cid, uint32_t wid);
+typedef CGContextRef (*fn_CGWindowContextCreate)(CGSConnectionID cid, uint32_t wid, CFDictionaryRef options);
+typedef void (*fn_CGContextSetRGBFillColor)(CGContextRef c, CGFloat red, CGFloat green, CGFloat blue, CGFloat alpha);
+typedef void (*fn_CGContextFillRect)(CGContextRef c, CGRect rect);
+typedef void (*fn_CGContextFlush)(CGContextRef c);
+typedef void (*fn_CGContextRelease)(CGContextRef c);
 typedef void *fn_generic;
 
 typedef uint32_t CGDisplayChangeSummaryFlags;
@@ -158,6 +203,22 @@ struct hypr_symbols {
     fn_SLSClearWindowTags    ClearWindowTags;
     fn_SLSGetWindowTags      GetWindowTags;
     fn_SLSNewWindow          NewWindow;
+    // Transaction API (macOS 27+)
+    fn_SLSTransactionCreate                   TransactionCreate;
+    fn_SLSTransactionCommit                   TransactionCommit;
+    fn_SLSTransactionSetWindowCornerRadius    TransactionSetCornerRadius;
+    fn_SLSTransactionClearWindowCornerRadius  TransactionClearCornerRadius;
+    fn_SLSTransactionInvalidateWindowShadow   TransactionInvalidateShadow;
+    fn_SLSTransactionSetWindowShadowProperties TransactionSetShadowProps;
+    fn_SLSTransactionSetWindowTransform       TransactionSetWindowTransform;
+    fn_SLSSetWindowTransform                  SetWindowTransform;
+    fn_SLSInvalidateWindowShadow              InvalidateWindowShadow;
+    // Menu bar suppression APIs
+    fn_SLSTransactionSetMenuBarOverrideMaximumReveal TransactionSetMenuBarOverrideMaximumReveal;
+    fn_SLSSetMenuBarSystemOverrideAlpha       SetMenuBarSystemOverrideAlpha;
+    fn_SLSResetMenuBarSystemOverrideAlphas     ResetMenuBarSystemOverrideAlphas;
+    fn_SLSInterruptMenuBarReveal              InterruptMenuBarReveal;
+    fn_SLSSetWindowAlpha                      SetWindowAlpha;
     // Display APIs (Task 4.9)
     fn_CGDisplayRegisterReconfigurationCallback DisplayRegisterReconfigurationCallback;
     fn_CGDisplayRemoveReconfigurationCallback   DisplayRemoveReconfigurationCallback;
@@ -173,9 +234,31 @@ struct hypr_symbols {
     fn_SLSCopyManagedDisplaySpaces              CopyManagedDisplaySpaces;
     fn_CGSRegisterConnectionNotifyProc          RegisterConnectionNotifyProc;
     fn_CGSRegisterNotifyProc                    RegisterNotifyProc;
+    // In-situ border rendering APIs (Task 4.3)
+    fn_CGSDefaultConnection                     DefaultConnection;
+    fn_CGSNewRegionWithRect                     NewRegionWithRect;
+    fn_CGSReleaseRegion                         ReleaseRegion;
+    fn_CGSOrderWindow                           OrderWindow;
+    fn_CGSGetWindowLevel                        GetWindowLevel;
+    fn_CGSSetWindowLevel                        SetWindowLevel;
+    fn_CGSReleaseWindow                         ReleaseWindow;
+    fn_CGWindowContextCreate                    WindowContextCreate;
+    fn_CGContextSetRGBFillColor                 ContextSetRGBFillColor;
+    fn_CGContextFillRect                        ContextFillRect;
+    fn_CGContextFlush                           ContextFlush;
+    fn_CGContextRelease                         ContextRelease;
 };
 
+typedef struct hypr_symbols HyprSymbols;
+#define HyprSymbols hypr_symbols
+
 static struct hypr_symbols g_symbols = {0};
+static bool g_menubar_suppressed = false;
+static uint32_t g_suppressed_menubar_wids[32] = {0};
+static int32_t g_suppressed_menubar_orig_levels[32] = {0};
+static size_t g_suppressed_menubar_count = 0;
+static uint32_t g_exempt_bar_wid = 0;
+static os_unfair_lock g_menubar_lock = OS_UNFAIR_LOCK_INIT;
 
 /* Static function pointer globals */
 static fn_SLSMainConnectionID   g_SLSMainConnectionID = NULL;
@@ -193,8 +276,60 @@ static fn_SLSSetWindowTags      g_SLSSetWindowTags = NULL;
 static fn_SLSClearWindowTags    g_SLSClearWindowTags = NULL;
 static fn_SLSGetWindowTags      g_SLSGetWindowTags = NULL;
 static fn_SLSNewWindow          g_orig_SLSNewWindow = NULL;
+static fn_CGSOrderWindow        g_orig_SLSOrderWindow = NULL;
+static fn_SLSMoveWindow         g_orig_SLSMoveWindow = NULL;
+static fn_SLSSetWindowAlpha     g_orig_SLSSetWindowAlpha = NULL;
 
 static void *safe_resolve_symbol(const char *name);
+
+/* Static CGS/CoreGraphics dispatch wrappers */
+static inline __attribute__((unused)) CGSConnectionID _CGSDefaultConnection(void) {
+    if (g_symbols.DefaultConnection) return g_symbols.DefaultConnection();
+    if (g_symbols.MainConnectionID) return g_symbols.MainConnectionID();
+    return 0;
+}
+static inline __attribute__((unused)) CGError CGSGetWindowBounds(CGSConnectionID cid, uint32_t wid, CGRect *outRect) {
+    return g_symbols.GetWindowBounds ? g_symbols.GetWindowBounds(cid, wid, outRect) : -1;
+}
+static inline __attribute__((unused)) CGError CGSMoveWindow(CGSConnectionID cid, uint32_t wid, const CGPoint *point) {
+    return g_symbols.MoveWindow ? g_symbols.MoveWindow(cid, wid, point) : -1;
+}
+static inline __attribute__((unused)) CGError CGSNewRegionWithRect(const CGRect *rect, CGSRegion *outRegion) {
+    return g_symbols.NewRegionWithRect ? g_symbols.NewRegionWithRect(rect, outRegion) : -1;
+}
+static inline __attribute__((unused)) CGError CGSReleaseRegion(CGSRegion region) {
+    return g_symbols.ReleaseRegion ? g_symbols.ReleaseRegion(region) : -1;
+}
+static inline __attribute__((unused)) CGError CGSNewWindow(CGSConnectionID cid, int type, float x, float y, CGSRegion region, uint32_t *outWid) {
+    return g_symbols.NewWindow ? g_symbols.NewWindow(cid, type, x, y, region, outWid) : -1;
+}
+static inline __attribute__((unused)) CGError CGSReleaseWindow(CGSConnectionID cid, uint32_t wid) {
+    return g_symbols.ReleaseWindow ? g_symbols.ReleaseWindow(cid, wid) : -1;
+}
+static inline __attribute__((unused)) CGError CGSOrderWindow(CGSConnectionID cid, uint32_t wid, int mode, uint32_t relativeToWid) {
+    return g_symbols.OrderWindow ? g_symbols.OrderWindow(cid, wid, mode, relativeToWid) : -1;
+}
+static inline __attribute__((unused)) CGError CGSGetWindowLevel(CGSConnectionID cid, uint32_t wid, int32_t *outLevel) {
+    return g_symbols.GetWindowLevel ? g_symbols.GetWindowLevel(cid, wid, outLevel) : -1;
+}
+static inline __attribute__((unused)) CGError CGSSetWindowLevel(CGSConnectionID cid, uint32_t wid, int32_t level) {
+    return g_symbols.SetWindowLevel ? g_symbols.SetWindowLevel(cid, wid, level) : -1;
+}
+static inline __attribute__((unused)) CGContextRef CGWindowContextCreate(CGSConnectionID cid, uint32_t wid, CFDictionaryRef options) {
+    return g_symbols.WindowContextCreate ? g_symbols.WindowContextCreate(cid, wid, options) : NULL;
+}
+static inline __attribute__((unused)) void CGContextSetRGBFillColor_p(CGContextRef ctx, CGFloat r, CGFloat g, CGFloat b, CGFloat a) {
+    if (g_symbols.ContextSetRGBFillColor) g_symbols.ContextSetRGBFillColor(ctx, r, g, b, a);
+}
+static inline __attribute__((unused)) void CGContextFillRect_p(CGContextRef ctx, CGRect rect) {
+    if (g_symbols.ContextFillRect) g_symbols.ContextFillRect(ctx, rect);
+}
+static inline __attribute__((unused)) void CGContextFlush_p(CGContextRef ctx) {
+    if (g_symbols.ContextFlush) g_symbols.ContextFlush(ctx);
+}
+static inline __attribute__((unused)) void CGContextRelease_p(CGContextRef ctx) {
+    if (g_symbols.ContextRelease) g_symbols.ContextRelease(ctx);
+}
 
 /* ---- Managed Window Registry & Global Policy State (Tasks 4.6, 4.7) ------ */
 
@@ -208,6 +343,7 @@ typedef struct {
     uint32_t color_active;
     uint32_t color_inactive;
     bool     is_focused;
+    uint32_t border_wid;    // CGS window ID of border overlay (0 = none)
 } HyprManagedWindow;
 
 typedef struct {
@@ -270,7 +406,7 @@ static inline bool rect_intersects(CGRect r1, CGRect r2, CGFloat *out_area) {
 }
 
 static HyprGlobalPolicyState g_global_policy = {
-    .auto_square_corners = 1,
+    .auto_square_corners = 0,
     .auto_strip_shadow = 1,
     .auto_strip_titlebar = 1,
     .auto_set_border = 1,
@@ -281,6 +417,171 @@ static HyprGlobalPolicyState g_global_policy = {
 
 static inline uint32_t hash_wid(uint32_t wid) {
     return (wid * 2654435761u) & (HYPR_MANAGED_WINDOWS_CAPACITY - 1);
+}
+
+/* ---- Border Overlay Management (Task 4.3) -------------------------------- */
+
+static uint32_t g_border_wids[HYPR_MANAGED_WINDOWS_CAPACITY];
+static size_t g_border_wid_count = 0;
+static os_unfair_lock g_border_wids_lock = OS_UNFAIR_LOCK_INIT;
+static _Thread_local bool g_creating_border_overlay = false;
+
+static void mark_as_border_wid(uint32_t wid) {
+    if (wid == 0) return;
+    os_unfair_lock_lock(&g_border_wids_lock);
+    for (size_t i = 0; i < g_border_wid_count; i++) {
+        if (g_border_wids[i] == wid) {
+            os_unfair_lock_unlock(&g_border_wids_lock);
+            return;
+        }
+    }
+    if (g_border_wid_count < HYPR_MANAGED_WINDOWS_CAPACITY) {
+        g_border_wids[g_border_wid_count++] = wid;
+    }
+    os_unfair_lock_unlock(&g_border_wids_lock);
+}
+
+static void unmark_border_wid(uint32_t wid) {
+    if (wid == 0) return;
+    os_unfair_lock_lock(&g_border_wids_lock);
+    for (size_t i = 0; i < g_border_wid_count; i++) {
+        if (g_border_wids[i] == wid) {
+            g_border_wids[i] = g_border_wids[g_border_wid_count - 1];
+            g_border_wid_count--;
+            break;
+        }
+    }
+    os_unfair_lock_unlock(&g_border_wids_lock);
+}
+
+static bool is_border_wid(uint32_t wid) {
+    if (wid == 0) return false;
+    os_unfair_lock_lock(&g_border_wids_lock);
+    for (size_t i = 0; i < g_border_wid_count; i++) {
+        if (g_border_wids[i] == wid) {
+            os_unfair_lock_unlock(&g_border_wids_lock);
+            return true;
+        }
+    }
+    os_unfair_lock_unlock(&g_border_wids_lock);
+    return false;
+}
+
+static void draw_border_fill(CGSConnectionID cid, uint32_t bwid, CGSize size, uint32_t argb_color) {
+    if (bwid == 0 || size.width <= 0.0 || size.height <= 0.0) return;
+    CGContextRef ctx = CGWindowContextCreate(cid, bwid, NULL);
+    if (!ctx) {
+        hypr_log("draw_border_fill: CGWindowContextCreate returned NULL for bwid=%u", bwid);
+        return;
+    }
+
+    CGFloat a = ((argb_color >> 24) & 0xFF) / 255.0;
+    CGFloat r = ((argb_color >> 16) & 0xFF) / 255.0;
+    CGFloat g = ((argb_color >> 8) & 0xFF) / 255.0;
+    CGFloat b = (argb_color & 0xFF) / 255.0;
+    if (a == 0.0 && (argb_color & 0x00FFFFFF) != 0) {
+        a = 1.0;
+    }
+
+    CGContextSetRGBFillColor_p(ctx, r, g, b, a);
+    CGContextFillRect_p(ctx, CGRectMake(0, 0, size.width, size.height));
+    CGContextFlush_p(ctx);
+    CGContextRelease_p(ctx);
+}
+
+static void destroy_border_overlay(CGSConnectionID cid, HyprManagedWindow *win) {
+    if (!win) return;
+    if (win->border_wid != 0) {
+        uint32_t bwid = win->border_wid;
+        win->border_wid = 0;
+        unmark_border_wid(bwid);
+        CGSConnectionID conn = cid ? cid : _CGSDefaultConnection();
+        CGSOrderWindow(conn, bwid, 0 /* kCGSOrderOut */, 0);
+        CGSReleaseWindow(conn, bwid);
+        hypr_log("destroy_border_overlay: released border overlay wid=%u for window wid=%u", bwid, win->wid);
+    }
+}
+
+static void create_or_update_border_overlay(CGSConnectionID cid, HyprManagedWindow *win) {
+    if (!win || !win->active || win->wid == 0) return;
+    if (is_border_wid(win->wid)) return;
+    CGSConnectionID conn = cid ? cid : _CGSDefaultConnection();
+
+    if (win->border_width <= 0.0f) {
+        destroy_border_overlay(conn, win);
+        return;
+    }
+
+    CGRect targetBounds;
+    memset(&targetBounds, 0, sizeof(targetBounds));
+    CGError b_err = CGSGetWindowBounds(conn, win->wid, &targetBounds);
+    if (b_err != 0 || targetBounds.size.width <= 0.0 || targetBounds.size.height <= 0.0) {
+        hypr_log("create_or_update_border_overlay: GetWindowBounds failed for wid=%u (err=%d)", win->wid, b_err);
+        return;
+    }
+
+    float bw = win->border_width;
+    CGRect borderBounds = CGRectMake(
+        targetBounds.origin.x - bw,
+        targetBounds.origin.y - bw,
+        targetBounds.size.width + bw * 2.0f,
+        targetBounds.size.height + bw * 2.0f
+    );
+
+    uint32_t color = win->is_focused ? win->color_active : win->color_inactive;
+
+    if (win->border_wid != 0) {
+        CGRect existingBounds;
+        memset(&existingBounds, 0, sizeof(existingBounds));
+        CGError eb_err = CGSGetWindowBounds(conn, win->border_wid, &existingBounds);
+        if (eb_err != 0 ||
+            existingBounds.size.width != borderBounds.size.width ||
+            existingBounds.size.height != borderBounds.size.height) {
+            destroy_border_overlay(conn, win);
+        }
+    }
+
+    if (win->border_wid == 0) {
+        CGRect shapeRect = CGRectMake(0, 0, borderBounds.size.width, borderBounds.size.height);
+        CGSRegion region = NULL;
+        CGError r_err = CGSNewRegionWithRect(&shapeRect, &region);
+        if (r_err != 0 || !region) {
+            hypr_log("create_or_update_border_overlay: CGSNewRegionWithRect failed for wid=%u (err=%d)", win->wid, r_err);
+            return;
+        }
+
+        uint32_t bwid = 0;
+        g_creating_border_overlay = true;
+        CGError w_err = CGSNewWindow(conn, 2 /* kCGSBackingStoreBuffered */,
+                                     borderBounds.origin.x, borderBounds.origin.y,
+                                     region, &bwid);
+        g_creating_border_overlay = false;
+        CGSReleaseRegion(region);
+
+        if (w_err != 0 || bwid == 0) {
+            hypr_log("create_or_update_border_overlay: CGSNewWindow failed for wid=%u (err=%d)", win->wid, w_err);
+            return;
+        }
+
+        win->border_wid = bwid;
+        mark_as_border_wid(bwid);
+
+        int32_t level = 0;
+        if (CGSGetWindowLevel(conn, win->wid, &level) == 0) {
+            CGSSetWindowLevel(conn, bwid, level);
+        }
+
+        CGSOrderWindow(conn, bwid, -1 /* kCGSOrderBelow */, win->wid);
+    } else {
+        CGSMoveWindow(conn, win->border_wid, &borderBounds.origin);
+        int32_t level = 0;
+        if (CGSGetWindowLevel(conn, win->wid, &level) == 0) {
+            CGSSetWindowLevel(conn, win->border_wid, level);
+        }
+        CGSOrderWindow(conn, win->border_wid, -1 /* kCGSOrderBelow */, win->wid);
+    }
+
+    draw_border_fill(conn, win->border_wid, borderBounds.size, color);
 }
 
 static HyprManagedWindow *managed_window_find(uint32_t wid) {
@@ -320,6 +621,7 @@ static HyprManagedWindow *managed_window_get_or_create(uint32_t wid) {
 static void managed_window_evict(uint32_t wid) {
     HyprManagedWindow *win = managed_window_find(wid);
     if (win && win->active) {
+        destroy_border_overlay(_CGSDefaultConnection(), win);
         win->active = false;
         if (g_managed_window_count > 0) {
             g_managed_window_count--;
@@ -329,41 +631,60 @@ static void managed_window_evict(uint32_t wid) {
 
 static bool is_window_alive(CGSConnectionID cid, uint32_t wid) {
     if (wid == 0) return false;
+    if (is_border_wid(wid)) return false;
     if (g_symbols.GetWindowBounds) {
         CGRect rect;
         memset(&rect, 0, sizeof(rect));
         CGError err = g_symbols.GetWindowBounds(cid, wid, &rect);
         if (err == 0) return true;
+        hypr_log("is_window_alive: wid=%u cid=%d GetWindowBounds err=%d (server context bypass)", wid, cid, err);
     }
-    if (g_symbols.GetWindowList) {
-        uint32_t wids[256];
-        int32_t actual = 0;
-        CGError err = g_symbols.GetWindowList(cid, 0, 256, wids, &actual);
-        if (err == 0 && actual > 0) {
-            for (int32_t i = 0; i < actual; i++) {
-                if (wids[i] == wid) return true;
-            }
-            return false;
-        }
-    }
-    if (!g_symbols.GetWindowBounds && !g_symbols.GetWindowList) {
-        return true;
-    }
-    return false;
+    /* Inside WindowServer, client query APIs may return errors with cid=0,
+     * but server-level mutations (tags, corner radius, shadow) succeed. */
+    return true;
 }
 
 /* ---- Compositor Surface Invalidation (Task 4.8) -------------------------- */
 
 static void invalidate_window(CGSConnectionID cid, uint32_t wid) {
-    if (wid == 0) return;
-    if (g_symbols.FlushSurface) {
-        g_symbols.FlushSurface(cid, wid, 0);
+    if (!cid && g_symbols.MainConnectionID) {
+        cid = g_symbols.MainConnectionID();
     }
-    if (g_symbols.GetWindowBounds && g_symbols.MoveWindow) {
-        CGRect rect;
-        memset(&rect, 0, sizeof(rect));
-        if (g_symbols.GetWindowBounds(cid, wid, &rect) == 0) {
-            g_symbols.MoveWindow(cid, wid, &rect.origin);
+    if (g_symbols.InvalidateWindowShadow) {
+        CGError err = g_symbols.InvalidateWindowShadow(cid, wid);
+        if (err != 0) {
+            hypr_log("InvalidateWindowShadow wid=%u err=%d", wid, err);
+        }
+    }
+}
+
+static void set_corner_radius_transaction(CGSConnectionID cid, uint32_t wid, float radius) {
+    if (!cid && g_symbols.MainConnectionID) {
+        cid = g_symbols.MainConnectionID();
+    }
+    if (!cid) {
+        cid = _CGSDefaultConnection();
+    }
+    if (g_symbols.TransactionCreate && g_symbols.TransactionCommit && g_symbols.TransactionSetCornerRadius) {
+        void *tx = g_symbols.TransactionCreate(cid);
+        if (tx) {
+            g_symbols.TransactionSetCornerRadius(tx, wid, (double)radius);
+            CGError err = g_symbols.TransactionCommit(tx, 0);
+            if (err != 0) {
+                hypr_log("TransactionCommit(corner_radius) wid=%u err=%d", wid, err);
+            }
+            CFRelease(tx);
+            return;
+        }
+    }
+    // Fallback to legacy API (pre-macOS 27)
+    if (g_symbols.SetWindowCornerRadius) {
+        if (g_symbols.CornerRadiusSymbolName && strstr(g_symbols.CornerRadiusSymbolName, "Mask")) {
+            fn_SLSSetWindowCornerMask fn = (fn_SLSSetWindowCornerMask)g_symbols.SetWindowCornerRadius;
+            fn(cid, NULL, wid, radius, radius, radius, radius);
+        } else {
+            fn_SLSWindowSetCornerRadius fn = (fn_SLSWindowSetCornerRadius)g_symbols.SetWindowCornerRadius;
+            fn(cid, wid, radius);
         }
     }
 }
@@ -373,6 +694,7 @@ static void invalidate_window(CGSConnectionID cid, uint32_t wid) {
 static void apply_global_policy_to_window(CGSConnectionID cid, uint32_t wid) {
     if (wid == 0) return;
     if (is_safe_mode_active()) return;
+    if (is_border_wid(wid)) return;
 
     // When entering or in native fullscreen, skip decoration (REQ-WSP-002)
     if (g_symbols.GetWindowTags) {
@@ -406,16 +728,11 @@ static void apply_global_policy_to_window(CGSConnectionID cid, uint32_t wid) {
     uint8_t shadow = g_global_policy.auto_strip_shadow;
     uint8_t titlebar = g_global_policy.auto_strip_titlebar;
     float bwidth = g_global_policy.auto_set_border ? g_global_policy.border_width : 0.0f;
+    uint8_t auto_border = g_global_policy.auto_set_border;
     os_unfair_lock_unlock(&g_state_lock);
 
-    if (square != 0 && g_symbols.SetWindowCornerRadius) {
-        if (g_symbols.CornerRadiusSymbolName && strstr(g_symbols.CornerRadiusSymbolName, "Mask")) {
-            fn_SLSSetWindowCornerMask fn = (fn_SLSSetWindowCornerMask)g_symbols.SetWindowCornerRadius;
-            fn(cid, NULL, wid, 0.0f, 0.0f, 0.0f, 0.0f);
-        } else {
-            fn_SLSWindowSetCornerRadius fn = (fn_SLSWindowSetCornerRadius)g_symbols.SetWindowCornerRadius;
-            fn(cid, wid, 0.0f);
-        }
+    if (square != 0) {
+        set_corner_radius_transaction(cid, wid, 0.0f);
     }
 
     if (shadow != 0) {
@@ -436,6 +753,15 @@ static void apply_global_policy_to_window(CGSConnectionID cid, uint32_t wid) {
         }
     }
 
+    if (auto_border) {
+        os_unfair_lock_lock(&g_state_lock);
+        HyprManagedWindow *w = managed_window_find(wid);
+        if (w) {
+            create_or_update_border_overlay(cid ? cid : _CGSDefaultConnection(), w);
+        }
+        os_unfair_lock_unlock(&g_state_lock);
+    }
+
     invalidate_window(cid, wid);
     hypr_log("Auto-decorated newly created window wid=%u (square=%u, strip_shadow=%u, strip_titlebar=%u, border_width=%.1f)",
              wid, square, shadow, titlebar, bwidth);
@@ -446,6 +772,7 @@ static void apply_global_policy_to_window(CGSConnectionID cid, uint32_t wid) {
 static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
     if (wid == 0) return;
     if (is_safe_mode_active()) return;
+    if (is_border_wid(wid)) return;
 
     // Detect fullscreen enter/exit (window tag bit for fullscreen: 1 << 14)
     bool is_fullscreen = false;
@@ -463,6 +790,12 @@ static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
     }
 
     if (is_fullscreen) {
+        os_unfair_lock_lock(&g_state_lock);
+        HyprManagedWindow *w = managed_window_find(wid);
+        if (w) {
+            destroy_border_overlay(cid ? cid : _CGSDefaultConnection(), w);
+        }
+        os_unfair_lock_unlock(&g_state_lock);
         hypr_log("Window wid=%u is native fullscreen; skipping decoration", wid);
         return;
     }
@@ -479,15 +812,7 @@ static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
     uint8_t titlebar = win->titlebar_stripped;
     os_unfair_lock_unlock(&g_state_lock);
 
-    if (radius == 0.0f && g_symbols.SetWindowCornerRadius) {
-        if (g_symbols.CornerRadiusSymbolName && strstr(g_symbols.CornerRadiusSymbolName, "Mask")) {
-            fn_SLSSetWindowCornerMask fn = (fn_SLSSetWindowCornerMask)g_symbols.SetWindowCornerRadius;
-            fn(cid, NULL, wid, 0.0f, 0.0f, 0.0f, 0.0f);
-        } else {
-            fn_SLSWindowSetCornerRadius fn = (fn_SLSWindowSetCornerRadius)g_symbols.SetWindowCornerRadius;
-            fn(cid, wid, 0.0f);
-        }
-    }
+    set_corner_radius_transaction(cid, wid, radius);
 
     if (shadow == 0) {
         uint32_t tags[2] = { 1 << 3, 0 };
@@ -507,6 +832,13 @@ static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
         }
     }
 
+    os_unfair_lock_lock(&g_state_lock);
+    HyprManagedWindow *w = managed_window_find(wid);
+    if (w && w->active) {
+        create_or_update_border_overlay(cid ? cid : _CGSDefaultConnection(), w);
+    }
+    os_unfair_lock_unlock(&g_state_lock);
+
     invalidate_window(cid, wid);
     if (is_sticky) {
         hypr_log("Re-applied decorations to sticky window wid=%u (spans multiple spaces)", wid);
@@ -515,7 +847,17 @@ static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
 
 /* ---- Multi-Monitor & Display Reconfiguration (Task 4.9) ------------------ */
 
+static void update_display_topology(void);
+
 static CGDirectDisplayID find_display_for_bounds(CGRect bounds) {
+    os_unfair_lock_lock(&g_state_lock);
+    bool need_lazy_init = (g_display_count == 0);
+    os_unfair_lock_unlock(&g_state_lock);
+
+    if (need_lazy_init) {
+        update_display_topology();
+    }
+
     os_unfair_lock_lock(&g_state_lock);
     CGDirectDisplayID best_id = 0;
     CGFloat max_area = 0.0;
@@ -539,23 +881,40 @@ static CGDirectDisplayID find_display_for_bounds(CGRect bounds) {
 
 static void update_display_topology(void) {
     if (is_safe_mode_active()) return;
-    if (!g_symbols.resolved) return;
+    if (!g_symbols.resolved) {
+        hypr_log("update_display_topology: core symbols unresolved, skipping");
+        return;
+    }
+    if (!g_symbols.GetActiveDisplayList && !g_symbols.MainDisplayID) {
+        hypr_log("update_display_topology: no display enumeration symbols available, skipping");
+        return;
+    }
 
     CGDirectDisplayID active_displays[HYPR_MAX_DISPLAYS];
+    memset(active_displays, 0, sizeof(active_displays));
     uint32_t count = 0;
     CGError err = -1;
 
     if (g_symbols.GetActiveDisplayList) {
         err = g_symbols.GetActiveDisplayList(HYPR_MAX_DISPLAYS, active_displays, &count);
+        if (err != 0) {
+            hypr_log("Warning: GetActiveDisplayList returned error %d; falling back to main display", err);
+        }
     }
 
     if (err != 0 || count == 0) {
         if (g_symbols.MainDisplayID) {
-            active_displays[0] = g_symbols.MainDisplayID();
-            count = 1;
+            CGDirectDisplayID mid = g_symbols.MainDisplayID();
+            if (mid != 0) {
+                active_displays[0] = mid;
+                count = 1;
+            } else {
+                hypr_log("Warning: MainDisplayID returned 0; skipping topology update");
+                return;
+            }
         } else {
-            active_displays[0] = 1;
-            count = 1;
+            hypr_log("Warning: No display fallback available; skipping topology update");
+            return;
         }
     }
 
@@ -567,6 +926,7 @@ static void update_display_topology(void) {
 
     for (uint32_t i = 0; i < count; i++) {
         CGDirectDisplayID did = active_displays[i];
+        if (did == 0) continue;
         g_displays[i].display_id = did;
         g_displays[i].active = true;
 
@@ -731,6 +1091,7 @@ static void handle_space_transition_settled(void) {
             for (int32_t i = 0; i < actual; i++) {
                 uint32_t wid = wids[i];
                 if (wid == 0) continue;
+                if (is_border_wid(wid)) continue;
 
                 os_unfair_lock_lock(&g_state_lock);
                 HyprManagedWindow *existing = managed_window_find(wid);
@@ -807,14 +1168,9 @@ static void on_connection_notify(int data1, int data2, int data3, void *userPara
     }
 }
 
-static void on_cgs_notify(int type, void *data, size_t dataLength, void *userData) {
-    (void)data;
-    (void)dataLength;
-    (void)userData;
-    if (is_safe_mode_active()) return;
-    hypr_log("Event CGSNotifyProc: type=%d", type);
-    trigger_space_transition("CGSNotifyProc", type);
-}
+/* on_cgs_notify removed: SLSRegisterNotifyProc triggers an internal
+ * assertion inside WindowServer. Space events are handled via
+ * RegisterConnectionNotifyProc (event 1401) instead. */
 
 static void on_darwin_space_notification(CFNotificationCenterRef center,
                                          void *observer,
@@ -891,13 +1247,10 @@ static void register_space_callbacks(void) {
         }
     }
 
-    if (g_symbols.RegisterNotifyProc) {
-        CGError e = g_symbols.RegisterNotifyProc(on_cgs_notify, 1401, NULL);
-        if (e == 0) {
-            registered = true;
-            hypr_log("Registered SkyLight notify proc for 1401");
-        }
-    }
+    /* RegisterNotifyProc (SLSRegisterNotifyProc) triggers an internal
+     * assertion inside WindowServer even on the main thread.
+     * RegisterConnectionNotifyProc above already covers event 1401,
+     * so this global variant is unnecessary. */
 
     // 2. Darwin Notification Center for space changes
     CFNotificationCenterRef darwin_center = CFNotificationCenterGetDarwinNotifyCenter();
@@ -930,12 +1283,233 @@ static void register_space_callbacks(void) {
     g_space_callback_registered = registered;
 }
 
-/* ---- SkyLight SLSNewWindow Interposition (Task 3.4) ----------------------- */
+/* ---- Native Menu Bar Suppression ----------------------------------------- */
+
+static bool is_menubar_wid(uint32_t wid) {
+    if (wid == 0) return false;
+    if (is_border_wid(wid)) return false;
+    if (g_exempt_bar_wid != 0 && wid == g_exempt_bar_wid) return false;
+
+    os_unfair_lock_lock(&g_menubar_lock);
+    for (size_t i = 0; i < g_suppressed_menubar_count; i++) {
+        if (g_suppressed_menubar_wids[i] == wid) {
+            os_unfair_lock_unlock(&g_menubar_lock);
+            return true;
+        }
+    }
+    os_unfair_lock_unlock(&g_menubar_lock);
+
+    int32_t level = 0;
+    CGSConnectionID conn = _CGSDefaultConnection();
+    if (CGSGetWindowLevel(conn, wid, &level) == 0 && level == kCGMenuBarWindowLevel) {
+        return true;
+    }
+    return false;
+}
+
+static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const uint32_t *target_wids, size_t count) {
+    CGSConnectionID conn = _CGSDefaultConnection();
+    if (!conn && g_symbols.MainConnectionID) {
+        conn = g_symbols.MainConnectionID();
+    }
+
+    if (suppress) {
+        if (g_symbols.TransactionCreate && g_symbols.TransactionCommit && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
+            void *tx = g_symbols.TransactionCreate(conn);
+            if (tx) {
+                g_symbols.TransactionSetMenuBarOverrideMaximumReveal(tx, 0.0);
+                g_symbols.TransactionCommit(tx, 0);
+            }
+        }
+        if (g_symbols.SetMenuBarSystemOverrideAlpha) {
+            g_symbols.SetMenuBarSystemOverrideAlpha(conn, 0, 0.0f);
+        }
+        if (g_symbols.InterruptMenuBarReveal) {
+            g_symbols.InterruptMenuBarReveal(conn, 0);
+        }
+
+        os_unfair_lock_lock(&g_menubar_lock);
+        g_exempt_bar_wid = exempt_wid;
+
+        // 1. Ingest explicit target window IDs (e.g. from orchestrator)
+        if (target_wids && count > 0) {
+            size_t limit = count > 32 ? 32 : count;
+            for (size_t i = 0; i < limit && g_suppressed_menubar_count < 32; i++) {
+                uint32_t wid = target_wids[i];
+                if (wid == 0 || is_border_wid(wid) || (g_exempt_bar_wid != 0 && wid == g_exempt_bar_wid)) continue;
+
+                bool already_tracked = false;
+                for (size_t j = 0; j < g_suppressed_menubar_count; j++) {
+                    if (g_suppressed_menubar_wids[j] == wid) {
+                        already_tracked = true;
+                        break;
+                    }
+                }
+                if (already_tracked) continue;
+
+                int32_t orig_level = 24;
+                if (CGSGetWindowLevel(conn, wid, &orig_level) != 0) {
+                    orig_level = 24;
+                }
+                g_suppressed_menubar_wids[g_suppressed_menubar_count] = wid;
+                g_suppressed_menubar_orig_levels[g_suppressed_menubar_count] = orig_level;
+                g_suppressed_menubar_count++;
+            }
+        }
+
+        // 2. Also query SLSGetWindowList for any window at level kCGMenuBarWindowLevel (24)
+        if (g_symbols.GetWindowList) {
+            uint32_t wids[256];
+            int32_t actual = 0;
+            CGError err = g_symbols.GetWindowList(conn, 0, 256, wids, &actual);
+            if (err == 0 && actual > 0) {
+                for (int32_t i = 0; i < actual && g_suppressed_menubar_count < 32; i++) {
+                    uint32_t wid = wids[i];
+                    if (wid == 0 || is_border_wid(wid) || (g_exempt_bar_wid != 0 && wid == g_exempt_bar_wid)) continue;
+
+                    bool already_tracked = false;
+                    for (size_t j = 0; j < g_suppressed_menubar_count; j++) {
+                        if (g_suppressed_menubar_wids[j] == wid) {
+                            already_tracked = true;
+                            break;
+                        }
+                    }
+                    if (already_tracked) continue;
+
+                    int32_t level = 0;
+                    if (CGSGetWindowLevel(conn, wid, &level) == 0 && level == kCGMenuBarWindowLevel) {
+                        g_suppressed_menubar_wids[g_suppressed_menubar_count] = wid;
+                        g_suppressed_menubar_orig_levels[g_suppressed_menubar_count] = level;
+                        g_suppressed_menubar_count++;
+                    }
+                }
+            }
+        }
+
+        // 3. For each targeted window ID: order out, alpha 0.0f, demote level to -100
+        for (size_t i = 0; i < g_suppressed_menubar_count; i++) {
+            uint32_t wid = g_suppressed_menubar_wids[i];
+            CGSOrderWindow(conn, wid, 0 /* kCGSOrderOut */, 0);
+            if (g_symbols.SetWindowAlpha) {
+                g_symbols.SetWindowAlpha(conn, wid, 0.0f);
+            }
+            if (g_symbols.SetWindowLevel) {
+                g_symbols.SetWindowLevel(conn, wid, -100);
+            }
+            hypr_log("Evicted menubar wid=%u to level -100 alpha 0.0", wid);
+        }
+
+        g_menubar_suppressed = true;
+        os_unfair_lock_unlock(&g_menubar_lock);
+
+        hypr_log("apply_menubar_suppression(true): Menu bar completely suppressed (%zu windows evicted, exempt_wid=%u)", g_suppressed_menubar_count, g_exempt_bar_wid);
+    } else {
+        os_unfair_lock_lock(&g_menubar_lock);
+
+        // Fallback: If no tracked windows in g_suppressed_menubar_wids but target_wids provided, restore target_wids
+        if (g_suppressed_menubar_count == 0 && target_wids && count > 0) {
+            size_t limit = count > 32 ? 32 : count;
+            for (size_t i = 0; i < limit; i++) {
+                uint32_t wid = target_wids[i];
+                if (wid == 0) continue;
+                if (g_symbols.SetWindowLevel) {
+                    g_symbols.SetWindowLevel(conn, wid, 24);
+                }
+                if (g_symbols.SetWindowAlpha) {
+                    g_symbols.SetWindowAlpha(conn, wid, 1.0f);
+                }
+                CGSOrderWindow(conn, wid, 1 /* kCGSOrderAbove */, 0);
+                hypr_log("Restored menubar wid=%u to level 24 alpha 1.0 (from target_wids fallback)", wid);
+            }
+        } else {
+            // Restore each window in g_suppressed_menubar_wids
+            for (size_t i = 0; i < g_suppressed_menubar_count; i++) {
+                uint32_t wid = g_suppressed_menubar_wids[i];
+                int32_t orig_level = g_suppressed_menubar_orig_levels[i] != 0 ? g_suppressed_menubar_orig_levels[i] : 24;
+                if (g_symbols.SetWindowLevel) {
+                    g_symbols.SetWindowLevel(conn, wid, orig_level);
+                }
+                if (g_symbols.SetWindowAlpha) {
+                    g_symbols.SetWindowAlpha(conn, wid, 1.0f);
+                }
+                CGSOrderWindow(conn, wid, 1 /* kCGSOrderAbove */, 0);
+                hypr_log("Restored menubar wid=%u to level %d alpha 1.0", wid, orig_level);
+            }
+        }
+
+        g_suppressed_menubar_count = 0;
+        memset(g_suppressed_menubar_wids, 0, sizeof(g_suppressed_menubar_wids));
+        memset(g_suppressed_menubar_orig_levels, 0, sizeof(g_suppressed_menubar_orig_levels));
+        g_exempt_bar_wid = 0;
+        g_menubar_suppressed = false;
+        os_unfair_lock_unlock(&g_menubar_lock);
+
+        if (g_symbols.TransactionCreate && g_symbols.TransactionCommit && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
+            void *tx = g_symbols.TransactionCreate(conn);
+            if (tx) {
+                g_symbols.TransactionSetMenuBarOverrideMaximumReveal(tx, 1.0);
+                g_symbols.TransactionCommit(tx, 0);
+            }
+        }
+        if (g_symbols.ResetMenuBarSystemOverrideAlphas) {
+            g_symbols.ResetMenuBarSystemOverrideAlphas(conn);
+        }
+        hypr_log("apply_menubar_suppression(false): Menu bar reveal restored");
+    }
+}
+
+/* ---- SkyLight SLS Compositor Primitives Interposition -------------------- */
+
+static CGError my_SLSOrderWindow(CGSConnectionID cid, uint32_t wid, int op, uint32_t rel) {
+    if (g_menubar_suppressed && is_menubar_wid(wid)) {
+        if (op != 0) {
+            hypr_log("my_SLSOrderWindow: blocked menubar wid=%u order=%d -> forced to kCGSOrderOut", wid, op);
+            op = 0; // Force kCGSOrderOut
+        }
+    }
+    fn_CGSOrderWindow orig = g_orig_SLSOrderWindow ? g_orig_SLSOrderWindow : g_symbols.OrderWindow;
+    return orig ? orig(cid, wid, op, rel) : -1;
+}
+
+static CGError my_SLSMoveWindow(CGSConnectionID cid, uint32_t wid, CGPoint *point) {
+    if (g_menubar_suppressed && is_menubar_wid(wid)) {
+        if (point && point->y >= -30.0) {
+            point->y = -200.0;
+            hypr_log("my_SLSMoveWindow: clamped menubar wid=%u to offscreen y=-200", wid);
+        }
+    }
+    fn_SLSMoveWindow orig = g_orig_SLSMoveWindow ? g_orig_SLSMoveWindow : g_symbols.MoveWindow;
+    return orig ? orig(cid, wid, point) : -1;
+}
+
+static CGSError my_SLSSetWindowAlpha(CGSConnectionID cid, uint32_t wid, float alpha) {
+    if (g_menubar_suppressed && is_menubar_wid(wid)) {
+        alpha = 0.0f;
+    }
+    if (g_symbols.SetWindowAlpha) {
+        return g_symbols.SetWindowAlpha(cid, wid, alpha);
+    }
+    if (g_orig_SLSSetWindowAlpha) {
+        return g_orig_SLSSetWindowAlpha(cid, wid, alpha);
+    }
+    return 0;
+}
 
 static CGError my_SLSNewWindow(CGSConnectionID cid, int type, float x, float y, void *shape, uint32_t *outWid) {
     CGError err = g_orig_SLSNewWindow ? g_orig_SLSNewWindow(cid, type, x, y, shape, outWid) : -1;
+    if (g_creating_border_overlay) {
+        return err;
+    }
     if (err == 0 && outWid && *outWid != 0) {
         uint32_t wid = *outWid;
+        if (is_border_wid(wid)) {
+            return err;
+        }
+        if (g_menubar_suppressed && is_menubar_wid(wid)) {
+            if (g_symbols.SetWindowAlpha) {
+                g_symbols.SetWindowAlpha(cid, wid, 0.0f);
+            }
+        }
         apply_global_policy_to_window(cid, wid);
     }
     return err;
@@ -957,7 +1531,18 @@ static void rebind_section(intptr_t slide, const struct section_64 *sect,
         if (!strx || strx >= strsize) continue;
 
         const char *name = strtab + strx;
+        void *replacement = NULL;
         if (strcmp(name, "_SLSNewWindow") == 0 || strcmp(name, "_CGSNewWindow") == 0) {
+            replacement = (void *)my_SLSNewWindow;
+        } else if (strcmp(name, "_SLSOrderWindow") == 0 || strcmp(name, "_CGSOrderWindow") == 0) {
+            replacement = (void *)my_SLSOrderWindow;
+        } else if (strcmp(name, "_SLSMoveWindow") == 0 || strcmp(name, "_CGSMoveWindow") == 0) {
+            replacement = (void *)my_SLSMoveWindow;
+        } else if (strcmp(name, "_SLSSetWindowAlpha") == 0 || strcmp(name, "_CGSSetWindowAlpha") == 0) {
+            replacement = (void *)my_SLSSetWindowAlpha;
+        }
+
+        if (replacement) {
             kern_return_t kr = vm_protect(mach_task_self(),
                                           (vm_address_t)&indirect_symbol_bindings[i],
                                           sizeof(void *),
@@ -968,11 +1553,11 @@ static void rebind_section(intptr_t slide, const struct section_64 *sect,
                 continue;
             }
 #if __has_feature(ptrauth_calls)
-            void *raw_target = ptrauth_strip((void *)my_SLSNewWindow, ptrauth_key_function_pointer);
+            void *raw_target = ptrauth_strip(replacement, ptrauth_key_function_pointer);
             void *target = ptrauth_sign_unauthenticated(raw_target, ptrauth_key_asia, (uintptr_t)&indirect_symbol_bindings[i]);
             indirect_symbol_bindings[i] = target;
 #else
-            indirect_symbol_bindings[i] = (void *)my_SLSNewWindow;
+            indirect_symbol_bindings[i] = replacement;
 #endif
             hypr_log("Runtime rebind succeeded for %s at %p", name, &indirect_symbol_bindings[i]);
         }
@@ -980,6 +1565,9 @@ static void rebind_section(intptr_t slide, const struct section_64 *sect,
 }
 
 static void rebind_image_symbols(const struct mach_header *mh, intptr_t slide) {
+    extern struct mach_header __dso_handle;
+    if (mh == &__dso_handle) return;
+
     const struct mach_header_64 *header = (const struct mach_header_64 *)mh;
     if (!header || header->magic != MH_MAGIC_64) return;
     if (header->flags & 0x80000000) return;
@@ -1043,6 +1631,21 @@ static void install_interposition(void) {
         if (!sym) sym = safe_resolve_symbol("CGSNewWindow");
         g_orig_SLSNewWindow = (fn_SLSNewWindow)sym;
     }
+    if (!g_orig_SLSOrderWindow) {
+        void *sym = safe_resolve_symbol("SLSOrderWindow");
+        if (!sym) sym = safe_resolve_symbol("CGSOrderWindow");
+        g_orig_SLSOrderWindow = (fn_CGSOrderWindow)sym;
+    }
+    if (!g_orig_SLSMoveWindow) {
+        void *sym = safe_resolve_symbol("SLSMoveWindow");
+        if (!sym) sym = safe_resolve_symbol("CGSMoveWindow");
+        g_orig_SLSMoveWindow = (fn_SLSMoveWindow)sym;
+    }
+    if (!g_orig_SLSSetWindowAlpha) {
+        void *sym = safe_resolve_symbol("SLSSetWindowAlpha");
+        if (!sym) sym = safe_resolve_symbol("CGSSetWindowAlpha");
+        g_orig_SLSSetWindowAlpha = (fn_SLSSetWindowAlpha)sym;
+    }
 
     struct dyld_interpose_tuple {
         const void *replacement;
@@ -1050,13 +1653,26 @@ static void install_interposition(void) {
     };
     typedef void (*fn_dyld_dynamic_interpose)(const struct mach_header *mh, const struct dyld_interpose_tuple tuples[], size_t count);
     fn_dyld_dynamic_interpose dyld_interpose = (fn_dyld_dynamic_interpose)safe_resolve_symbol("dyld_dynamic_interpose");
-    if (dyld_interpose && g_orig_SLSNewWindow) {
+    if (dyld_interpose) {
         extern struct mach_header __dso_handle;
-        struct dyld_interpose_tuple t[] = {
-            { (const void *)my_SLSNewWindow, (const void *)g_orig_SLSNewWindow }
-        };
-        dyld_interpose(&__dso_handle, t, 1);
-        hypr_log("Interposition: dyld_dynamic_interpose invoked for SLSNewWindow");
+        struct dyld_interpose_tuple t[4];
+        size_t count = 0;
+        if (g_orig_SLSNewWindow) {
+            t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSNewWindow, (const void *)g_orig_SLSNewWindow };
+        }
+        if (g_orig_SLSOrderWindow) {
+            t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSOrderWindow, (const void *)g_orig_SLSOrderWindow };
+        }
+        if (g_orig_SLSMoveWindow) {
+            t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSMoveWindow, (const void *)g_orig_SLSMoveWindow };
+        }
+        if (g_orig_SLSSetWindowAlpha) {
+            t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSSetWindowAlpha, (const void *)g_orig_SLSSetWindowAlpha };
+        }
+        if (count > 0) {
+            dyld_interpose(&__dso_handle, t, count);
+            hypr_log("Interposition: dyld_dynamic_interpose invoked for %zu symbols", count);
+        }
     }
 
     uint32_t image_count = _dyld_image_count();
@@ -1067,7 +1683,8 @@ static void install_interposition(void) {
     }
 
     _dyld_register_func_for_add_image(on_dyld_image_added);
-    hypr_log("Interposition: window creation hooks registered (orig=%p)", (void *)g_orig_SLSNewWindow);
+    hypr_log("Interposition: window creation and menubar suppression hooks registered (origNew=%p, origOrder=%p, origMove=%p, origAlpha=%p)",
+             (void *)g_orig_SLSNewWindow, (void *)g_orig_SLSOrderWindow, (void *)g_orig_SLSMoveWindow, (void *)g_orig_SLSSetWindowAlpha);
 }
 
 /* ---- Signal-Safe Symbol Sandbox (Task 3.1) -------------------------------- */
@@ -1325,6 +1942,100 @@ static void resolve_symbols_and_probe(void) {
     g_symbols.RegisterNotifyProc =
         (fn_CGSRegisterNotifyProc)safe_resolve_variants("RegisterNotifyProc", v_reg_notify, 2, NULL);
 
+    // Border rendering APIs (Task 4.3)
+    static const char * const v_new_region[] = { "CGSNewRegionWithRect", "SLSNewRegionWithRect" };
+    g_symbols.NewRegionWithRect = (fn_CGSNewRegionWithRect)safe_resolve_variants("NewRegionWithRect", v_new_region, 2, NULL);
+
+    static const char * const v_rel_region[] = { "CGSReleaseRegion", "SLSReleaseRegion" };
+    g_symbols.ReleaseRegion = (fn_CGSReleaseRegion)safe_resolve_variants("ReleaseRegion", v_rel_region, 2, NULL);
+
+    static const char * const v_order_win[] = { "SLSOrderWindow", "CGSOrderWindow" };
+    g_symbols.OrderWindow = (fn_CGSOrderWindow)safe_resolve_variants("OrderWindow", v_order_win, 2, NULL);
+
+    static const char * const v_get_level[] = { "SLSGetWindowLevel", "CGSGetWindowLevel" };
+    g_symbols.GetWindowLevel = (fn_CGSGetWindowLevel)safe_resolve_variants("GetWindowLevel", v_get_level, 2, NULL);
+
+    static const char * const v_set_level[] = { "SLSSetWindowLevel", "CGSSetWindowLevel" };
+    g_symbols.SetWindowLevel = (fn_CGSSetWindowLevel)safe_resolve_variants("SetWindowLevel", v_set_level, 2, NULL);
+
+    static const char * const v_rel_win[] = { "SLSReleaseWindow", "CGSReleaseWindow" };
+    g_symbols.ReleaseWindow = (fn_CGSReleaseWindow)safe_resolve_variants("ReleaseWindow", v_rel_win, 2, NULL);
+
+    static const char * const v_win_ctx[] = { "CGWindowContextCreate", "SLSWindowContextCreate", "CGSWindowContextCreate" };
+    g_symbols.WindowContextCreate = (fn_CGWindowContextCreate)safe_resolve_variants("WindowContextCreate", v_win_ctx, 3, NULL);
+
+    static const char * const v_def_conn[] = { "_CGSDefaultConnection", "CGSMainConnectionID", "SLSMainConnectionID" };
+    g_symbols.DefaultConnection = (fn_CGSDefaultConnection)safe_resolve_variants("DefaultConnection", v_def_conn, 3, NULL);
+
+    static const char * const v_set_rgb[] = { "CGContextSetRGBFillColor" };
+    g_symbols.ContextSetRGBFillColor = (fn_CGContextSetRGBFillColor)safe_resolve_variants("ContextSetRGBFillColor", v_set_rgb, 1, NULL);
+
+    static const char * const v_fill_rect[] = { "CGContextFillRect" };
+    g_symbols.ContextFillRect = (fn_CGContextFillRect)safe_resolve_variants("ContextFillRect", v_fill_rect, 1, NULL);
+
+    static const char * const v_flush_ctx[] = { "CGContextFlush" };
+    g_symbols.ContextFlush = (fn_CGContextFlush)safe_resolve_variants("ContextFlush", v_flush_ctx, 1, NULL);
+
+    static const char * const v_rel_ctx[] = { "CGContextRelease" };
+    g_symbols.ContextRelease = (fn_CGContextRelease)safe_resolve_variants("ContextRelease", v_rel_ctx, 1, NULL);
+
+    // Transaction API (macOS 27+)
+    g_symbols.TransactionCreate = (fn_SLSTransactionCreate)dlsym(RTLD_DEFAULT, "SLSTransactionCreate");
+    if (!g_symbols.TransactionCreate) {
+        g_symbols.TransactionCreate = (fn_SLSTransactionCreate)dlsym(RTLD_DEFAULT, "CGSTransactionCreate");
+    }
+    g_symbols.TransactionCommit = (fn_SLSTransactionCommit)dlsym(RTLD_DEFAULT, "SLSTransactionCommit");
+    if (!g_symbols.TransactionCommit) {
+        g_symbols.TransactionCommit = (fn_SLSTransactionCommit)dlsym(RTLD_DEFAULT, "CGSTransactionCommit");
+    }
+    g_symbols.TransactionSetCornerRadius = (fn_SLSTransactionSetWindowCornerRadius)dlsym(RTLD_DEFAULT, "SLSTransactionSetWindowCornerRadius");
+    g_symbols.TransactionClearCornerRadius = (fn_SLSTransactionClearWindowCornerRadius)dlsym(RTLD_DEFAULT, "SLSTransactionClearWindowCornerRadius");
+    g_symbols.TransactionInvalidateShadow = (fn_SLSTransactionInvalidateWindowShadow)dlsym(RTLD_DEFAULT, "SLSTransactionInvalidateWindowShadow");
+    g_symbols.TransactionSetShadowProps = (fn_SLSTransactionSetWindowShadowProperties)dlsym(RTLD_DEFAULT, "SLSTransactionSetWindowShadowProperties");
+    g_symbols.TransactionSetWindowTransform = (fn_SLSTransactionSetWindowTransform)dlsym(RTLD_DEFAULT, "SLSTransactionSetWindowTransform");
+    if (!g_symbols.TransactionSetWindowTransform) {
+        g_symbols.TransactionSetWindowTransform = (fn_SLSTransactionSetWindowTransform)dlsym(RTLD_DEFAULT, "CGSTransactionSetWindowTransform");
+    }
+    g_symbols.SetWindowTransform = (fn_SLSSetWindowTransform)dlsym(RTLD_DEFAULT, "SLSSetWindowTransform");
+    if (!g_symbols.SetWindowTransform) {
+        g_symbols.SetWindowTransform = (fn_SLSSetWindowTransform)dlsym(RTLD_DEFAULT, "CGSSetWindowTransform");
+    }
+    g_symbols.InvalidateWindowShadow = (fn_SLSInvalidateWindowShadow)dlsym(RTLD_DEFAULT, "SLSInvalidateWindowShadow");
+
+    // Menu bar suppression APIs
+    g_symbols.TransactionSetMenuBarOverrideMaximumReveal = (fn_SLSTransactionSetMenuBarOverrideMaximumReveal)dlsym(RTLD_DEFAULT, "SLSTransactionSetMenuBarOverrideMaximumReveal");
+    if (!g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
+        g_symbols.TransactionSetMenuBarOverrideMaximumReveal = (fn_SLSTransactionSetMenuBarOverrideMaximumReveal)dlsym(RTLD_DEFAULT, "CGSTransactionSetMenuBarOverrideMaximumReveal");
+    }
+    g_symbols.SetMenuBarSystemOverrideAlpha = (fn_SLSSetMenuBarSystemOverrideAlpha)dlsym(RTLD_DEFAULT, "SLSSetMenuBarSystemOverrideAlpha");
+    if (!g_symbols.SetMenuBarSystemOverrideAlpha) {
+        g_symbols.SetMenuBarSystemOverrideAlpha = (fn_SLSSetMenuBarSystemOverrideAlpha)dlsym(RTLD_DEFAULT, "CGSSetMenuBarSystemOverrideAlpha");
+    }
+    g_symbols.ResetMenuBarSystemOverrideAlphas = (fn_SLSResetMenuBarSystemOverrideAlphas)dlsym(RTLD_DEFAULT, "SLSResetMenuBarSystemOverrideAlphas");
+    if (!g_symbols.ResetMenuBarSystemOverrideAlphas) {
+        g_symbols.ResetMenuBarSystemOverrideAlphas = (fn_SLSResetMenuBarSystemOverrideAlphas)dlsym(RTLD_DEFAULT, "CGSResetMenuBarSystemOverrideAlphas");
+    }
+    g_symbols.InterruptMenuBarReveal = (fn_SLSInterruptMenuBarReveal)dlsym(RTLD_DEFAULT, "SLSInterruptMenuBarReveal");
+    if (!g_symbols.InterruptMenuBarReveal) {
+        g_symbols.InterruptMenuBarReveal = (fn_SLSInterruptMenuBarReveal)dlsym(RTLD_DEFAULT, "CGSInterruptMenuBarReveal");
+    }
+    g_symbols.SetWindowAlpha = (fn_SLSSetWindowAlpha)dlsym(RTLD_DEFAULT, "SLSSetWindowAlpha");
+    if (!g_symbols.SetWindowAlpha) {
+        g_symbols.SetWindowAlpha = (fn_SLSSetWindowAlpha)dlsym(RTLD_DEFAULT, "CGSSetWindowAlpha");
+    }
+
+    hypr_log("Transaction API: Create=%p Commit=%p SetCornerRadius=%p InvalidateShadow=%p",
+             (void *)g_symbols.TransactionCreate, (void *)g_symbols.TransactionCommit,
+             (void *)g_symbols.TransactionSetCornerRadius, (void *)g_symbols.TransactionInvalidateShadow);
+    hypr_log("Workspace Transform API: TxTransform=%p SetTransform=%p",
+             (void *)g_symbols.TransactionSetWindowTransform, (void *)g_symbols.SetWindowTransform);
+    hypr_log("MenuBar API: MaxReveal=%p SetAlpha=%p ResetAlphas=%p InterruptReveal=%p SetWindowAlpha=%p",
+             (void *)g_symbols.TransactionSetMenuBarOverrideMaximumReveal,
+             (void *)g_symbols.SetMenuBarSystemOverrideAlpha,
+             (void *)g_symbols.ResetMenuBarSystemOverrideAlphas,
+             (void *)g_symbols.InterruptMenuBarReveal,
+             (void *)g_symbols.SetWindowAlpha);
+
     g_symbols.resolved = (g_symbols.MainConnectionID != NULL);
     if (!g_symbols.resolved) {
         hypr_log("Warning: Core symbols unresolved; compositor mutations unavailable");
@@ -1344,7 +2055,7 @@ typedef struct {
     int     fd;
     bool    active;
     bool    authenticated;
-    uint8_t read_buf[CLIENT_READ_BUF_SIZE];
+    uint8_t read_buf[HYPR_MAX_PAYLOAD_SIZE];
     size_t  read_len;
     uint8_t write_buf[CLIENT_WRITE_BUF_SIZE];
     size_t  write_len;
@@ -1352,16 +2063,16 @@ typedef struct {
 } ClientConn;
 
 static ClientConn g_clients[HYPR_MAX_CLIENTS];
-static int g_server_fd = -1;
+static uint8_t *g_shm_base = NULL;
 
-static ClientConn *find_client(int fd) {
+static __attribute__((unused)) ClientConn *find_client(int fd) {
     for (int i = 0; i < HYPR_MAX_CLIENTS; i++) {
         if (g_clients[i].active && g_clients[i].fd == fd) return &g_clients[i];
     }
     return NULL;
 }
 
-static ClientConn *alloc_client(int fd) {
+static __attribute__((unused)) ClientConn *alloc_client(int fd) {
     for (int i = 0; i < HYPR_MAX_CLIENTS; i++) {
         if (!g_clients[i].active) {
             memset(&g_clients[i], 0, sizeof(ClientConn));
@@ -1375,6 +2086,7 @@ static ClientConn *alloc_client(int fd) {
 
 static void close_client(int kq, ClientConn *c) {
     if (!c || !c->active) return;
+    if (c->fd == -1) return;
     int idx = (int)(c - g_clients);
     if (kq >= 0) {
         struct kevent tev;
@@ -1390,8 +2102,156 @@ static void close_client(int kq, ClientConn *c) {
     c->write_pos = 0;
 }
 
+/* ---- Shared Memory Ring Buffer IPC --------------------------------------- */
+
+static int shm_ring_write(uint8_t *ring_base, uint32_t ring_size,
+                           const uint32_t *read_pos, uint32_t *write_pos,
+                           const void *data, uint32_t len) {
+    if (!ring_base || !read_pos || !write_pos || !data || len == 0) return -1;
+
+    uint32_t total_len = (uint32_t)sizeof(uint32_t) + len;
+    if (total_len + sizeof(uint32_t) > ring_size) return -1;
+
+    uint32_t rpos = __atomic_load_n(read_pos, __ATOMIC_ACQUIRE);
+    uint32_t wpos = __atomic_load_n(write_pos, __ATOMIC_RELAXED);
+
+    if (rpos >= ring_size || wpos >= ring_size) return -1;
+
+    if (wpos >= rpos) {
+        // Space to the end of the ring buffer
+        if (wpos + total_len < ring_size || (wpos + total_len == ring_size && rpos > 0)) {
+            uint32_t msg_len = len;
+            memcpy(ring_base + wpos, &msg_len, sizeof(uint32_t));
+            memcpy(ring_base + wpos + sizeof(uint32_t), data, len);
+
+            uint32_t next_wpos = wpos + total_len;
+            if (next_wpos >= ring_size) next_wpos = 0;
+            __atomic_store_n(write_pos, next_wpos, __ATOMIC_RELEASE);
+            return 0;
+        }
+
+        // Does not fit before ring end; must wrap to offset 0.
+        // Check space at offset 0 before rpos.
+        if (total_len >= rpos) {
+            return -1; // Ring buffer full
+        }
+
+        // Write skip marker (msg_len = 0) at current pos
+        if (wpos + sizeof(uint32_t) <= ring_size) {
+            uint32_t skip = 0;
+            memcpy(ring_base + wpos, &skip, sizeof(uint32_t));
+        }
+
+        // Write message at offset 0
+        uint32_t msg_len = len;
+        memcpy(ring_base + 0, &msg_len, sizeof(uint32_t));
+        memcpy(ring_base + sizeof(uint32_t), data, len);
+
+        __atomic_store_n(write_pos, total_len, __ATOMIC_RELEASE);
+        return 0;
+    } else {
+        // wpos < rpos: free space is strictly [wpos, rpos)
+        if (wpos + total_len >= rpos) {
+            return -1; // Ring buffer full
+        }
+
+        uint32_t msg_len = len;
+        memcpy(ring_base + wpos, &msg_len, sizeof(uint32_t));
+        memcpy(ring_base + wpos + sizeof(uint32_t), data, len);
+
+        uint32_t next_wpos = wpos + total_len;
+        if (next_wpos >= ring_size) next_wpos = 0;
+        __atomic_store_n(write_pos, next_wpos, __ATOMIC_RELEASE);
+        return 0;
+    }
+}
+
+static int shm_ring_read(const uint8_t *ring_base, uint32_t ring_size,
+                          uint32_t *read_pos, const uint32_t *write_pos,
+                          uint8_t *out_buf, uint32_t *out_len, uint32_t max_len) {
+    if (!ring_base || !read_pos || !write_pos || !out_buf || !out_len) return -1;
+
+    uint32_t wpos = __atomic_load_n(write_pos, __ATOMIC_ACQUIRE);
+    uint32_t rpos = __atomic_load_n(read_pos, __ATOMIC_RELAXED);
+
+    if (rpos == wpos) {
+        return -1; // No data available
+    }
+
+    if (rpos >= ring_size || wpos >= ring_size) return -1;
+
+    if (rpos + sizeof(uint32_t) > ring_size) {
+        rpos = 0;
+        if (rpos == wpos) {
+            __atomic_store_n(read_pos, 0, __ATOMIC_RELEASE);
+            return -1;
+        }
+    }
+
+    uint32_t msg_len = 0;
+    memcpy(&msg_len, ring_base + rpos, sizeof(uint32_t));
+
+    if (msg_len == 0) {
+        rpos = 0;
+        if (rpos == wpos) {
+            __atomic_store_n(read_pos, 0, __ATOMIC_RELEASE);
+            return -1;
+        }
+        if (rpos + sizeof(uint32_t) > ring_size) return -1;
+        memcpy(&msg_len, ring_base + 0, sizeof(uint32_t));
+        if (msg_len == 0) return -1;
+    }
+
+    if (rpos + sizeof(uint32_t) + msg_len > ring_size) return -1;
+    if (msg_len > max_len) return -1;
+
+    memcpy(out_buf, ring_base + rpos + sizeof(uint32_t), msg_len);
+    *out_len = msg_len;
+
+    uint32_t next_rpos = rpos + sizeof(uint32_t) + msg_len;
+    if (next_rpos >= ring_size) next_rpos = 0;
+
+    __atomic_store_n(read_pos, next_rpos, __ATOMIC_RELEASE);
+    return 0;
+}
+
+static void shm_send_response(const void *hdr, size_t hdr_len, const void *payload, size_t payload_len) {
+    if (!g_shm_base) {
+        hypr_log("shm_send_response: g_shm_base is NULL, dropping response");
+        return;
+    }
+
+    size_t total_len = hdr_len + payload_len;
+    uint8_t buf[CLIENT_WRITE_BUF_SIZE];
+    if (total_len > sizeof(buf)) {
+        hypr_log("shm_send_response: message too large (%zu bytes), dropping", total_len);
+        return;
+    }
+
+    memcpy(buf, hdr, hdr_len);
+    if (payload && payload_len > 0) {
+        memcpy(buf + hdr_len, payload, payload_len);
+    }
+
+    HyprShmHeader *shm_hdr = (HyprShmHeader *)(void *)g_shm_base;
+    uint8_t *rsp_ring_base = g_shm_base + HYPR_SHM_RSP_RING_OFF;
+
+    int res = shm_ring_write(rsp_ring_base, HYPR_RSP_RING_SIZE,
+                             (const uint32_t *)(const void *)&shm_hdr->rsp_read_pos,
+                             (uint32_t *)(void *)&shm_hdr->rsp_write_pos,
+                             buf, (uint32_t)total_len);
+    if (res != 0) {
+        hypr_log("shm_send_response: response ring buffer write failed (len=%zu)", total_len);
+    }
+}
+
 static void client_send_response(int kq, ClientConn *c, const void *hdr, size_t hdr_len, const void *payload, size_t payload_len) {
     if (!c || !c->active) return;
+
+    if (c->fd == -1) {
+        shm_send_response(hdr, hdr_len, payload, payload_len);
+        return;
+    }
 
     if (c->write_len > c->write_pos) {
         size_t needed = hdr_len + payload_len;
@@ -1458,7 +2318,7 @@ static void client_send_response(int kq, ClientConn *c, const void *hdr, size_t 
     }
 }
 
-static void handle_client_write(int kq, ClientConn *c) {
+static __attribute__((unused)) void handle_client_write(int kq, ClientConn *c) {
     if (!c || !c->active) return;
     if (c->write_pos >= c->write_len) {
         struct kevent ev;
@@ -1549,17 +2409,21 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             const HyprPayloadAuth *auth = (const HyprPayloadAuth *)payload;
             if (memcmp(auth->token, g_auth_token, sizeof(g_auth_token)) == 0) {
                 c->authenticated = true;
-                int idx = (int)(c - g_clients);
-                struct kevent tev;
-                EV_SET(&tev, HYPR_TIMER_AUTH_BASE + idx, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
-                kevent(kq, &tev, 1, NULL, 0, NULL);
+                if (c->fd != -1) {
+                    int idx = (int)(c - g_clients);
+                    struct kevent tev;
+                    EV_SET(&tev, HYPR_TIMER_AUTH_BASE + idx, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+                    kevent(kq, &tev, 1, NULL, 0, NULL);
+                }
 
                 hypr_log("Client fd=%d successfully authenticated", c->fd);
                 send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "Authenticated");
             } else {
                 hypr_log("Client fd=%d authentication failed (token mismatch)", c->fd);
                 send_ack(kq, c, hdr->sequence, HYPR_ERR_UNAUTHORIZED, "Unauthorized");
-                close_client(kq, c);
+                if (c->fd != -1) {
+                    close_client(kq, c);
+                }
             }
             break;
         }
@@ -1592,15 +2456,7 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             if (win) {
                 win->corner_radius = p.corner_radius;
             }
-            if (p.corner_radius == 0.0f && g_symbols.SetWindowCornerRadius) {
-                if (g_symbols.CornerRadiusSymbolName && strstr(g_symbols.CornerRadiusSymbolName, "Mask")) {
-                    fn_SLSSetWindowCornerMask fn = (fn_SLSSetWindowCornerMask)g_symbols.SetWindowCornerRadius;
-                    fn(cid, NULL, hdr->window_id, 0.0f, 0.0f, 0.0f, 0.0f);
-                } else {
-                    fn_SLSWindowSetCornerRadius fn = (fn_SLSWindowSetCornerRadius)g_symbols.SetWindowCornerRadius;
-                    fn(cid, hdr->window_id, 0.0f);
-                }
-            }
+            set_corner_radius_transaction(cid, hdr->window_id, p.corner_radius);
             os_unfair_lock_unlock(&g_state_lock);
 
             invalidate_window(cid, hdr->window_id);
@@ -1637,7 +2493,8 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             uint32_t tags[2] = { 1 << 3, 0 };
             if (p.shadow_enabled == 0) {
                 if (g_symbols.SetWindowTags) {
-                    g_symbols.SetWindowTags(cid, hdr->window_id, tags, 64);
+                    CGError err = g_symbols.SetWindowTags(cid, hdr->window_id, tags, 64);
+                    hypr_log("SetWindowTags wid=%u tag=0x%x err=%d", hdr->window_id, tags[0], err);
                 }
                 if (g_symbols.SetWindowShadowProperties) {
                     fn_SLSSetWindowShadowParameters fn = (fn_SLSSetWindowShadowParameters)g_symbols.SetWindowShadowProperties;
@@ -1645,7 +2502,8 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 }
             } else {
                 if (g_symbols.ClearWindowTags) {
-                    g_symbols.ClearWindowTags(cid, hdr->window_id, tags, 64);
+                    CGError err = g_symbols.ClearWindowTags(cid, hdr->window_id, tags, 64);
+                    hypr_log("ClearWindowTags wid=%u tag=0x%x err=%d", hdr->window_id, tags[0], err);
                 }
             }
             os_unfair_lock_unlock(&g_state_lock);
@@ -1682,6 +2540,7 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 win->border_width = p.border_width;
                 win->color_active = p.color_active;
                 win->color_inactive = p.color_inactive;
+                create_or_update_border_overlay(_CGSDefaultConnection(), win);
             }
             os_unfair_lock_unlock(&g_state_lock);
 
@@ -1787,7 +2646,12 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             os_unfair_lock_lock(&g_state_lock);
             for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
                 if (g_managed_windows[i].active) {
-                    g_managed_windows[i].is_focused = (g_managed_windows[i].wid == target_wid);
+                    bool was_focused = g_managed_windows[i].is_focused;
+                    bool now_focused = (g_managed_windows[i].wid == target_wid);
+                    g_managed_windows[i].is_focused = now_focused;
+                    if (was_focused != now_focused || (now_focused && g_managed_windows[i].border_wid == 0)) {
+                        create_or_update_border_overlay(_CGSDefaultConnection(), &g_managed_windows[i]);
+                    }
                 }
             }
             os_unfair_lock_unlock(&g_state_lock);
@@ -1822,13 +2686,94 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
+        case HYPR_CMD_SET_MENUBAR_SUPPRESSION: {
+            if (hdr->payload_size < 1) {
+                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                return;
+            }
+            uint32_t suppress = 0;
+            uint32_t exempt_wid = 0;
+            uint32_t count = 0;
+            const uint32_t *wids = NULL;
+
+            if (hdr->payload_size == 1) {
+                suppress = ((const uint8_t *)payload)[0] != 0 ? 1 : 0;
+            } else if (hdr->payload_size == sizeof(uint32_t)) {
+                suppress = ((const uint32_t *)payload)[0] != 0 ? 1 : 0;
+            } else if (hdr->payload_size >= 12) {
+                const HyprPacketMenuBarSuppression *packet = (const HyprPacketMenuBarSuppression *)payload;
+                suppress = packet->suppress != 0 ? 1 : 0;
+                exempt_wid = packet->exempt_wid;
+                count = packet->count;
+                if (count > 32) count = 32;
+                size_t max_count_by_payload = (hdr->payload_size - 12) / sizeof(uint32_t);
+                if (count > max_count_by_payload) count = (uint32_t)max_count_by_payload;
+                wids = packet->wids;
+            } else if (hdr->payload_size >= 8) {
+                suppress = ((const uint32_t *)payload)[0] != 0 ? 1 : 0;
+                exempt_wid = ((const uint32_t *)payload)[1];
+            } else {
+                suppress = ((const uint8_t *)payload)[0] != 0 ? 1 : 0;
+            }
+            apply_menubar_suppression(suppress != 0, exempt_wid, wids, count);
+            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            break;
+        }
+        case HYPR_CMD_SET_WORKSPACE_TRANSFORM: {
+            if (hdr->payload_size != sizeof(HyprPayloadWorkspaceTransform)) {
+                hypr_log("HYPR_CMD_SET_WORKSPACE_TRANSFORM fd=%d bad payload size %u expected %zu",
+                         c->fd, hdr->payload_size, sizeof(HyprPayloadWorkspaceTransform));
+                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                return;
+            }
+            const HyprPayloadWorkspaceTransform *p = (const HyprPayloadWorkspaceTransform *)payload;
+            CGSConnectionID cid = 0;
+            if (g_symbols.MainConnectionID) {
+                cid = g_symbols.MainConnectionID();
+            }
+            if (!cid) {
+                cid = _CGSDefaultConnection();
+            }
+
+            SLSTransactionRef tx = NULL;
+            if (cid && g_symbols.TransactionCreate) {
+                tx = g_symbols.TransactionCreate(cid);
+            }
+
+            uint32_t count = p->count;
+            if (count > 32) count = 32;
+
+            for (uint32_t i = 0; i < count; i++) {
+                const HyprWindowTransformEntry *e = &p->entries[i];
+                CGAffineTransform xf = CGAffineTransformMake(
+                    (CGFloat)e->a, (CGFloat)e->b,
+                    (CGFloat)e->c, (CGFloat)e->d,
+                    (CGFloat)e->tx, (CGFloat)e->ty
+                );
+                if (tx && g_symbols.TransactionSetWindowTransform) {
+                    g_symbols.TransactionSetWindowTransform(tx, e->window_id, 0, 0, &xf);
+                } else if (cid && g_symbols.SetWindowTransform) {
+                    g_symbols.SetWindowTransform(cid, e->window_id, xf);
+                }
+                if (e->alpha >= 0.0f && g_symbols.SetWindowAlpha && cid) {
+                    g_symbols.SetWindowAlpha(cid, e->window_id, e->alpha);
+                }
+            }
+
+            if (tx && g_symbols.TransactionCommit) {
+                g_symbols.TransactionCommit(tx, 1);
+            }
+
+            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            break;
+        }
         default:
             send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_CMD, "Unknown");
             break;
     }
 }
 
-static void handle_client_read(int kq, ClientConn *c) {
+static __attribute__((unused)) void handle_client_read(int kq, ClientConn *c) {
     if (!c || !c->active) return;
 
     size_t space = sizeof(c->read_buf) - c->read_len;
@@ -1892,21 +2837,27 @@ static void handle_client_read(int kq, ClientConn *c) {
     }
 }
 
-static void server_kqueue_loop(int server_fd) {
+
+/* Client-mode kqueue event loop: the hook is connected to the Swift
+ * socket server as a single client. No accept() needed. Processes
+ * incoming commands from Swift and sends responses back. Timers for
+ * space/display debounce still work. */
+static __attribute__((unused)) void client_kqueue_loop(int conn_fd) {
     int kq = kqueue();
     if (kq < 0) {
         hypr_log("kqueue() failed: %s", strerror(errno));
-        close(server_fd);
+        close(conn_fd);
         return;
     }
     g_kq = kq;
 
+    /* Register the connected fd for read events */
     struct kevent ev;
-    EV_SET(&ev, server_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
+    EV_SET(&ev, conn_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
     if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
-        hypr_log("kevent() failed to register server_fd: %s", strerror(errno));
+        hypr_log("kevent() failed to register conn_fd: %s", strerror(errno));
         close(kq);
-        close(server_fd);
+        close(conn_fd);
         return;
     }
 
@@ -1915,7 +2866,7 @@ static void server_kqueue_loop(int server_fd) {
         int nev = kevent(kq, NULL, 0, events, 32, NULL);
         if (nev < 0) {
             if (errno == EINTR) continue;
-            hypr_log("kevent wait error: %s", strerror(errno));
+            hypr_log("kqueue wait error: %s", strerror(errno));
             break;
         }
 
@@ -1929,80 +2880,124 @@ static void server_kqueue_loop(int server_fd) {
                     handle_space_transition_settled();
                 } else if (events[i].ident == HYPR_TIMER_DISPLAY_DEBOUNCE) {
                     handle_display_reconfiguration_settled();
-                } else if (events[i].ident >= HYPR_TIMER_AUTH_BASE &&
-                           events[i].ident < (uintptr_t)(HYPR_TIMER_AUTH_BASE + HYPR_MAX_CLIENTS)) {
-                    int idx = (int)(events[i].ident - HYPR_TIMER_AUTH_BASE);
-                    if (idx >= 0 && idx < HYPR_MAX_CLIENTS) {
-                        ClientConn *c = &g_clients[idx];
-                        if (c->active && !c->authenticated) {
-                            hypr_log("Client fd=%d auth timeout (1s) expired; closing", c->fd);
-                            close_client(kq, c);
-                        }
-                    }
                 }
                 continue;
             }
 
-            if (fd == server_fd) {
-                while (1) {
-                    int client_fd = accept(server_fd, NULL, NULL);
-                    if (client_fd < 0) {
-                        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                        if (errno == EINTR) continue;
-                        hypr_log("accept error: %s", strerror(errno));
-                        break;
-                    }
+            /* All data events are for the single connected fd */
+            ClientConn *c = find_client(fd);
+            if (!c) continue;
 
-                    int fl = fcntl(client_fd, F_GETFL, 0);
-                    if (fl >= 0) fcntl(client_fd, F_SETFL, fl | O_NONBLOCK);
+            if (flags & EV_EOF) {
+                hypr_log("Swift server disconnected (fd=%d)", fd);
+                close_client(kq, c);
+                /* Could attempt reconnect here in the future */
+                goto loop_exit;
+            }
 
-                    int nosigpipe = 1;
-                    setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, sizeof(nosigpipe));
-
-                    ClientConn *c = alloc_client(client_fd);
-                    if (!c) {
-                        hypr_log("Max clients reached, dropping fd=%d", client_fd);
-                        close(client_fd);
-                        continue;
-                    }
-
-                    struct kevent cev;
-                    EV_SET(&cev, client_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-                    if (kevent(kq, &cev, 1, NULL, 0, NULL) < 0) {
-                        hypr_log("Failed to add client_fd to kqueue: %s", strerror(errno));
-                        close_client(kq, c);
-                        continue;
-                    }
-
-                    int idx = (int)(c - g_clients);
-                    struct kevent tev;
-                    EV_SET(&tev, HYPR_TIMER_AUTH_BASE + idx, EVFILT_TIMER, EV_ADD | EV_ONESHOT, 0, 1000, NULL);
-                    if (kevent(kq, &tev, 1, NULL, 0, NULL) < 0) {
-                        hypr_log("Failed to add auth timer for client_fd=%d: %s", client_fd, strerror(errno));
-                        close_client(kq, c);
-                    }
-                }
-            } else {
-                ClientConn *c = find_client(fd);
-                if (!c) continue;
-
-                if (filter == EVFILT_READ) {
-                    handle_client_read(kq, c);
-                } else if (filter == EVFILT_WRITE) {
-                    handle_client_write(kq, c);
-                }
-
-                if ((flags & EV_EOF) && c->active && c->write_pos >= c->write_len) {
-                    close_client(kq, c);
-                }
+            if (filter == EVFILT_READ) {
+                handle_client_read(kq, c);
+            } else if (filter == EVFILT_WRITE) {
+                handle_client_write(kq, c);
             }
         }
     }
-
+loop_exit:
     close(kq);
     g_kq = -1;
-    close(server_fd);
+    hypr_log("Client kqueue loop exited");
 }
+
+static void shm_poll_loop(void *shm_base) {
+    g_shm_base = (uint8_t *)shm_base;
+    HyprShmHeader *hdr = (HyprShmHeader *)shm_base;
+    uint8_t *cmd_ring_base = g_shm_base + HYPR_SHM_CMD_RING_OFF;
+
+    int kq = kqueue();
+    if (kq < 0) {
+        hypr_log("shm_poll_loop: kqueue() failed: %s", strerror(errno));
+    }
+    g_kq = kq;
+
+    ClientConn dummy_conn;
+    memset(&dummy_conn, 0, sizeof(dummy_conn));
+    dummy_conn.fd = -1;
+    dummy_conn.active = true;
+    dummy_conn.authenticated = true;
+
+    static uint8_t msg_buf[sizeof(HyprMessageHeader) + HYPR_MAX_PAYLOAD_SIZE];
+    uint32_t msg_len = 0;
+
+    diag_log("DIAG: shm_poll_loop started, polling cmd ring");
+    hypr_log("HyprServer entering SHM poll loop");
+
+    while (1) {
+        int work_done = 0;
+
+        // Self-heal hook_ready and hook_pid in shared memory header
+        if (__atomic_load_n((uint32_t *)(void *)&hdr->hook_ready, __ATOMIC_ACQUIRE) == 0) {
+            hdr->hook_pid = (uint32_t)getpid();
+            __atomic_store_n((uint32_t *)(void *)&hdr->hook_ready, 1, __ATOMIC_RELEASE);
+        }
+
+        // Poll command ring
+        while (shm_ring_read(cmd_ring_base, HYPR_CMD_RING_SIZE,
+                             (uint32_t *)(void *)&hdr->cmd_read_pos,
+                             (const uint32_t *)(const void *)&hdr->cmd_write_pos,
+                             msg_buf, &msg_len, (uint32_t)sizeof(msg_buf)) == 0) {
+            work_done = 1;
+            if (msg_len >= sizeof(HyprMessageHeader)) {
+                HyprMessageHeader header;
+                memcpy(&header, msg_buf, sizeof(header));
+
+                if (header.magic != HYPR_MAGIC) {
+                    hypr_log("shm_poll_loop: bad magic 0x%08x", header.magic);
+                    send_ack(kq, &dummy_conn, header.sequence, HYPR_ERR_INTERNAL, "Bad magic");
+                    continue;
+                }
+                if (header.version != HYPR_PROTO_VERSION) {
+                    hypr_log("shm_poll_loop: bad version %u", header.version);
+                    send_ack(kq, &dummy_conn, header.sequence, HYPR_ERR_INTERNAL, "Bad version");
+                    continue;
+                }
+                if (header.payload_size > HYPR_MAX_PAYLOAD_SIZE ||
+                    sizeof(HyprMessageHeader) + header.payload_size > msg_len) {
+                    hypr_log("shm_poll_loop: bad payload size %u (msg_len=%u)", header.payload_size, msg_len);
+                    send_ack(kq, &dummy_conn, header.sequence, HYPR_ERR_INTERNAL, "Payload size error");
+                    continue;
+                }
+
+                const uint8_t *payload = (header.payload_size > 0)
+                                         ? (msg_buf + sizeof(HyprMessageHeader)) : NULL;
+                dispatch_command(kq, &dummy_conn, &header, payload);
+            }
+        }
+
+        // Check kqueue timers (non-blocking)
+        if (kq >= 0) {
+            struct timespec ts = {0, 0};
+            struct kevent events[16];
+            int nev = kevent(kq, NULL, 0, events, 16, &ts);
+            for (int i = 0; i < nev; i++) {
+                if (events[i].filter == EVFILT_TIMER) {
+                    work_done = 1;
+                    if (events[i].ident == HYPR_TIMER_SPACE_DEBOUNCE) {
+                        handle_space_transition_settled();
+                    } else if (events[i].ident == HYPR_TIMER_DISPLAY_DEBOUNCE) {
+                        handle_display_reconfiguration_settled();
+                    }
+                }
+            }
+        }
+
+        // Avoid busy-spinning if idle
+        if (!work_done) {
+            usleep(500); // 0.5ms sleep
+        }
+    }
+}
+
+/* server_kqueue_loop removed: replaced by client_kqueue_loop */
 
 static void init_auth_token(void) {
     arc4random_buf(g_auth_token, sizeof(g_auth_token));
@@ -2023,62 +3018,104 @@ static void init_auth_token(void) {
 
 static void *deferred_init(void *arg) {
     (void)arg;
+    diag_log("DIAG: deferred_init entered, pid=%d uid=%d", getpid(), getuid());
     usleep(500000);
-    if (is_safe_mode_active()) return NULL;
-
-    resolve_symbols_and_probe();
-    install_interposition();
-
-    // Task 4.9: Multi-monitor display topology and reconfiguration observer
-    update_display_topology();
-    register_display_callbacks();
-
-    // Task 4.10: Mission Control, Spaces, and fullscreen transition observers
-    register_space_callbacks();
-
-    // Ensure bootstrap port is registered before socket server starts (REQ-INJ-001)
-    if (g_bootstrap_service_port == MACH_PORT_NULL) {
-        mach_port_t port = MACH_PORT_NULL;
-        kern_return_t kr = bootstrap_check_in(bootstrap_port, HYPR_BOOTSTRAP_NAME, &port);
-        if (kr == BOOTSTRAP_SERVICE_ACTIVE) {
-            hypr_log("HyprServer detected BOOTSTRAP_SERVICE_ACTIVE in deferred_init, aborting");
-            return NULL;
-        } else if (kr == KERN_SUCCESS) {
-            g_bootstrap_service_port = port;
-            hypr_log("HyprServer registered Mach bootstrap service in deferred_init (port=%u)", port);
-        } else {
-            hypr_log("bootstrap_check_in(%s) returned %d (%s)", HYPR_BOOTSTRAP_NAME, kr, bootstrap_strerror(kr));
-        }
+    diag_log("DIAG: post-sleep, checking safe mode");
+    int safe_mode = is_safe_mode_active();
+    diag_log("DIAG: safe_mode=%d", safe_mode);
+    if (safe_mode) {
+        diag_log("DIAG: ABORT safe mode active, returning");
+        return NULL;
     }
+
+    diag_log("DIAG: calling resolve_symbols_and_probe");
+    resolve_symbols_and_probe();
+    diag_log("DIAG: resolve_symbols_and_probe completed");
+    diag_log("DIAG: calling install_interposition");
+    install_interposition();
+    diag_log("DIAG: install_interposition completed");
+
+    /* SkyLight APIs (SLSRegisterNotifyProc, SLSRegisterConnectionNotifyProc,
+     * SLSGetActiveDisplayList) assert main-thread context inside WindowServer.
+     * Dispatch all SkyLight registrations to the main runloop so they execute
+     * in the correct thread context. Display topology is populated lazily
+     * via callbacks or on first client command. */
+    diag_log("DIAG: dispatching SkyLight registrations to main runloop");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        diag_log("DIAG: main-queue block: register_display_callbacks");
+        register_display_callbacks();
+        diag_log("DIAG: main-queue block: register_space_callbacks");
+        register_space_callbacks();
+        diag_log("DIAG: main-queue block: SkyLight registrations complete");
+    });
+
+    /* bootstrap_check_in removed: WindowServer sandbox blocks it (kr=1100).
+     * Idempotency is now handled by the Swift server refusing duplicate connections. */
 
     // Initialize 16-byte random auth token (REQ-WS-012)
+    diag_log("DIAG: calling init_auth_token");
     init_auth_token();
+    diag_log("DIAG: init_auth_token completed");
 
-    unlink(HYPR_SOCKET_PATH);
-    g_server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (g_server_fd < 0) { hypr_log("socket: %s", strerror(errno)); return NULL; }
+    /* Shared Memory IPC (mmap-based) */
+    diag_log("DIAG: initializing shared memory IPC on %s", HYPR_SHM_PATH);
 
-    int fl = fcntl(g_server_fd, F_GETFL, 0);
-    if (fl >= 0) fcntl(g_server_fd, F_SETFL, fl | O_NONBLOCK);
+    // Remove stale SHM file from prior session (safe even if missing)
+    unlink(HYPR_SHM_PATH);
 
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, HYPR_SOCKET_PATH, sizeof(addr.sun_path) - 1);
-    if (bind(g_server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        hypr_log("bind: %s", strerror(errno));
-        close(g_server_fd); g_server_fd = -1; return NULL;
+    int shm_fd = open(HYPR_SHM_PATH, O_CREAT | O_RDWR, 0666);
+    if (shm_fd < 0) {
+        hypr_log("Failed to open or create SHM file %s: %s", HYPR_SHM_PATH, strerror(errno));
+        diag_log("DIAG: SHM open/create failed: %s", strerror(errno));
+        /* Write readiness marker anyway so loader does not hang */
+        FILE *ready = fopen(HYPR_READY_PATH, "w");
+        if (ready) { fprintf(ready, "ready\n"); fclose(ready); }
+        diag_log("DIAG: interposition-only mode (SHM file unavailable)");
+        hypr_log("Running in interposition-only mode (SHM file unavailable)");
+        return NULL;
     }
-    chmod(HYPR_SOCKET_PATH, 0666);
-    if (listen(g_server_fd, 16) < 0) {
-        hypr_log("listen: %s", strerror(errno));
-        close(g_server_fd); g_server_fd = -1; return NULL;
+    fchmod(shm_fd, 0666);
+
+    if (ftruncate(shm_fd, HYPR_SHM_SIZE) != 0) {
+        hypr_log("ERROR: ftruncate failed for SHM: %s", strerror(errno));
+        diag_log("DIAG: ftruncate failed for SHM: %s", strerror(errno));
+        close(shm_fd);
+        FILE *ready = fopen(HYPR_READY_PATH, "w");
+        if (ready) { fprintf(ready, "ready\n"); fclose(ready); }
+        return NULL;
     }
 
-    hypr_log("HyprServer initialized on %s (symbols %s)",
-             HYPR_SOCKET_PATH, g_symbols.resolved ? "resolved" : "unresolved");
+    void *base = mmap(NULL, HYPR_SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (base == MAP_FAILED) {
+        hypr_log("ERROR: mmap failed for SHM: %s", strerror(errno));
+        diag_log("DIAG: SHM mmap failed: %s", strerror(errno));
+        close(shm_fd);
+        FILE *ready = fopen(HYPR_READY_PATH, "w");
+        if (ready) { fprintf(ready, "ready\n"); fclose(ready); }
+        diag_log("DIAG: interposition-only mode (mmap failed)");
+        hypr_log("Running in interposition-only mode (mmap failed)");
+        return NULL;
+    }
+    close(shm_fd);
 
-    server_kqueue_loop(g_server_fd);
+    // Force-materialize all backing pages to prevent APFS pagein errors
+    memset(base, 0, HYPR_SHM_SIZE);
+
+    HyprShmHeader *hdr = (HyprShmHeader *)base;
+    hdr->magic = HYPR_SHM_MAGIC;
+    hdr->version = HYPR_SHM_VERSION;
+    hdr->hook_pid = (uint32_t)getpid();
+    __atomic_store_n((uint32_t *)(void *)&hdr->hook_ready, 1, __ATOMIC_RELEASE);
+
+    diag_log("DIAG: SHM mapped at %p, hook_pid=%u, hook_ready=1", base, hdr->hook_pid);
+    hypr_log("Shared memory IPC initialized on %s (hook_pid=%u)", HYPR_SHM_PATH, hdr->hook_pid);
+
+    /* Write readiness marker so loader detects successful init */
+    FILE *ready = fopen(HYPR_READY_PATH, "w");
+    if (ready) { fprintf(ready, "ready\n"); fclose(ready); }
+
+    /* Enter shared memory polling loop */
+    shm_poll_loop(base);
     return NULL;
 }
 
@@ -2087,17 +3124,28 @@ static void *deferred_init(void *arg) {
  * to a spin-loop stub after dlopen, so no unwinding issues. */
 __attribute__((constructor))
 static void hypr_server_init(void) {
+    diag_log("DIAG: hypr_server_init constructor called, pid=%d", getpid());
     /* Keep the constructor minimal: just spawn deferred_init.
      * bootstrap_check_in is done inside deferred_init after the 500ms delay,
      * when the process environment is fully stable. */
     pthread_t t;
-    if (pthread_create(&t, NULL, deferred_init, NULL) == 0)
+    if (pthread_create(&t, NULL, deferred_init, NULL) == 0) {
+        diag_log("DIAG: deferred_init thread spawned");
         pthread_detach(t);
+    }
 }
 
 /* Destructor: release Mach bootstrap port and clean up ephemeral artifacts. */
 __attribute__((destructor))
 static void hypr_server_fini(void) {
+    os_unfair_lock_lock(&g_state_lock);
+    for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
+        if (g_managed_windows[i].active && g_managed_windows[i].border_wid != 0) {
+            destroy_border_overlay(_CGSDefaultConnection(), &g_managed_windows[i]);
+        }
+    }
+    os_unfair_lock_unlock(&g_state_lock);
+
     if (g_bootstrap_service_port != MACH_PORT_NULL) {
         mach_port_deallocate(mach_task_self(), g_bootstrap_service_port);
         g_bootstrap_service_port = MACH_PORT_NULL;

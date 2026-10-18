@@ -11,6 +11,15 @@ public enum WindowOrderOp: Int32, Sendable {
     case orderBelow = -1
 }
 
+public struct ProcessSerialNumber: Sendable {
+    public var highLongOfPSN: UInt32 = 0
+    public var lowLongOfPSN: UInt32 = 0
+    public init(highLongOfPSN: UInt32 = 0, lowLongOfPSN: UInt32 = 0) {
+        self.highLongOfPSN = highLongOfPSN
+        self.lowLongOfPSN = lowLongOfPSN
+    }
+}
+
 public struct WindowTags: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
@@ -29,6 +38,8 @@ public final class SkyLightBridge: @unchecked Sendable {
 
     private let frameworkHandle: UnsafeMutableRawPointer?
 
+    public typealias SLSTransactionRef = UnsafeMutableRawPointer
+
     private typealias SLSMainConnectionIDFunc = @convention(c) () -> CGSConnectionID
     private typealias SLSSetWindowTagsFunc = @convention(c) (CGSConnectionID, CGWindowID, UnsafePointer<UInt32>, Int) -> CGError
     private typealias SLSClearWindowTagsFunc = @convention(c) (CGSConnectionID, CGWindowID, UnsafePointer<UInt32>, Int) -> CGError
@@ -39,6 +50,17 @@ public final class SkyLightBridge: @unchecked Sendable {
     private typealias SLSSetWindowAlphaFunc = @convention(c) (CGSConnectionID, CGWindowID, Float) -> CGError
     private typealias SLSSetWindowLevelFunc = @convention(c) (CGSConnectionID, CGWindowID, Int32) -> CGError
     private typealias SLSSetWindowCornerRadiusFunc = @convention(c) (CGSConnectionID, CGWindowID, Float) -> CGError
+    private typealias SLSDisableUpdateFunc = @convention(c) (CGSConnectionID) -> CGError
+    private typealias SLSReenableUpdateFunc = @convention(c) (CGSConnectionID) -> CGError
+    private typealias CGSetLocalEventsSuppressionIntervalFunc = @convention(c) (Double) -> Int32
+    private typealias SLSSetWindowTransformFunc = @convention(c) (CGSConnectionID, CGWindowID, CGAffineTransform) -> CGError
+    private typealias SLSGetWindowTransformFunc = @convention(c) (CGSConnectionID, CGWindowID, UnsafeMutablePointer<CGAffineTransform>) -> CGError
+    private typealias SLSTransactionCreateFunc = @convention(c) (CGSConnectionID) -> SLSTransactionRef?
+    private typealias SLSTransactionSetWindowTransformFunc = @convention(c) (SLSTransactionRef, CGWindowID, Int32, Int32, UnsafePointer<CGAffineTransform>) -> Void
+    private typealias SLSTransactionCommitFunc = @convention(c) (SLSTransactionRef, Int32) -> Void
+    private typealias GetProcessForPIDFunc = @convention(c) (pid_t, UnsafeMutableRawPointer) -> OSStatus
+    private typealias SLPSSetFrontProcessWithOptionsFunc = @convention(c) (UnsafeMutableRawPointer, UInt32, UInt32) -> Int32
+    private typealias SLPSPostEventRecordToFunc = @convention(c) (UnsafeMutableRawPointer, UnsafeRawPointer) -> Int32
 
     private let _mainConnectionID: SLSMainConnectionIDFunc?
     private let _setWindowTags: SLSSetWindowTagsFunc?
@@ -50,6 +72,17 @@ public final class SkyLightBridge: @unchecked Sendable {
     private let _setWindowAlpha: SLSSetWindowAlphaFunc?
     private let _setWindowLevel: SLSSetWindowLevelFunc?
     private let _setWindowCornerRadius: SLSSetWindowCornerRadiusFunc?
+    private let _disableUpdate: SLSDisableUpdateFunc?
+    private let _reenableUpdate: SLSReenableUpdateFunc?
+    private let _setLocalEventsSuppressionInterval: CGSetLocalEventsSuppressionIntervalFunc?
+    private let _setWindowTransform: SLSSetWindowTransformFunc?
+    private let _getWindowTransform: SLSGetWindowTransformFunc?
+    private let _transactionCreate: SLSTransactionCreateFunc?
+    private let _transactionSetWindowTransform: SLSTransactionSetWindowTransformFunc?
+    private let _transactionCommit: SLSTransactionCommitFunc?
+    private let _getProcessForPID: GetProcessForPIDFunc?
+    private let _slpsSetFrontProcessWithOptions: SLPSSetFrontProcessWithOptionsFunc?
+    private let _slpsPostEventRecordTo: SLPSPostEventRecordToFunc?
 
     private init() {
         let path = "/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight"
@@ -78,6 +111,19 @@ public final class SkyLightBridge: @unchecked Sendable {
         self._setWindowAlpha = resolve(["SLSSetWindowAlpha", "CGSSetWindowAlpha"])
         self._setWindowLevel = resolve(["SLSSetWindowLevel", "CGSSetWindowLevel"])
         self._setWindowCornerRadius = resolve(["SLSWindowSetCornerRadius", "CGSSetWindowCornerRadius", "SLSSetWindowCornerRadius", "CGSWindowSetCornerRadius"])
+        self._disableUpdate = resolve(["SLSDisableUpdate", "CGSDisableUpdate"])
+        self._reenableUpdate = resolve(["SLSReenableUpdate", "CGSReenableUpdate"])
+        self._setLocalEventsSuppressionInterval = resolve(["CGSetLocalEventsSuppressionInterval"])
+        self._setWindowTransform = resolve(["SLSSetWindowTransform", "CGSSetWindowTransform"])
+        self._getWindowTransform = resolve(["SLSGetWindowTransform", "CGSGetWindowTransform"])
+        self._transactionCreate = resolve(["SLSTransactionCreate", "CGSTransactionCreate"])
+        self._transactionSetWindowTransform = resolve(["SLSTransactionSetWindowTransform", "CGSTransactionSetWindowTransform"])
+        self._transactionCommit = resolve(["SLSTransactionCommit", "CGSTransactionCommit"])
+        self._getProcessForPID = resolve(["GetProcessForPID"])
+        self._slpsSetFrontProcessWithOptions = resolve(["_SLPSSetFrontProcessWithOptions"])
+        self._slpsPostEventRecordTo = resolve(["SLPSPostEventRecordTo"])
+
+        _ = self._setLocalEventsSuppressionInterval?(0.0)
     }
 
     deinit {
@@ -210,4 +256,127 @@ public final class SkyLightBridge: @unchecked Sendable {
         let err = fn(mainConnectionID, windowID, level)
         return err == 0
     }
+
+    // MARK: - Window GPU Affine Transforms & Transactions
+
+    public func getWindowTransform(windowID: CGWindowID) -> CGAffineTransform? {
+        guard let fn = _getWindowTransform else { return nil }
+        var transform = CGAffineTransform.identity
+        let err = fn(mainConnectionID, windowID, &transform)
+        guard err == 0 else { return nil }
+        return transform
+    }
+
+    @discardableResult
+    public func setWindowTransform(windowID: CGWindowID, transform: CGAffineTransform) -> Bool {
+        guard let fn = _setWindowTransform else { return false }
+        let err = fn(mainConnectionID, windowID, transform)
+        return err == 0
+    }
+
+    public func transactionCreate() -> SLSTransactionRef? {
+        guard let fn = _transactionCreate else { return nil }
+        return fn(mainConnectionID)
+    }
+
+    @discardableResult
+    public func transactionSetWindowTransform(
+        transaction: SLSTransactionRef,
+        windowID: CGWindowID,
+        transform: CGAffineTransform
+    ) -> Bool {
+        guard let fn = _transactionSetWindowTransform else { return false }
+        var xf = transform
+        fn(transaction, windowID, 0, 0, &xf)
+        return true
+    }
+
+    @discardableResult
+    public func transactionCommit(transaction: SLSTransactionRef, sync: Bool = false) -> Bool {
+        guard let fn = _transactionCommit else { return false }
+        fn(transaction, sync ? 1 : 0)
+        return true
+    }
+
+    // MARK: - Display Update Freezing & Latency Suppression
+
+    @discardableResult
+    public func disableUpdate() -> Bool {
+        guard let fn = _disableUpdate else { return false }
+        let err = fn(mainConnectionID)
+        return err == 0
+    }
+
+    @discardableResult
+    public func reenableUpdate() -> Bool {
+        guard let fn = _reenableUpdate else { return false }
+        let err = fn(mainConnectionID)
+        return err == 0
+    }
+
+    @discardableResult
+    public func setLocalEventsSuppressionInterval(_ interval: Double = 0.0) -> Bool {
+        if let fn = _setLocalEventsSuppressionInterval {
+            return fn(interval) == 0
+        }
+        return CGSetLocalEventsSuppressionInterval(interval) == 0
+    }
+
+    /// Activates a specific window in WindowServer and Carbon as the key window for a process,
+    /// without pulling all other windows of the application to the front.
+    @discardableResult
+    public func makeKeyWindow(pid: pid_t, windowID: CGWindowID) -> Bool {
+        guard let getPsn = _getProcessForPID,
+              let setFront = _slpsSetFrontProcessWithOptions,
+              let postEvent = _slpsPostEventRecordTo else {
+            return false
+        }
+        var psn = ProcessSerialNumber()
+        guard withUnsafeMutablePointer(to: &psn, { getPsn(pid, UnsafeMutableRawPointer($0)) }) == 0 else {
+            return false
+        }
+
+        let kCPSUserGenerated: UInt32 = 0x200
+        var event1 = [UInt8](repeating: 0, count: 0x100)
+        event1[0x04] = 0xf8
+        event1[0x08] = 0x01
+        event1[0x3a] = 0x10
+        var widLittle = windowID.littleEndian
+        withUnsafeBytes(of: &widLittle) { raw in
+            for i in 0..<4 {
+                event1[0x3c + i] = raw[i]
+            }
+        }
+        for i in 0x20..<0x30 {
+            event1[i] = 0xff
+        }
+
+        var event2 = event1
+        event2[0x08] = 0x02
+
+        let err1 = withUnsafeMutablePointer(to: &psn) { psnPtr in
+            setFront(UnsafeMutableRawPointer(psnPtr), windowID, kCPSUserGenerated)
+        }
+        let err2 = withUnsafeMutablePointer(to: &psn) { psnPtr in
+            event1.withUnsafeBytes { evPtr in
+                postEvent(UnsafeMutableRawPointer(psnPtr), evPtr.baseAddress!)
+            }
+        }
+        let err3 = withUnsafeMutablePointer(to: &psn) { psnPtr in
+            event2.withUnsafeBytes { evPtr in
+                postEvent(UnsafeMutableRawPointer(psnPtr), evPtr.baseAddress!)
+            }
+        }
+        return err1 == 0 && err2 == 0 && err3 == 0
+    }
+}
+
+@discardableResult
+public func CGSetLocalEventsSuppressionInterval(_ seconds: Double) -> CGError {
+    if let sym = dlsym(dlopen(nil, RTLD_LAZY), "CGSetLocalEventsSuppressionInterval") {
+        typealias Fn = @convention(c) (Double) -> Int32
+        let fn = unsafeBitCast(sym, to: Fn.self)
+        return fn(seconds)
+    }
+    return 0
 }

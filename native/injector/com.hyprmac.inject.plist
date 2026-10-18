@@ -11,7 +11,14 @@
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/var/log/hyprmac-inject.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/hyprmac-inject.log</string>
     <key>UserName</key>
     <string>root</string>
 </dict>

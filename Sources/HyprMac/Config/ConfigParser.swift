@@ -71,6 +71,14 @@ public final class ConfigParser {
             preserve_split = yes
         }
 
+        animations {
+            enabled = yes
+            bezier = myBezier, 0.05, 0.9, 0.1, 1.05
+            animation = windows, 1, 7, myBezier
+            animation = windowsOut, 1, 7, default, popin 80%
+            animation = windowsMove, 1, 5, easeOutQuint
+        }
+
         # Keybindings
         bind = $mainMod, Q, exec, $terminal # launch terminal
         bind = $mainMod, C, killactive
@@ -171,6 +179,26 @@ public final class ConfigParser {
 
         guard config.sections["decoration.blur"]?["enabled"] == "true" else {
             print("[-] runSelfTest failed: nested section decoration.blur missing enabled=true")
+            return false
+        }
+
+        guard config.animationsEnabled == true else {
+            print("[-] runSelfTest failed: animationsEnabled != true")
+            return false
+        }
+
+        guard let b = config.animationTree.getBezier(name: "myBezier"), b.x0 == 0.05, b.y1 == 1.05 else {
+            print("[-] runSelfTest failed: myBezier curve was not parsed correctly")
+            return false
+        }
+
+        guard let aWin = config.animationTree.animations["windows"], aWin.curveName == "myBezier", abs(aWin.duration - 0.7) < 1e-4 else {
+            print("[-] runSelfTest failed: animation windows was not parsed correctly")
+            return false
+        }
+
+        guard let aMove = config.animationTree.animations["windowsMove"], aMove.curveName == "easeOutQuint", abs(aMove.duration - 0.5) < 1e-4 else {
+            print("[-] runSelfTest failed: animation windowsMove was not parsed correctly")
             return false
         }
 
@@ -331,8 +359,70 @@ public final class ConfigParser {
             return
         }
 
+        // 3b. Bezier curve directive: bezier = name, x0, y0, x1, y1
+        if lowerKey == "bezier" {
+            let tokens = rawVal.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if tokens.count >= 5,
+               let x0 = Double(tokens[1]),
+               let y0 = Double(tokens[2]),
+               let x1 = Double(tokens[3]),
+               let y1 = Double(tokens[4]) {
+                let bezier = HyprBezier(name: tokens[0], x0: x0, y0: y0, x1: x1, y1: y1)
+                config.animationTree.addBezier(bezier)
+            }
+            return
+        }
+
+        // 3b-2. Spring curve directive: spring = name, mass, stiffness, damping
+        if lowerKey == "spring" {
+            let tokens = rawVal.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if tokens.count >= 4,
+               let m = Double(tokens[1]),
+               let k = Double(tokens[2]),
+               let d = Double(tokens[3]) {
+                let spring = SpringConfig(mass: m, stiffness: k, damping: d)
+                config.animationTree.addSpring(name: tokens[0], spring: spring)
+            } else if tokens.count == 3,
+                      let m = Double(tokens[1]),
+                      let zeta = Double(tokens[2]) {
+                let spring = SpringConfig.withDampingRatio(mass: m, stiffness: 100.0, dampingRatio: zeta)
+                config.animationTree.addSpring(name: tokens[0], spring: spring)
+            }
+            return
+        }
+
+        // 3c. Animation directive: animation = node, enabled, duration, curve [, style]
+        if lowerKey == "animation" {
+            let tokens = rawVal.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            if tokens.count >= 4 {
+                let node = tokens[0]
+                let enabled = parseBool(tokens[1]) ?? true
+                let rawDuration = Double(tokens[2]) ?? 7.0
+                // In Hyprland, speed is strictly measured in deciseconds (ds): speed 7 = 0.7s, 4.79 = 0.479s, 1.49 = 0.149s
+                let duration = rawDuration / 10.0
+                let curve = tokens[3]
+                let style = tokens.count > 4 ? tokens[4...].joined(separator: ", ") : ""
+                config.animationTree.setConfigForNode(
+                    node: node,
+                    enabled: enabled,
+                    duration: duration,
+                    curveName: curve,
+                    style: style
+                )
+            }
+            return
+        }
+
         // 4. Regular settings & Hyprland variables
         let currentSection = sectionStack.joined(separator: ".")
+        if (currentSection == "animations" && lowerKey == "enabled") ||
+           rawKey.lowercased() == "animations:enabled" ||
+           rawKey.lowercased() == "animations.enabled" {
+            if let b = parseBool(rawVal) {
+                config.animationsEnabled = b
+            }
+            return
+        }
         let fullKey = currentSection.isEmpty ? rawKey : "\(currentSection).\(rawKey)"
         config.rawSettings[fullKey] = rawVal
         config.rawSettings[rawKey] = rawVal
@@ -368,6 +458,8 @@ public final class ConfigParser {
             if let d = Double(rawVal) { config.haloPadding = CGFloat(d) }
         case "active_opacity", "activeopacity", "window_opacity", "windowopacity":
             if let d = Double(rawVal) { config.windowOpacity = d }
+        case "inactive_opacity", "inactiveopacity":
+            if let d = Double(rawVal) { config.inactiveOpacity = d }
         case "strip_decorations", "stripdecorations", "hide_window_decorations", "hidewindowdecorations":
             if let b = parseBool(rawVal) { config.stripDecorations = b }
         case "rounding":
@@ -395,6 +487,8 @@ public final class ConfigParser {
                 if let d = Double(rawVal) { config.haloPadding = CGFloat(d) }
             } else if lowerNormalized.contains("active_opacity") || lowerNormalized.contains("window_opacity") {
                 if let d = Double(rawVal) { config.windowOpacity = d }
+            } else if lowerNormalized.contains("inactive_opacity") || lowerNormalized.contains("inactiveopacity") {
+                if let d = Double(rawVal) { config.inactiveOpacity = d }
             } else if lowerNormalized.contains("strip_decorations") || lowerNormalized.contains("hide_window_decorations") {
                 if let b = parseBool(rawVal) { config.stripDecorations = b }
             } else if rawKey.lowercased().contains("active_border") {

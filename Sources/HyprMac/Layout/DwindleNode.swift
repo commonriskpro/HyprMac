@@ -73,15 +73,8 @@ public final class DwindleNode: @unchecked Sendable {
             return
         }
 
-        // Determine proportion: 1.0 or 0.5 default gives equal 50/50 split
-        let ratio: CGFloat
-        if splitRatio == 1.0 || splitRatio == 0.5 {
-            ratio = 0.5
-        } else if splitRatio < 1.0 {
-            ratio = max(0.05, 0.5 * splitRatio)
-        } else {
-            ratio = min(0.95, 0.5 * splitRatio)
-        }
+        // Determine proportion: default splitRatio 1.0 gives equal 50/50 split (ratio 0.5)
+        let ratio = max(0.05, min(0.95, 0.5 * splitRatio))
 
         switch splitDirection {
         case .vertical:

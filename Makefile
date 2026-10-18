@@ -22,16 +22,24 @@ endif
 
 BUILD_DIR = build
 
-.PHONY: all clean hook injector install-daemon uninstall-daemon
+.PHONY: all clean hook injector client install-daemon uninstall-daemon
 
-all: hook injector
+all: hook injector client
 
 hook: $(BUILD_DIR)/libhyprserver.dylib
 
 injector: $(BUILD_DIR)/hypr-inject
 
+client: $(BUILD_DIR)/libhyprclient.dylib
+
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/libhyprclient.dylib: native/client_hook/client.m | $(BUILD_DIR)
+	$(CC) -arch arm64e -target arm64e-apple-macos15.0 -O2 -dynamiclib \
+		-framework AppKit -framework Foundation \
+		-o $@ native/client_hook/client.m
+	codesign -s "-" --force $@
 
 $(BUILD_DIR)/libhyprserver.dylib: native/server_hook/hook.c native/shared/protocol.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(DYLIB_FLAGS) \

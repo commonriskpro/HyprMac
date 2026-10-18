@@ -1,6 +1,8 @@
 import Foundation
 import Darwin
 import os.log
+import CoreGraphics
+import AppKit
 
 // MARK: - Protocol Constants
 
@@ -8,6 +10,17 @@ public enum HyprProtocol {
     public static let magic: UInt32 = 0x48595052  // "HYPR"
     public static let version: UInt16 = 1
     public static let socketPath = "/tmp/hyprmac-server.sock"
+
+    // Shared Memory IPC
+    public static let shmPath = "/tmp/hyprmac-ipc.shm"
+    public static let shmSize = 64 * 1024       // 64KB
+    public static let cmdRingSize = 28 * 1024   // 28KB
+    public static let rspRingSize = 28 * 1024   // 28KB
+    public static let shmHeaderSize = 256
+    public static let cmdRingOffset = 256
+    public static let rspRingOffset = shmHeaderSize + cmdRingSize  // 28928
+    public static let shmMagic: UInt32 = 0x48534D49     // "HSMI"
+    public static let shmVersion: UInt32 = 1
 }
 
 public enum HyprCommand: UInt16, Sendable {
@@ -19,16 +32,42 @@ public enum HyprCommand: UInt16, Sendable {
     case setShadowState   = 0x0011
     case setWindowBorder  = 0x0012
     case stripTitlebar    = 0x0013
+    case setWindowFocus   = 0x0014
+    case setGlobalPolicy  = 0x0015
+    case setMenuBarSuppression = 0x0016
+    case setWorkspaceTransform = 0x0017
     case queryWindow      = 0x0020
     case auth             = 0x0030
 }
 
-public enum HyprError: UInt32, Error, Sendable {
-    case success    = 0x0000
-    case invalidWid = 0x0001
-    case invalidCmd = 0x0002
+public enum HyprError: UInt32, Error, Sendable, CustomStringConvertible, LocalizedError {
+    case success      = 0x0000
+    case invalidWid   = 0x0001
+    case invalidCmd   = 0x0002
     case unauthorized = 0x0003
-    case `internal` = 0x00FF
+    case hookUnavail  = 0x0006
+    case `internal`   = 0x00FF
+
+    public var description: String {
+        switch self {
+        case .success:
+            return "Success"
+        case .invalidWid:
+            return "Invalid window ID"
+        case .invalidCmd:
+            return "Invalid command"
+        case .unauthorized:
+            return "Unauthorized"
+        case .hookUnavail:
+            return "Hook unavailable — WindowServer module not loaded"
+        case .internal:
+            return "Internal error"
+        }
+    }
+
+    public var errorDescription: String? {
+        description
+    }
 }
 
 // MARK: - Notifications
@@ -60,6 +99,56 @@ public struct WindowDecorationState: Sendable, Equatable {
         self.borderColor = borderColor
         self.borderWidth = borderWidth
     }
+}
+
+public struct HyprGlobalPolicy: Sendable, Equatable {
+    public var autoSquareCorners: Bool
+    public var autoStripShadow: Bool
+    public var autoStripTitlebar: Bool
+    public var autoSetBorder: Bool
+    public var borderWidth: Float
+    public var borderColorActive: UInt32
+    public var borderColorInactive: UInt32
+
+    public init(
+        autoSquareCorners: Bool = false,
+        autoStripShadow: Bool = false,
+        autoStripTitlebar: Bool = false,
+        autoSetBorder: Bool = false,
+        borderWidth: Float = 1.0,
+        borderColorActive: UInt32 = 0x33CCFFEE,
+        borderColorInactive: UInt32 = 0x595959AA
+    ) {
+        self.autoSquareCorners = autoSquareCorners
+        self.autoStripShadow = autoStripShadow
+        self.autoStripTitlebar = autoStripTitlebar
+        self.autoSetBorder = autoSetBorder
+        self.borderWidth = borderWidth
+        self.borderColorActive = borderColorActive
+        self.borderColorInactive = borderColorInactive
+    }
+}
+
+// MARK: - Shared Memory Header (Protocol 1: 256-byte layout)
+
+public struct HyprShmHeader {
+    public var magic: UInt32          // HYPR_SHM_MAGIC (0x48534D49)
+    public var version: UInt32        // HYPR_SHM_VERSION (1)
+    public var hookPid: UInt32        // PID of WindowServer (written by hook)
+    public var hookReady: UInt32      // 1 when hook has mapped and is polling
+    public var cmdWritePos: UInt32    // Written by Swift
+    public var cmdReadPos: UInt32     // Written by Hook
+    public var rspWritePos: UInt32    // Written by Hook
+    public var rspReadPos: UInt32     // Written by Swift
+    public var reserved: (
+        UInt64, UInt64, UInt64, UInt64,
+        UInt64, UInt64, UInt64, UInt64,
+        UInt64, UInt64, UInt64, UInt64,
+        UInt64, UInt64, UInt64, UInt64,
+        UInt64, UInt64, UInt64, UInt64,
+        UInt64, UInt64, UInt64, UInt64,
+        UInt64, UInt64, UInt64, UInt64
+    )
 }
 
 public struct HyprResponseHeader: Sendable, Equatable {
@@ -95,24 +184,22 @@ public typealias HyprMessageHeader = HyprResponseHeader
 
 public enum HyprBridgeError: Error, LocalizedError, Sendable {
     case notConnected
-    case connectionClosed
     case timeout
-    case socketError(Int32)
+    case shmMappingFailed(Int32)
     case invalidMagic(UInt32)
     case payloadTooLarge(UInt32)
     case serverError(HyprError, String)
     case unexpectedResponse(UInt16)
+    case ringBufferFull
 
     public var errorDescription: String? {
         switch self {
         case .notConnected:
-            return "Not connected to HyprServer socket"
-        case .connectionClosed:
-            return "Connection closed by HyprServer"
+            return "HyprServer shared memory not initialized or hook not ready"
         case .timeout:
-            return "Socket operation timed out"
-        case .socketError(let code):
-            return "Socket error: \(String(cString: strerror(code))) (errno \(code))"
+            return "Shared memory operation timed out"
+        case .shmMappingFailed(let code):
+            return "Shared memory mapping failed: \(String(cString: strerror(code))) (errno \(code))"
         case .invalidMagic(let magic):
             return "Invalid protocol magic: 0x\(String(magic, radix: 16))"
         case .payloadTooLarge(let size):
@@ -121,6 +208,8 @@ public enum HyprBridgeError: Error, LocalizedError, Sendable {
             return "HyprServer error \(err): \(msg)"
         case .unexpectedResponse(let cmd):
             return "Unexpected response command: 0x\(String(cmd, radix: 16))"
+        case .ringBufferFull:
+            return "Shared memory command ring buffer is full"
         }
     }
 }
@@ -243,15 +332,27 @@ public final class CommandRingBuffer: @unchecked Sendable {
 public final class HyprServerBridge: @unchecked Sendable {
     public static let shared = HyprServerBridge()
 
+    public static let shmSize = HyprProtocol.shmSize
+    public static let cmdRingSize = HyprProtocol.cmdRingSize
+    public static let rspRingSize = HyprProtocol.rspRingSize
+    public static let shmHeaderSize = HyprProtocol.shmHeaderSize
+    public static let cmdRingOffset = HyprProtocol.cmdRingOffset
+    public static let rspRingOffset = HyprProtocol.rspRingOffset
+
+    public let shmPath: String
     public let socketPath: String
 
     private let log = OSLog(subsystem: "com.hyprmac.server-bridge", category: "ipc")
     private let queue = DispatchQueue(label: "com.hyprmac.server-bridge.ipc")
     private let queueKey = DispatchSpecificKey<Void>()
 
-    private var socketFD: Int32 = -1
+    private var shmFD: Int32 = -1
+    private var shmBase: UnsafeMutableRawPointer? = nil
+    private var shmHeader: UnsafeMutablePointer<HyprShmHeader>? = nil
+    private var cmdRingBase: UnsafeMutablePointer<UInt8>? = nil
+    private var rspRingBase: UnsafeMutablePointer<UInt8>? = nil
+
     private var _isAvailable: Bool = false
-    private var _isAuthenticated: Bool = false
     private var authToken: Data?
     private var sequenceCounter: UInt32 = 0
 
@@ -259,28 +360,88 @@ public final class HyprServerBridge: @unchecked Sendable {
     public var replayQueue: CommandRingBuffer { ringBuffer }
     public var pendingCommandCount: Int { ringBuffer.countValue }
 
-    private var reconnectAttempts: Int = 0
-    private var isReconnecting: Bool = false
-    private let initialBackoff: TimeInterval = 0.1   // 100ms
-    private let maxBackoff: TimeInterval = 5.0       // 5s
-    private let maxReconnectAttempts: Int = 10
-
-    public var isAvailable: Bool {
-        executeOnQueue { _isAvailable }
+    private var cmdWritePosPtr: UnsafeMutablePointer<UInt32>? {
+        shmBase?.advanced(by: 16).assumingMemoryBound(to: UInt32.self)
+    }
+    private var cmdReadPosPtr: UnsafeMutablePointer<UInt32>? {
+        shmBase?.advanced(by: 20).assumingMemoryBound(to: UInt32.self)
+    }
+    private var rspWritePosPtr: UnsafeMutablePointer<UInt32>? {
+        shmBase?.advanced(by: 24).assumingMemoryBound(to: UInt32.self)
+    }
+    private var rspReadPosPtr: UnsafeMutablePointer<UInt32>? {
+        shmBase?.advanced(by: 28).assumingMemoryBound(to: UInt32.self)
+    }
+    private var hookReadyPtr: UnsafeMutablePointer<UInt32>? {
+        shmBase?.advanced(by: 12).assumingMemoryBound(to: UInt32.self)
+    }
+    private var hookPidPtr: UnsafeMutablePointer<UInt32>? {
+        shmBase?.advanced(by: 8).assumingMemoryBound(to: UInt32.self)
     }
 
-    public init(socketPath: String = HyprProtocol.socketPath) {
+    private func atomicLoad(_ ptr: UnsafeMutablePointer<UInt32>) -> UInt32 {
+        OSMemoryBarrier()
+        let val = ptr.pointee
+        OSMemoryBarrier()
+        return val
+    }
+
+    private func atomicStore(_ ptr: UnsafeMutablePointer<UInt32>, _ value: UInt32) {
+        OSMemoryBarrier()
+        ptr.pointee = value
+        OSMemoryBarrier()
+    }
+
+    private func isHookReadyDirect() -> Bool {
+        guard let ptr = hookReadyPtr else { return false }
+        return atomicLoad(ptr) == 1
+    }
+
+    public var isHookReady: Bool {
+        executeOnQueue { isHookReadyDirect() }
+    }
+
+    public var isAvailable: Bool {
+        executeOnQueue { _isAvailable && shmBase != nil }
+    }
+
+    public var isAuthenticated: Bool {
+        executeOnQueue { _isAvailable && isHookReadyDirect() }
+    }
+
+    public var hookPID: pid_t? {
+        executeOnQueue {
+            guard let ptr = hookPidPtr, isHookReadyDirect() else { return nil }
+            let pid = atomicLoad(ptr)
+            return pid > 0 ? pid_t(pid) : nil
+        }
+    }
+
+    public init(shmPath: String = HyprProtocol.shmPath, socketPath: String = HyprProtocol.socketPath) {
+        self.shmPath = shmPath
         self.socketPath = socketPath
         self.queue.setSpecific(key: queueKey, value: ())
         self.authToken = HyprServerBridge.loadAuthToken()
     }
 
+    public convenience init(socketPath: String) {
+        self.init(shmPath: HyprProtocol.shmPath, socketPath: socketPath)
+    }
+
     deinit {
         executeOnQueue {
-            if socketFD >= 0 {
-                Darwin.close(socketFD)
-                socketFD = -1
+            if let base = shmBase {
+                Darwin.munmap(base, HyprProtocol.shmSize)
+                shmBase = nil
+                shmHeader = nil
+                cmdRingBase = nil
+                rspRingBase = nil
             }
+            if shmFD >= 0 {
+                Darwin.close(shmFD)
+                shmFD = -1
+            }
+            _isAvailable = false
         }
     }
 
@@ -313,210 +474,123 @@ public final class HyprServerBridge: @unchecked Sendable {
         }
     }
 
-    // MARK: - Connection Management
+    // MARK: - Shared Memory Management
 
+    /// Sets up mmap shared memory at HYPR_SHM_PATH, initializes the HyprShmHeader, and configures ring pointers.
     @discardableResult
-    private func connectSocket() -> Bool {
-        if socketFD >= 0 {
-            return true
-        }
-
-        os_log(.debug, log: log, "Attempting connection to HyprServer at %{public}s", socketPath)
-
-        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            let err = errno
-            os_log(.error, log: log, "Failed to create AF_UNIX socket: %{public}s (errno %d)", String(cString: strerror(err)), err)
-            _isAvailable = false
-            return false
-        }
-
-        // Prevent SIGPIPE on write failures
-        var nosigpipe: Int32 = 1
-        Darwin.setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
-
-        // Set 500ms send & receive timeouts
-        var timeout = timeval(tv_sec: 0, tv_usec: 500_000)
-        Darwin.setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        Darwin.setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-
-        let pathBytes = socketPath.utf8CString
-        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-            os_log(.error, log: log, "Socket path exceeds sockaddr_un buffer: %{public}s", socketPath)
-            Darwin.close(fd)
-            _isAvailable = false
-            return false
-        }
-
-        _ = withUnsafeMutableBytes(of: &addr.sun_path) { ptr in
-            pathBytes.withUnsafeBytes { src in
-                memcpy(ptr.baseAddress!, src.baseAddress!, src.count)
-            }
-        }
-        addr.sun_len = UInt8(MemoryLayout.offset(of: \sockaddr_un.sun_path)! + pathBytes.count - 1)
-
-        let connectRes = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.connect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-
-        if connectRes != 0 {
-            let err = errno
-            if err == ECONNREFUSED || err == ENOENT {
-                os_log(.default, log: log, "HyprServer socket connection failed (%{public}s): %{public}s",
-                       err == ECONNREFUSED ? "ECONNREFUSED" : "ENOENT",
-                       String(cString: strerror(err)))
-            } else {
-                os_log(.error, log: log, "HyprServer socket connection error: %{public}s (errno %d)",
-                       String(cString: strerror(err)), err)
-            }
-            Darwin.close(fd)
-            _isAvailable = false
-            return false
-        }
-
-        socketFD = fd
-        let wasAvailable = _isAvailable
-        _isAvailable = true
-        _isAuthenticated = false
-
-        // Authenticate immediately after connecting
-        if let token = authToken {
-            let authMsg = buildMessage(command: .auth, windowId: 0, payload: token)
-            do {
-                try writeExact(authMsg)
-                let resp = try readResponse()
-                if resp.header.commandId == HyprCommand.ack.rawValue {
-                    _isAuthenticated = true
-                    os_log(.info, log: log, "Authenticated with HyprServer successfully")
-                } else {
-                    os_log(.error, log: log, "Authentication rejected by HyprServer (cmd: 0x%04X)", resp.header.commandId)
-                    Darwin.close(fd)
-                    socketFD = -1
-                    _isAvailable = false
-                    return false
-                }
-            } catch {
-                os_log(.error, log: log, "Authentication handshake failed: %{public}@", error.localizedDescription)
-                Darwin.close(fd)
-                socketFD = -1
-                _isAvailable = false
-                return false
-            }
-        }
-
-        reconnectAttempts = 0
-        isReconnecting = false
-        os_log(.info, log: log, "Connected to HyprServer socket at %{public}s", socketPath)
-
-        if !wasAvailable {
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .hyprServerHookAvailable, object: self)
-            }
-        }
-
-        replayBufferedCommands()
-        return true
-    }
-
-    public func disconnect() {
+    public func setupSharedMemory(path: String = HyprProtocol.shmPath) -> Bool {
         executeOnQueue {
-            disconnectSocket()
-        }
-    }
-
-    private func disconnectSocket() {
-        if socketFD >= 0 {
-            Darwin.close(socketFD)
-            _isAuthenticated = false
-            socketFD = -1
-            os_log(.info, log: log, "Disconnected from HyprServer socket")
-        }
-        let wasAvailable = _isAvailable
-        _isAvailable = false
-        if wasAvailable {
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .hyprServerHookUnavailable, object: self)
-            }
-        }
-    }
-
-    private func scheduleReconnect() {
-        guard !isReconnecting else { return }
-        isReconnecting = true
-        reconnectAttempts = 0
-        attemptScheduledReconnect()
-    }
-
-    private func attemptScheduledReconnect() {
-        executeOnQueue {
-            guard self.isReconnecting else { return }
-            self.reconnectAttempts += 1
-
-            if self.reconnectAttempts > self.maxReconnectAttempts {
-                self.isReconnecting = false
-                os_log(.error, log: self.log, "Exhausted all %d reconnection attempts to HyprServer", self.maxReconnectAttempts)
-                DispatchQueue.main.async {
-                    NotificationCenter.default.post(name: .hyprServerHookUnavailable, object: self)
-                }
-                return
-            }
-
-            let backoff = min(self.initialBackoff * pow(2.0, Double(self.reconnectAttempts - 1)), self.maxBackoff)
-            os_log(.default, log: self.log, "Reconnection attempt %d/%d scheduled in %.2f seconds",
-                   self.reconnectAttempts, self.maxReconnectAttempts, backoff)
-
-            self.queue.asyncAfter(deadline: .now() + backoff) { [weak self] in
-                guard let self = self else { return }
-                self.executeOnQueue {
-                    guard self.isReconnecting else { return }
-                    if self.connectSocket() {
-                        os_log(.info, log: self.log, "Successfully reconnected to HyprServer on attempt %d", self.reconnectAttempts)
-                    } else {
-                        self.attemptScheduledReconnect()
-                    }
-                }
-            }
-        }
-    }
-
-    @discardableResult
-    public func connect(maxAttempts: Int = 1) -> Bool {
-        executeOnQueue {
-            if self.socketFD >= 0 {
+            if self.shmBase != nil {
                 return true
             }
-            if maxAttempts <= 1 {
-                let success = self.connectSocket()
-                if !success {
-                    DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: .hyprServerHookUnavailable, object: self)
-                    }
-                    self.scheduleReconnect()
-                }
-                return success
+
+            os_log(.info, log: self.log, "Setting up shared memory at %{public}s", path)
+
+            let fd = Darwin.open(path, O_RDWR | O_CREAT, 0o666)
+            guard fd >= 0 else {
+                let err = errno
+                os_log(.error, log: self.log, "Failed to open shared memory file %{public}s: %{public}s (errno %d)",
+                       path, String(cString: strerror(err)), err)
+                self._isAvailable = false
+                return false
             }
-            for attempt in 1...maxAttempts {
-                if self.connectSocket() {
+
+            Darwin.fchmod(fd, 0o666)
+
+            if Darwin.ftruncate(fd, off_t(HyprProtocol.shmSize)) != 0 {
+                let err = errno
+                os_log(.error, log: self.log, "Failed to ftruncate shared memory file: %{public}s (errno %d)",
+                       String(cString: strerror(err)), err)
+                Darwin.close(fd)
+                self._isAvailable = false
+                return false
+            }
+
+            guard let map = Darwin.mmap(nil, HyprProtocol.shmSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0),
+                  map != MAP_FAILED else {
+                let err = errno
+                os_log(.error, log: self.log, "Failed to mmap shared memory file: %{public}s (errno %d)",
+                       String(cString: strerror(err)), err)
+                Darwin.close(fd)
+                self._isAvailable = false
+                return false
+            }
+
+            self.shmFD = fd
+            self.shmBase = map
+
+            let hdrPtr = map.bindMemory(to: HyprShmHeader.self, capacity: 1)
+            self.shmHeader = hdrPtr
+
+            self.cmdRingBase = map.advanced(by: HyprProtocol.cmdRingOffset).assumingMemoryBound(to: UInt8.self)
+            self.rspRingBase = map.advanced(by: HyprProtocol.rspRingOffset).assumingMemoryBound(to: UInt8.self)
+
+            // Only initialize header layout if not already initialized by the hook
+            if hdrPtr.pointee.magic != HyprProtocol.shmMagic {
+                memset(map, 0, HyprProtocol.shmHeaderSize)
+                hdrPtr.pointee.magic = HyprProtocol.shmMagic
+                hdrPtr.pointee.version = HyprProtocol.shmVersion
+                hdrPtr.pointee.hookPid = 0
+                hdrPtr.pointee.hookReady = 0
+                hdrPtr.pointee.cmdWritePos = 0
+                hdrPtr.pointee.cmdReadPos = 0
+                hdrPtr.pointee.rspWritePos = 0
+                hdrPtr.pointee.rspReadPos = 0
+            }
+            OSMemoryBarrier()
+
+            let wasAvailable = self._isAvailable
+            self._isAvailable = true
+
+            os_log(.info, log: self.log, "Shared memory initialized successfully (64KB mapped at %{public}s)", path)
+
+            if !wasAvailable {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .hyprServerHookAvailable, object: self)
+                }
+            }
+
+            return true
+        }
+    }
+
+    /// Polls hdr->hook_ready until it becomes 1 (with timeout).
+    @discardableResult
+    public func waitForHook(timeout: TimeInterval = 10.0) -> Bool {
+        executeOnQueue {
+            if self.shmBase == nil {
+                guard self.setupSharedMemory() else { return false }
+            }
+            guard let ptr = self.hookReadyPtr else { return false }
+            if self.atomicLoad(ptr) == 1 {
+                self.replayBufferedCommands()
+                return true
+            }
+
+            let start = Date()
+            while Date().timeIntervalSince(start) < timeout {
+                if self.atomicLoad(ptr) == 1 {
+                    let pid = self.hookPidPtr.map { self.atomicLoad($0) } ?? 0
+                    os_log(.info, log: self.log, "HyprServer hook ready detected (pid: %u)", pid)
+                    self.replayBufferedCommands()
                     return true
                 }
-                if attempt < maxAttempts {
-                    let backoff = min(self.initialBackoff * pow(2.0, Double(attempt - 1)), self.maxBackoff)
-                    os_log(.default, log: self.log, "Reconnection attempt %d/%d failed; backing off for %.2f seconds",
-                           attempt, maxAttempts, backoff)
-                    Thread.sleep(forTimeInterval: backoff)
-                }
+                usleep(10_000) // 10ms
             }
-            os_log(.error, log: self.log, "Exhausted all %d reconnection attempts to HyprServer", maxAttempts)
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .hyprServerHookUnavailable, object: self)
+
+            let ready = (self.atomicLoad(ptr) == 1)
+            if ready {
+                self.replayBufferedCommands()
             }
-            return false
+            return ready
         }
+    }
+
+    /// Backwards-compatible connect method: maps shared memory and waits for hook.
+    @discardableResult
+    public func connect(maxAttempts: Int = 1) -> Bool {
+        guard setupSharedMemory() else { return false }
+        return waitForHook(timeout: max(Double(maxAttempts), 1.0))
     }
 
     // MARK: - Replay Queue Execution
@@ -527,7 +601,7 @@ public final class HyprServerBridge: @unchecked Sendable {
         os_log(.info, log: log, "Replaying %d buffered commands to HyprServer", commands.count)
         for (index, cmdData) in commands.enumerated() {
             do {
-                try writeExact(cmdData)
+                try writeCommandToRing(message: cmdData)
                 _ = try readResponse()
             } catch {
                 os_log(.error, log: log, "Failed to replay command %d/%d: %{public}@. Re-enqueuing remaining.",
@@ -535,14 +609,12 @@ public final class HyprServerBridge: @unchecked Sendable {
                 for remaining in commands[index...] {
                     ringBuffer.enqueue(remaining)
                 }
-                disconnectSocket()
-                scheduleReconnect()
                 break
             }
         }
     }
 
-    // MARK: - Wire Protocol Serialization & I/O
+    // MARK: - Wire Protocol Serialization & Shared Memory Ring I/O
 
     public func buildMessage(command: HyprCommand, windowId: UInt32, payload: Data) -> Data {
         sequenceCounter = sequenceCounter &+ 1
@@ -570,101 +642,167 @@ public final class HyprServerBridge: @unchecked Sendable {
         return data
     }
 
-    private func writeExact(_ data: Data) throws {
-        guard socketFD >= 0 else {
+    private func writeCommandToRing(message: Data, timeout: TimeInterval = 0.5) throws {
+        guard let base = cmdRingBase, let wPtr = cmdWritePosPtr, let rPtr = cmdReadPosPtr else {
             throw HyprBridgeError.notConnected
         }
-        var totalWritten = 0
-        let total = data.count
-        while totalWritten < total {
-            let n = data.withUnsafeBytes { raw in
-                let ptr = raw.baseAddress!.advanced(by: totalWritten)
-                return Darwin.send(socketFD, ptr, total - totalWritten, 0)
-            }
-            if n > 0 {
-                totalWritten += n
-            } else if n == 0 {
-                disconnectSocket()
-                throw HyprBridgeError.connectionClosed
-            } else {
-                let err = errno
-                if err == EINTR {
-                    continue
-                } else if err == EAGAIN || err == EWOULDBLOCK {
-                    throw HyprBridgeError.timeout
+
+        let msgLen = UInt32(message.count)
+        let totalBytes = 4 + Int(msgLen)
+        let ringSize = HyprProtocol.cmdRingSize
+        guard totalBytes <= ringSize - 8 else {
+            throw HyprBridgeError.payloadTooLarge(msgLen)
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+
+        while true {
+            let w = atomicLoad(wPtr)
+            let r = atomicLoad(rPtr)
+
+            if Int(w) + totalBytes <= ringSize {
+                let hasSpace: Bool
+                if w >= r {
+                    if r == 0 {
+                        hasSpace = (Int(w) + totalBytes < ringSize)
+                    } else {
+                        hasSpace = true
+                    }
                 } else {
-                    disconnectSocket()
-                    throw HyprBridgeError.socketError(err)
+                    hasSpace = (Int(w) + totalBytes < Int(r))
+                }
+
+                if hasSpace {
+                    var leLen = msgLen.littleEndian
+                    memcpy(base.advanced(by: Int(w)), &leLen, 4)
+                    _ = message.withUnsafeBytes { raw in
+                        memcpy(base.advanced(by: Int(w) + 4), raw.baseAddress!, message.count)
+                    }
+                    OSMemoryBarrier()
+                    var newW = w + UInt32(totalBytes)
+                    if newW == UInt32(ringSize) {
+                        newW = 0
+                    }
+                    atomicStore(wPtr, newW)
+                    return
+                }
+            } else {
+                if r > 0 && totalBytes < Int(r) {
+                    let rem = ringSize - Int(w)
+                    if rem >= 4 {
+                        var zero: UInt32 = 0
+                        memcpy(base.advanced(by: Int(w)), &zero, 4)
+                    } else if rem > 0 {
+                        memset(base.advanced(by: Int(w)), 0, rem)
+                    }
+                    OSMemoryBarrier()
+                    var leLen = msgLen.littleEndian
+                    memcpy(base, &leLen, 4)
+                    _ = message.withUnsafeBytes { raw in
+                        memcpy(base.advanced(by: 4), raw.baseAddress!, message.count)
+                    }
+                    OSMemoryBarrier()
+                    let newW = UInt32(totalBytes)
+                    atomicStore(wPtr, newW)
+                    return
                 }
             }
+
+            if Date() >= deadline {
+                throw HyprBridgeError.timeout
+            }
+            usleep(100) // 100μs poll interval
         }
     }
 
-    private func readExact(count: Int) throws -> Data {
-        guard socketFD >= 0 else {
+    private func readResponse(timeout: TimeInterval = 0.5) throws -> (header: HyprResponseHeader, payload: Data) {
+        guard let base = rspRingBase, let wPtr = rspWritePosPtr, let rPtr = rspReadPosPtr else {
             throw HyprBridgeError.notConnected
         }
-        var data = Data(count: count)
-        var totalRead = 0
-        while totalRead < count {
-            let n = data.withUnsafeMutableBytes { raw in
-                let ptr = raw.baseAddress!.advanced(by: totalRead)
-                return Darwin.recv(socketFD, ptr, count - totalRead, 0)
-            }
-            if n > 0 {
-                totalRead += n
-            } else if n == 0 {
-                disconnectSocket()
-                throw HyprBridgeError.connectionClosed
-            } else {
-                let err = errno
-                if err == EINTR {
+
+        let deadline = Date().addingTimeInterval(timeout)
+        let ringSize = HyprProtocol.rspRingSize
+
+        while true {
+            let w = atomicLoad(wPtr)
+            let r = atomicLoad(rPtr)
+
+            if r != w {
+                if ringSize - Int(r) < 4 {
+                    atomicStore(rPtr, 0)
                     continue
-                } else if err == EAGAIN || err == EWOULDBLOCK {
-                    throw HyprBridgeError.timeout
-                } else {
-                    disconnectSocket()
-                    throw HyprBridgeError.socketError(err)
                 }
+
+                var rawLen: UInt32 = 0
+                memcpy(&rawLen, base.advanced(by: Int(r)), 4)
+                let msgLen = UInt32(littleEndian: rawLen)
+
+                if msgLen == 0 {
+                    // Skip marker: wrap read_pos to 0
+                    atomicStore(rPtr, 0)
+                    continue
+                }
+
+                guard msgLen >= 20 else {
+                    os_log(.error, log: log, "Corrupt response length in ring: %u", msgLen)
+                    throw HyprBridgeError.unexpectedResponse(0)
+                }
+                guard msgLen <= 65536 else {
+                    throw HyprBridgeError.payloadTooLarge(msgLen)
+                }
+                guard Int(r) + 4 + Int(msgLen) <= ringSize else {
+                    os_log(.error, log: log, "Response exceeds ring buffer bounds: pos=%u, len=%u", r, msgLen)
+                    throw HyprBridgeError.timeout
+                }
+
+                let msgData = Data(bytes: base.advanced(by: Int(r) + 4), count: Int(msgLen))
+
+                var newR = r + 4 + msgLen
+                if newR == UInt32(ringSize) {
+                    newR = 0
+                }
+                atomicStore(rPtr, newR)
+
+                let header = msgData.withUnsafeBytes { raw -> HyprResponseHeader in
+                    let magic = raw.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
+                    let version = raw.loadUnaligned(fromByteOffset: 4, as: UInt16.self)
+                    let commandId = raw.loadUnaligned(fromByteOffset: 6, as: UInt16.self)
+                    let sequence = raw.loadUnaligned(fromByteOffset: 8, as: UInt32.self)
+                    let windowId = raw.loadUnaligned(fromByteOffset: 12, as: UInt32.self)
+                    let payloadSize = raw.loadUnaligned(fromByteOffset: 16, as: UInt32.self)
+                    return HyprResponseHeader(
+                        magic: magic,
+                        version: version,
+                        commandId: commandId,
+                        sequence: sequence,
+                        windowId: windowId,
+                        payloadSize: payloadSize
+                    )
+                }
+
+                guard header.magic == HyprProtocol.magic else {
+                    os_log(.error, log: log, "Protocol magic mismatch: expected 0x%08X, got 0x%08X",
+                           HyprProtocol.magic, header.magic)
+                    throw HyprBridgeError.invalidMagic(header.magic)
+                }
+
+                var payload = Data()
+                if header.payloadSize > 0 {
+                    let expectedEnd = 20 + Int(header.payloadSize)
+                    guard msgData.count >= expectedEnd else {
+                        throw HyprBridgeError.timeout
+                    }
+                    payload = msgData.subdata(in: 20..<expectedEnd)
+                }
+
+                return (header: header, payload: payload)
             }
-        }
-        return data
-    }
 
-    private func readResponse() throws -> (header: HyprResponseHeader, payload: Data) {
-        let headerData = try readExact(count: 20)
-        let header = headerData.withUnsafeBytes { raw -> HyprResponseHeader in
-            let magic = raw.loadUnaligned(fromByteOffset: 0, as: UInt32.self)
-            let version = raw.loadUnaligned(fromByteOffset: 4, as: UInt16.self)
-            let commandId = raw.loadUnaligned(fromByteOffset: 6, as: UInt16.self)
-            let sequence = raw.loadUnaligned(fromByteOffset: 8, as: UInt32.self)
-            let windowId = raw.loadUnaligned(fromByteOffset: 12, as: UInt32.self)
-            let payloadSize = raw.loadUnaligned(fromByteOffset: 16, as: UInt32.self)
-            return HyprResponseHeader(
-                magic: magic,
-                version: version,
-                commandId: commandId,
-                sequence: sequence,
-                windowId: windowId,
-                payloadSize: payloadSize
-            )
-        }
-
-        guard header.magic == HyprProtocol.magic else {
-            os_log(.error, log: log, "Protocol magic mismatch: expected 0x%08X, got 0x%08X", HyprProtocol.magic, header.magic)
-            throw HyprBridgeError.invalidMagic(header.magic)
-        }
-
-        var payload = Data()
-        if header.payloadSize > 0 {
-            guard header.payloadSize <= 65536 else {
-                os_log(.error, log: log, "Payload size exceeds 64KB limit: %u", header.payloadSize)
-                throw HyprBridgeError.payloadTooLarge(header.payloadSize)
+            if Date() >= deadline {
+                throw HyprBridgeError.timeout
             }
-            payload = try readExact(count: Int(header.payloadSize))
+            usleep(100) // 100μs poll interval
         }
-
-        return (header: header, payload: payload)
     }
 
     private func sendTransaction(
@@ -673,44 +811,28 @@ public final class HyprServerBridge: @unchecked Sendable {
         payload: Data
     ) throws -> (header: HyprResponseHeader, payload: Data) {
         return try executeOnQueue {
-            if self.socketFD < 0 {
-                guard self.connectSocket() else {
-                    self.scheduleReconnect()
+            if self.shmBase == nil {
+                guard self.setupSharedMemory() else {
                     throw HyprBridgeError.notConnected
                 }
             }
 
             let message = self.buildMessage(command: command, windowId: windowId, payload: payload)
 
-            // Attempt 1
             do {
                 os_log(.debug, log: self.log, "Sending command 0x%04X (wid: %u, bytes: %d)", command.rawValue, windowId, message.count)
-                try self.writeExact(message)
-                let response = try self.readResponse()
-                os_log(.debug, log: self.log, "Received response 0x%04X (seq: %u, bytes: %d)", response.header.commandId, response.header.sequence, response.payload.count)
-                return response
+                try self.writeCommandToRing(message: message)
+                return try self.readResponse()
             } catch {
                 os_log(.default, log: self.log, "Command 0x%04X attempt 1 failed: %{public}@. Retrying once...",
                        command.rawValue, error.localizedDescription)
 
-                // Retry once: close socket, reconnect, resend
-                self.disconnectSocket()
-                guard self.connectSocket() else {
-                    self.scheduleReconnect()
-                    throw error
-                }
-
                 do {
-                    os_log(.debug, log: self.log, "Retrying command 0x%04X (wid: %u)", command.rawValue, windowId)
-                    try self.writeExact(message)
-                    let response = try self.readResponse()
-                    os_log(.debug, log: self.log, "Retry succeeded for command 0x%04X", command.rawValue)
-                    return response
+                    try self.writeCommandToRing(message: message)
+                    return try self.readResponse()
                 } catch {
                     os_log(.error, log: self.log, "Command 0x%04X retry failed: %{public}@",
                            command.rawValue, error.localizedDescription)
-                    self.disconnectSocket()
-                    self.scheduleReconnect()
                     throw error
                 }
             }
@@ -749,18 +871,19 @@ public final class HyprServerBridge: @unchecked Sendable {
         let message = buildMessage(command: command, windowId: windowId, payload: payload)
 
         return executeOnQueue {
-            if self.socketFD < 0 {
-                if !self.connectSocket() {
-                    self.ringBuffer.enqueue(message)
-                    os_log(.default, log: self.log, "%{public}s buffered while disconnected (wid: %u, queue size: %d)",
-                           commandName, windowId, self.ringBuffer.countValue)
-                    self.scheduleReconnect()
-                    return false
-                }
+            if self.shmBase == nil {
+                _ = self.setupSharedMemory()
+            }
+
+            guard self.shmBase != nil && self.isHookReadyDirect() else {
+                self.ringBuffer.enqueue(message)
+                os_log(.default, log: self.log, "%{public}s buffered while hook not ready (wid: %u, queue size: %d)",
+                       commandName, windowId, self.ringBuffer.countValue)
+                return false
             }
 
             do {
-                try self.writeExact(message)
+                try self.writeCommandToRing(message: message)
                 let response = try self.readResponse()
                 let ok = self.handleAckResponse(header: response.header, payload: response.payload, commandName: commandName)
                 if ok {
@@ -771,25 +894,16 @@ public final class HyprServerBridge: @unchecked Sendable {
                 os_log(.default, log: self.log, "%{public}s attempt 1 failed: %{public}@. Retrying once...",
                        commandName, error.localizedDescription)
 
-                self.disconnectSocket()
-                if self.connectSocket() {
-                    do {
-                        try self.writeExact(message)
-                        let response = try self.readResponse()
-                        let ok = self.handleAckResponse(header: response.header, payload: response.payload, commandName: commandName)
-                        return ok
-                    } catch {
-                        os_log(.error, log: self.log, "%{public}s retry failed: %{public}@. Enqueuing in ring buffer.",
-                               commandName, error.localizedDescription)
-                        self.disconnectSocket()
-                    }
+                do {
+                    try self.writeCommandToRing(message: message)
+                    let response = try self.readResponse()
+                    return self.handleAckResponse(header: response.header, payload: response.payload, commandName: commandName)
+                } catch {
+                    os_log(.error, log: self.log, "%{public}s retry failed: %{public}@. Enqueuing in ring buffer.",
+                           commandName, error.localizedDescription)
+                    self.ringBuffer.enqueue(message)
+                    return false
                 }
-
-                self.ringBuffer.enqueue(message)
-                os_log(.default, log: self.log, "%{public}s buffered after failure (wid: %u, queue size: %d)",
-                       commandName, windowId, self.ringBuffer.countValue)
-                self.scheduleReconnect()
-                return false
             }
         }
     }
@@ -873,6 +987,167 @@ public final class HyprServerBridge: @unchecked Sendable {
         let s: UInt8 = stripped ? 1 : 0
         let payload = Data([s])
         return sendMutation(command: .stripTitlebar, windowId: windowId, payload: payload, commandName: "setTitlebar")
+    }
+
+    /// Focus window via server hook
+    @discardableResult
+    public func setWindowFocus(windowId: UInt32) -> Bool {
+        return sendMutation(command: .setWindowFocus, windowId: windowId, payload: Data(), commandName: "setWindowFocus")
+    }
+
+    /// Set global server decoration policy
+    @discardableResult
+    public func setGlobalPolicy(_ policy: HyprGlobalPolicy) -> Bool {
+        var payload = Data(capacity: 16)
+        let b0: UInt8 = policy.autoSquareCorners ? 1 : 0
+        let b1: UInt8 = policy.autoStripShadow ? 1 : 0
+        let b2: UInt8 = policy.autoStripTitlebar ? 1 : 0
+        let b3: UInt8 = policy.autoSetBorder ? 1 : 0
+        var bw = policy.borderWidth
+        var ca = policy.borderColorActive
+        var ci = policy.borderColorInactive
+
+        payload.append(b0)
+        payload.append(b1)
+        payload.append(b2)
+        payload.append(b3)
+        withUnsafeBytes(of: &bw) { payload.append(contentsOf: $0) }
+        withUnsafeBytes(of: &ca) { payload.append(contentsOf: $0) }
+        withUnsafeBytes(of: &ci) { payload.append(contentsOf: $0) }
+
+        return sendMutation(command: .setGlobalPolicy, windowId: 0, payload: payload, commandName: "setGlobalPolicy")
+    }
+
+    /// Suppress or restore native macOS menu bar reveal at the compositor level
+    @discardableResult
+    public func setMenuBarSuppression(suppress: Bool, exemptWid: UInt32 = 0) throws -> Bool {
+        var effectiveExemptWid = exemptWid
+        if effectiveExemptWid == 0 && suppress {
+            if Thread.isMainThread {
+                if let barWid = MainActor.assumeIsolated({ HyprBarWindow.shared?.windowNumber }), barWid > 0 {
+                    effectiveExemptWid = UInt32(barWid)
+                }
+            } else {
+                effectiveExemptWid = DispatchQueue.main.sync {
+                    if let barWid = HyprBarWindow.shared?.windowNumber, barWid > 0 {
+                        return UInt32(barWid)
+                    }
+                    return 0
+                }
+            }
+        }
+
+        var targetWIDs: [UInt32] = []
+        if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+            let myPid = getpid()
+            for item in windowList {
+                let layer = item[kCGWindowLayer as String] as? Int ?? -1
+                let owner = item[kCGWindowOwnerName as String] as? String ?? ""
+                let name = item[kCGWindowName as String] as? String ?? ""
+                let pid = item[kCGWindowOwnerPID as String] as? pid_t ?? 0
+
+                guard owner != "HyprMac" && pid != myPid else { continue }
+
+                if layer == 24 || owner == "MenuBarAgent" || (owner == "Window Server" && name.contains("Menubar")) {
+                    if let wid = item[kCGWindowNumber as String] as? CGWindowID, wid > 0 {
+                        if wid != effectiveExemptWid && !targetWIDs.contains(wid) {
+                            targetWIDs.append(wid)
+                            if targetWIDs.count >= 32 { break }
+                        }
+                    }
+                }
+            }
+        }
+
+        var payload = Data()
+        var sVal: UInt32 = suppress ? 1 : 0
+        var exVal: UInt32 = effectiveExemptWid
+        var cVal: UInt32 = UInt32(targetWIDs.count)
+        withUnsafeBytes(of: &sVal) { payload.append(contentsOf: $0) }
+        withUnsafeBytes(of: &exVal) { payload.append(contentsOf: $0) }
+        withUnsafeBytes(of: &cVal) { payload.append(contentsOf: $0) }
+        for wid in targetWIDs {
+            var w = wid
+            withUnsafeBytes(of: &w) { payload.append(contentsOf: $0) }
+        }
+        if targetWIDs.count < 32 {
+            let pad = (32 - targetWIDs.count) * MemoryLayout<UInt32>.size
+            payload.append(Data(count: pad))
+        }
+
+        let (header, responsePayload) = try sendTransaction(
+            command: .setMenuBarSuppression,
+            windowId: 0,
+            payload: payload
+        )
+        let success = handleAckResponse(header: header, payload: responsePayload, commandName: "setMenuBarSuppression")
+        if success {
+            KeybindManager.shared.isMenuBarSuppressed = suppress
+        }
+        return success
+    }
+
+    /// Apply GPU-accelerated workspace transforms (2x2 matrix, translation, opacity) in SkyLight WindowServer
+    @discardableResult
+    public func setWorkspaceTransform(entries: [(windowID: CGWindowID, transform: CGAffineTransform, alpha: Float)]) -> Bool {
+        guard !entries.isEmpty else { return true }
+
+        var overallSuccess = true
+        let strideSize = 32
+
+        for chunkStart in stride(from: 0, to: entries.count, by: strideSize) {
+            let chunkEnd = min(chunkStart + strideSize, entries.count)
+            let chunk = entries[chunkStart..<chunkEnd]
+
+            var payload = Data()
+            var countVal = UInt32(chunk.count)
+            withUnsafeBytes(of: &countVal) { payload.append(contentsOf: $0) }
+
+            for item in chunk {
+                var wid = UInt32(item.windowID)
+                var a = Float(item.transform.a)
+                var b = Float(item.transform.b)
+                var c = Float(item.transform.c)
+                var d = Float(item.transform.d)
+                var tx = Float(item.transform.tx)
+                var ty = Float(item.transform.ty)
+                var alpha = item.alpha
+
+                withUnsafeBytes(of: &wid) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &a) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &b) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &c) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &d) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &tx) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &ty) { payload.append(contentsOf: $0) }
+                withUnsafeBytes(of: &alpha) { payload.append(contentsOf: $0) }
+            }
+
+            if chunk.count < 32 {
+                let padBytes = (32 - chunk.count) * 32
+                payload.append(Data(count: padBytes))
+            }
+
+            let ok = sendMutation(
+                command: .setWorkspaceTransform,
+                windowId: 0,
+                payload: payload,
+                commandName: "setWorkspaceTransform"
+            )
+            if !ok {
+                overallSuccess = false
+            }
+        }
+
+        return overallSuccess
+    }
+
+    /// Reset workspace transforms and alpha to identity for given window IDs
+    @discardableResult
+    public func resetWorkspaceTransforms(windowIDs: [CGWindowID]) -> Bool {
+        guard !windowIDs.isEmpty else { return true }
+        let entries = windowIDs.map { (windowID: $0, transform: CGAffineTransform.identity, alpha: Float(1.0)) }
+        return setWorkspaceTransform(entries: entries)
     }
 
     /// Query window decoration state

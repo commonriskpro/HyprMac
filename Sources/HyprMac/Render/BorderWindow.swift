@@ -9,11 +9,23 @@ public enum BorderMode: String, Sendable, CaseIterable, Equatable {
 }
 
 extension NSColor {
+    public convenience init(rgbaHex: UInt32) {
+        let r = CGFloat((rgbaHex >> 24) & 0xFF) / 255.0
+        let g = CGFloat((rgbaHex >> 16) & 0xFF) / 255.0
+        let b = CGFloat((rgbaHex >> 8) & 0xFF) / 255.0
+        let a = CGFloat(rgbaHex & 0xFF) / 255.0
+        self.init(srgbRed: r, green: g, blue: b, alpha: a)
+    }
+
     public convenience init(hex: UInt32, alpha: CGFloat = 1.0) {
-        let r = CGFloat((hex >> 16) & 0xFF) / 255.0
-        let g = CGFloat((hex >> 8) & 0xFF) / 255.0
-        let b = CGFloat(hex & 0xFF) / 255.0
-        self.init(srgbRed: r, green: g, blue: b, alpha: alpha)
+        if hex > 0xFFFFFF {
+            self.init(rgbaHex: hex)
+        } else {
+            let r = CGFloat((hex >> 16) & 0xFF) / 255.0
+            let g = CGFloat((hex >> 8) & 0xFF) / 255.0
+            let b = CGFloat(hex & 0xFF) / 255.0
+            self.init(srgbRed: r, green: g, blue: b, alpha: alpha)
+        }
     }
 }
 
@@ -44,22 +56,25 @@ public final class BorderView: NSView {
         NSColor(hex: 0x00FF99)  // Hyprland Neon Green
     ] {
         didSet {
-            gradientLayer.colors = gradientColors.map(\.cgColor)
-            outlineLayer.strokeColor = (gradientColors.first ?? NSColor(hex: 0x33CCFF)).cgColor
+            let colors = gradientColors.isEmpty ? [NSColor(hex: 0x33CCFF)] : gradientColors
+            if colors.count == 1 {
+                gradientLayer.colors = [colors[0].cgColor, colors[0].cgColor]
+            } else {
+                gradientLayer.colors = colors.map(\.cgColor)
+            }
+            outlineLayer.strokeColor = (colors.first ?? NSColor(hex: 0x33CCFF)).cgColor
         }
     }
 
-    // Glass Halo Subviews & Mask
-    private let glassContainerView = NSView()
-    private let visualEffectView = NSVisualEffectView()
-    private let darkOverlay = NSView()
-    private let glassMaskLayer = CAShapeLayer()
+    // Glass Halo Vector Layers (pure vector, hollow 100% transparent interior)
     private let glassBorderLayer = CAShapeLayer()
+    private let glassInnerBorderLayer = CAShapeLayer()
+    private let glassBandLayer = CAShapeLayer()
 
     // Neon Border Sublayers & Animation
     private let gradientLayer = CAGradientLayer()
     private let neonMaskLayer = CAShapeLayer()
-    private var angleTimer: Timer?
+    nonisolated(unsafe) private var angleTimer: Timer?
     private var currentAngle: CGFloat = 0.0
 
     // Outline Border Sublayer
@@ -85,31 +100,25 @@ public final class BorderView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.masksToBounds = false
 
-        // 1. Setup Glass Halo container and layers
-        glassContainerView.wantsLayer = true
-        glassContainerView.layer?.backgroundColor = NSColor.clear.cgColor
-        glassContainerView.layer?.masksToBounds = true
-        glassMaskLayer.fillRule = .evenOdd
-        glassContainerView.layer?.mask = glassMaskLayer
-
-        visualEffectView.material = .hudWindow
-        visualEffectView.blendingMode = .withinWindow
-        visualEffectView.state = .active
-        visualEffectView.wantsLayer = true
-
-        darkOverlay.wantsLayer = true
-        darkOverlay.layer?.backgroundColor = NSColor(hex: 0x16171E, alpha: 0.75).cgColor
-        darkOverlay.layer?.borderWidth = 1.0
-        darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
-
+        // 1. Setup Glass Halo Vector Layers (completely hollow interior, fillColor = nil)
         glassBorderLayer.fillColor = nil
-        glassBorderLayer.strokeColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+        glassBorderLayer.strokeColor = NSColor(white: 1.0, alpha: 0.35).cgColor
         glassBorderLayer.lineWidth = 1.0
+        glassBorderLayer.shadowColor = NSColor(hex: 0x33CCFF).cgColor
+        glassBorderLayer.shadowRadius = 8.0
+        glassBorderLayer.shadowOpacity = 0.4
+        glassBorderLayer.shadowOffset = .zero
 
-        glassContainerView.addSubview(visualEffectView)
-        glassContainerView.addSubview(darkOverlay)
-        glassContainerView.layer?.addSublayer(glassBorderLayer)
-        addSubview(glassContainerView)
+        glassInnerBorderLayer.fillColor = nil
+        glassInnerBorderLayer.strokeColor = NSColor(white: 1.0, alpha: 0.20).cgColor
+        glassInnerBorderLayer.lineWidth = 1.0
+
+        glassBandLayer.fillColor = nil
+        glassBandLayer.strokeColor = NSColor(white: 1.0, alpha: 0.06).cgColor
+
+        layer?.addSublayer(glassBandLayer)
+        layer?.addSublayer(glassInnerBorderLayer)
+        layer?.addSublayer(glassBorderLayer)
 
         // 2. Setup Neon Gradient Sublayers
         gradientLayer.colors = gradientColors.map(\.cgColor)
@@ -141,17 +150,23 @@ public final class BorderView: NSView {
     private func updateModeAppearance() {
         switch mode {
         case .glassHalo:
-            glassContainerView.isHidden = false
+            glassBorderLayer.isHidden = false
+            glassInnerBorderLayer.isHidden = false
+            glassBandLayer.isHidden = false
             gradientLayer.isHidden = true
             outlineLayer.isHidden = true
             stopGradientRotation()
         case .neon:
-            glassContainerView.isHidden = true
+            glassBorderLayer.isHidden = true
+            glassInnerBorderLayer.isHidden = true
+            glassBandLayer.isHidden = true
             gradientLayer.isHidden = false
             outlineLayer.isHidden = true
             startGradientRotation()
         case .outline:
-            glassContainerView.isHidden = true
+            glassBorderLayer.isHidden = true
+            glassInnerBorderLayer.isHidden = true
+            glassBandLayer.isHidden = true
             gradientLayer.isHidden = true
             outlineLayer.isHidden = false
             stopGradientRotation()
@@ -164,50 +179,24 @@ public final class BorderView: NSView {
 
         switch mode {
         case .glassHalo:
-            glassContainerView.frame = bounds
-            visualEffectView.frame = bounds
-            darkOverlay.frame = bounds
-            darkOverlay.layer?.cornerRadius = cornerRadius
-            darkOverlay.layer?.borderWidth = 1.0
-            darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
-            darkOverlay.layer?.backgroundColor = NSColor(hex: 0x16171E, alpha: 0.75).cgColor
-
-            // Outer halo path and inner cutout path for window content
-            let outerPath = CGPath(
-                roundedRect: bounds,
-                cornerWidth: cornerRadius,
-                cornerHeight: cornerRadius,
-                transform: nil
-            )
-
-            let innerRect = bounds.insetBy(dx: haloPadding, dy: haloPadding)
-            let innerRadius = max(0.0, cornerRadius - haloPadding)
-            let innerPath = CGPath(
-                roundedRect: innerRect,
-                cornerWidth: innerRadius,
-                cornerHeight: innerRadius,
-                transform: nil
-            )
-
-            let combined = CGMutablePath()
-            combined.addPath(outerPath)
-            combined.addPath(innerPath)
-
-            glassMaskLayer.frame = bounds
-            glassMaskLayer.path = combined
-
-            // Outer 1px perimeter highlight
-            glassBorderLayer.frame = bounds
             let borderRect = bounds.insetBy(dx: 0.5, dy: 0.5)
             let borderRad = max(0.0, cornerRadius - 0.5)
+            glassBorderLayer.frame = bounds
             glassBorderLayer.path = CGPath(roundedRect: borderRect, cornerWidth: borderRad, cornerHeight: borderRad, transform: nil)
 
-            // Hardware-accelerated soft drop shadow on outer bounds
-            layer?.shadowColor = NSColor.black.cgColor
-            layer?.shadowRadius = 14.0
-            layer?.shadowOpacity = 0.40
-            layer?.shadowOffset = .zero
-            layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+            let innerRect = bounds.insetBy(dx: haloPadding - 0.5, dy: haloPadding - 0.5)
+            let innerRad = max(0.0, cornerRadius - haloPadding + 0.5)
+            glassInnerBorderLayer.frame = bounds
+            glassInnerBorderLayer.path = CGPath(roundedRect: innerRect, cornerWidth: innerRad, cornerHeight: innerRad, transform: nil)
+
+            let bandRect = bounds.insetBy(dx: haloPadding / 2.0, dy: haloPadding / 2.0)
+            let bandRad = max(0.0, cornerRadius - (haloPadding / 2.0))
+            glassBandLayer.frame = bounds
+            glassBandLayer.lineWidth = haloPadding
+            glassBandLayer.path = CGPath(roundedRect: bandRect, cornerWidth: bandRad, cornerHeight: bandRad, transform: nil)
+
+            layer?.shadowOpacity = 0.0
+            layer?.shadowPath = nil
 
         case .neon:
             gradientLayer.frame = bounds
@@ -306,6 +295,11 @@ public final class BorderWindow: NSPanel {
         set { borderView.cornerRadius = newValue }
     }
 
+    public var gradientColors: [NSColor] {
+        get { borderView.gradientColors }
+        set { borderView.gradientColors = newValue }
+    }
+
     public var stripDecorations: Bool = true
     public var targetWindowAlpha: Float = 0.96
 
@@ -316,7 +310,9 @@ public final class BorderWindow: NSPanel {
         didSet {
             guard isHookActive != oldValue else { return }
             if isHookActive {
-                hideBorder()
+                if isVisible {
+                    orderOut(nil)
+                }
             } else if let target = lastFocusedTarget {
                 update(for: target)
             }
@@ -386,29 +382,22 @@ public final class BorderWindow: NSPanel {
         return targetFrame.insetBy(dx: -inset, dy: -inset)
     }
 
-    /// Updates the overlay position, bounds, window tags, and alpha to wrap the target window
-    public func update(for target: FocusedWindowInfo) {
-        lastFocusedTarget = target
-        currentTargetWindowID = target.windowID
+    /// Updates the overlay position and bounds for a specific window ID and AppKit frame
+    public func update(windowID: CGWindowID, appkitFrame: NSRect) {
+        currentTargetWindowID = windowID
 
-        if stripDecorations {
-            SkyLightBridge.shared.stripTitlebar(windowID: target.windowID)
-        }
-
-        if targetWindowAlpha < 1.0 {
-            SkyLightBridge.shared.setWindowAlpha(windowID: target.windowID, alpha: targetWindowAlpha)
-        }
-
-        // When hook is active in WindowServer, in-compositor rendering handles borders.
-        // Deactivate (hide) the AppKit overlay window (REQ-SAF-002).
-        guard !isHookActive else {
+        if isHookActive {
             if isVisible {
                 orderOut(nil)
             }
             return
         }
 
-        let overlayFrame = computeFrame(for: target.appkitFrame)
+        if targetWindowAlpha < 1.0 {
+            SkyLightBridge.shared.setWindowAlpha(windowID: windowID, alpha: targetWindowAlpha)
+        }
+
+        let overlayFrame = computeFrame(for: appkitFrame)
 
         if frame != overlayFrame {
             setFrame(overlayFrame, display: true, animate: false)
@@ -433,7 +422,13 @@ public final class BorderWindow: NSPanel {
         }
 
         let borderWid = CGWindowID(self.windowNumber)
-        SkyLightBridge.shared.orderWindow(windowID: borderWid, op: .orderAbove, relativeTo: target.windowID)
+        SkyLightBridge.shared.orderWindow(windowID: borderWid, op: .orderAbove, relativeTo: windowID)
+    }
+
+    /// Updates the overlay position, bounds, window tags, and alpha to wrap the focused target window
+    public func update(for target: FocusedWindowInfo) {
+        lastFocusedTarget = target
+        update(windowID: target.windowID, appkitFrame: target.appkitFrame)
     }
 
     /// Hides the overlay border when no valid window is focused
@@ -448,6 +443,7 @@ public final class BorderWindow: NSPanel {
     public static func runSelfTest() -> Bool {
         print("=== [BorderWindow Self-Test] ===")
         let window = BorderWindow()
+        window.isHookActive = false
 
         // 1. Initial State Assertions
         guard window.mode == .glassHalo else {
