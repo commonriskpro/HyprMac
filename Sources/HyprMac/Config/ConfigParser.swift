@@ -439,36 +439,42 @@ public final class ConfigParser {
         // 3d. Declarative Bar module color tokens (bar { ... } or bar:key)
         if currentSection == "bar" || rawKey.lowercased().hasPrefix("bar.") || rawKey.lowercased().hasPrefix("bar:") {
             let barProp = normalizedKey.lowercased()
+            var cleanVal = rawVal.trimmingCharacters(in: .whitespaces)
+            let q = String(Character(UnicodeScalar(34)))
+            let sq = String(Character(UnicodeScalar(39)))
+            if (cleanVal.hasPrefix(q) && cleanVal.hasSuffix(q)) || (cleanVal.hasPrefix(sq) && cleanVal.hasSuffix(sq)) {
+                cleanVal = String(cleanVal.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+            }
             switch barProp {
             case "col.window_title", "col.windowtitle", "window_title", "windowtitle":
-                config.barColors.windowTitle = rawVal
+                config.barColors.windowTitle = cleanVal
             case "col.workspaces_inactive", "col.workspacesinactive", "workspaces_inactive", "workspacesinactive",
                  "col.workspaces_text", "workspaces_text":
-                config.barColors.workspacesInactive = rawVal
+                config.barColors.workspacesInactive = cleanVal
             case "col.workspaces_active_bg", "col.workspacesactivebg", "workspaces_active_bg", "workspacesactivebg",
                  "col.workspaces_active", "workspaces_active":
-                config.barColors.workspacesActiveBg = rawVal
+                config.barColors.workspacesActiveBg = cleanVal
             case "col.workspaces_active_fg", "col.workspacesactivefg", "workspaces_active_fg", "workspacesactivefg",
                  "col.workspaces_active_text", "workspaces_active_text":
-                config.barColors.workspacesActiveFg = rawVal
+                config.barColors.workspacesActiveFg = cleanVal
             case "col.battery", "battery":
-                config.barColors.battery = rawVal
+                config.barColors.battery = cleanVal
             case "col.clock", "clock", "col.time", "time":
-                config.barColors.clock = rawVal
+                config.barColors.clock = cleanVal
             case "col.volume", "volume":
-                config.barColors.volume = rawVal
+                config.barColors.volume = cleanVal
             case "col.network", "network", "col.wifi", "wifi":
-                config.barColors.network = rawVal
+                config.barColors.network = cleanVal
             case "col.cpu", "cpu":
-                config.barColors.cpu = rawVal
+                config.barColors.cpu = cleanVal
             case "col.memory", "memory", "col.mem", "mem":
-                config.barColors.memory = rawVal
+                config.barColors.memory = cleanVal
             case "col.notification", "notification":
-                config.barColors.notification = rawVal
+                config.barColors.notification = cleanVal
             case "col.power", "power":
-                config.barColors.power = rawVal
+                config.barColors.power = cleanVal
             case "col.surface", "surface", "col.background", "background":
-                config.barColors.surface = rawVal
+                config.barColors.surface = cleanVal
             default:
                 break
             }

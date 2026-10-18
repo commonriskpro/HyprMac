@@ -560,7 +560,7 @@ final class WorkspaceManagerTests: XCTestCase {
         // Switch back to workspace 1: window 101 must NOT shrink into a half-screen dwindle tile!
         manager.switchToWorkspace(number: 1, in: bounds, dwindle: dwindle, borderManager: border)
         XCTAssertEqual(manager.storedFrame(for: 101), bounds, "Window 101 must remain fullscreen at bounds when switching back to workspace 1")
-        let expectedTile = CGRect(x: 10, y: 40, width: 1900, height: 1030)
-        XCTAssertEqual(manager.storedFrame(for: 102), expectedTile, "Window 102 tiles with dwindle gaps underneath fullscreen window 101")
+        let expectedTile = CGRect(x: 962.5, y: 40, width: 947.5, height: 1030)
+        XCTAssertEqual(manager.storedFrame(for: 102), expectedTile, "Window 102 preserves its 50% dwindle slot underneath fullscreen window 101")
     }
 }

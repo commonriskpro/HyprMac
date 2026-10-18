@@ -878,6 +878,12 @@ func runBarDaemon() {
 
     let bar = HyprBarWindow()
     HyprBarWindow.shared = bar
+    let defaultHyprConf = NSString(string: "~/.config/hypr/hyprland.conf").expandingTildeInPath
+    if FileManager.default.fileExists(atPath: defaultHyprConf) {
+        let cfg = ConfigParser.parseFile(atPath: defaultHyprConf)
+        bar.barView.barColors = cfg.barColors
+        bar.barView.applyTheme()
+    }
     bar.showBar()
     print("""
     [HyprMac] Native Waybar / HyprBar Active on Top Screen
@@ -1049,13 +1055,16 @@ func runIntegratedDaemon(configPath: String?) {
     workspaceManager.isFullscreen = { [weak keyManager] wid in
         keyManager?.isFullscreen(windowID: wid) ?? false
     }
+    dwindleEngine.isFullscreen = { [weak keyManager] wid in
+        keyManager?.isFullscreen(windowID: wid) ?? false
+    }
 
     let handleUnminimize: @MainActor (CGWindowID, pid_t?) -> Void = { wid, pid in
         guard wid > 0 else { return }
         let tilingBounds = computeTilingBounds()
         workspaceManager.assignWindow(wid: wid, to: workspaceManager.activeWorkspace, pid: pid)
         workspaceManager.setWindowMinimized(wid, minimized: false)
-        if !keyManager.isFloating(windowID: wid) && !keyManager.isFullscreen(windowID: wid) && config.layout.lowercased() == "dwindle" {
+        if !keyManager.isFloating(windowID: wid) && config.layout.lowercased() == "dwindle" {
             dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
             dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
         }
@@ -1164,7 +1173,7 @@ func runIntegratedDaemon(configPath: String?) {
                 workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
             }
             let activeIDs = workspaceManager.activeWindowIDs()
-            let activeTiledIDs = activeIDs.filter { !keyManager.isFloating(windowID: $0) && !keyManager.isFullscreen(windowID: $0) }
+            let activeTiledIDs = activeIDs.filter { !keyManager.isFloating(windowID: $0) }
             let frames = dwindleEngine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
             dwindleEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
         }
@@ -1189,7 +1198,7 @@ func runIntegratedDaemon(configPath: String?) {
                 guard let engine = dwindleEngine, let wsMgr = workspaceManager, let bMgr = borderManager, let km = keyManager else { return }
                 let tilingBounds = computeTilingBounds()
                 let activeIDs = wsMgr.activeWindowIDs()
-                let activeTiledIDs = activeIDs.filter { !km.isFloating(windowID: $0) && !km.isFullscreen(windowID: $0) }
+                let activeTiledIDs = activeIDs.filter { !km.isFloating(windowID: $0) }
                 let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
                 if isFloating {
@@ -1363,6 +1372,8 @@ func runIntegratedDaemon(configPath: String?) {
         if FileManager.default.fileExists(atPath: confPath) {
             let newConfig = ConfigParser.parseFile(atPath: confPath)
             animationEngine.config = newConfig
+            bar.barView.barColors = newConfig.barColors
+            bar.barView.applyTheme()
             let f = WindowDetector.shared.getFocusedWindow()
             borderManager.update(focused: f, managedFrames: dwindleEngine.currentFrames(), config: newConfig)
             print("[HyprMac] Dynamic theme & border colors reloaded from \(confPath)")
@@ -1476,7 +1487,7 @@ func runIntegratedDaemon(configPath: String?) {
                 // belonging to the active workspace are tiled by DwindleEngine
                 let activeIDs = workspaceManager.activeWindowIDs()
                 let activeManagedSet = Set(activeIDs)
-                let activeCurrentIDs = currentIDs.filter { activeManagedSet.contains($0) && !keyManager.isFloating(windowID: $0) && !keyManager.isFullscreen(windowID: $0) }
+                let activeCurrentIDs = currentIDs.filter { activeManagedSet.contains($0) && !keyManager.isFloating(windowID: $0) }
                 let currentSet = Set(activeCurrentIDs)
 
                 if minimizedChanged || currentSet != dwindleEngine.managedWindowSet {

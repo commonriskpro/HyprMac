@@ -554,7 +554,7 @@ public final class WorkspaceManager {
 
         // Step 1: Pre-calculate the new layout upfront using Dwindle BEFORE moving any window
         let activeIDs = activeWindowIDs()
-        let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) && !(isFullscreen?($0) ?? false) }
+        let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) }
         var targetFrames = dwindle.tileWindows(windowIDs: tiledIDs, in: bounds)
         for wid in activeIDs where isFullscreen?(wid) == true {
             targetFrames[wid] = bounds

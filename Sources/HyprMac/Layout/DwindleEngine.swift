@@ -11,6 +11,7 @@ public final class DwindleEngine {
     public private(set) var lastTargetID: CGWindowID?
     public var managedWindowOrder: [CGWindowID] = []
     public var managedWindowSet: Set<CGWindowID> = []
+    public var isFullscreen: (@Sendable (CGWindowID) -> Bool)?
 
     public init(gapsIn: CGFloat = 5.0, gapsOut: CGFloat = 10.0) {
         self.root = nil
@@ -278,6 +279,7 @@ public final class DwindleEngine {
 
         let animEngine = AnimationEngine.shared
         for (wid, targetFrame) in windowFrames {
+            if isFullscreen?(wid) == true { continue }
             let curBounds = animEngine.currentVisualFrame(windowID: wid) ?? WindowDetector.shared.getWindowBounds(windowID: wid)
             // Immediately apply physical frame at t = 0 so the application starts resizing
             WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
@@ -325,7 +327,7 @@ public final class DwindleEngine {
         var snapped: [CGWindowID] = []
         let frames = currentFrames()
         for (wid, allocatedFrame) in frames {
-            if isFloating(wid) { continue }
+            if isFloating(wid) || isFullscreen?(wid) == true { continue }
             if AnimationEngine.shared.isAnimating(windowID: wid) { continue }
             guard let physBounds = boundsProvider(wid) else { continue }
             let diff = max(

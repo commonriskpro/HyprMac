@@ -207,4 +207,35 @@ final class HyprBarTests: XCTestCase {
         XCTAssertEqual(barView.centerCapsule.surfaceAlpha, 0.45, accuracy: 0.01)
         XCTAssertEqual(barView.rightCapsule.surfaceAlpha, 0.45, accuracy: 0.01)
     }
+
+    func testDeclarativeBarColorsApplication() {
+        let barView = BarView(frame: .zero, workspaceCount: 6)
+        defer { barView.stopTimers() }
+        var barColors = HyprBarColors()
+        barColors.windowTitle = "#E4A136"
+        barColors.workspacesInactive = "#8C9071"
+        barColors.workspacesActiveBg = "#E4A136"
+        barColors.workspacesActiveFg = "#131514"
+        barView.barColors = barColors
+
+        XCTAssertEqual(barView.windowTitleLabel.textColor?.hexString.lowercased(), "#e4a136")
+        XCTAssertEqual(barView.batteryLabel.textColor?.hexString.lowercased(), barView.theme.secondary.hexString.lowercased())
+    }
+
+    func testHyprThemeResolveColorAndRgbaHexParsing() {
+        let theme = HyprTheme.shared
+        let parsed = NSColor.parseColorString("rgba(E4A136ee)")
+        XCTAssertNotNil(parsed)
+        XCTAssertEqual(parsed?.hexString.lowercased(), "#e4a136")
+
+        let resolvedToken = theme.resolveColor("primary", fallback: .black)
+        XCTAssertEqual(resolvedToken.hexString.lowercased(), theme.primary.hexString.lowercased())
+
+        let resolvedHex = theme.resolveColor("#E4A136", fallback: .black)
+        XCTAssertEqual(resolvedHex.hexString.lowercased(), "#e4a136")
+
+        let resolvedRgbaHex = theme.resolveColor("rgba(E4A136ee)", fallback: .black)
+        XCTAssertEqual(resolvedRgbaHex.hexString.lowercased(), "#e4a136")
+    }
+
 }

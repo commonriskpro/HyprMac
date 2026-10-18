@@ -253,4 +253,39 @@ final class ConfigParserTests: XCTestCase {
         XCTAssertEqual(config.windowOpacity, 0.99)
         XCTAssertEqual(config.inactiveOpacity, 0.98)
     }
+
+    func testParseDeclarativeBarColors() {
+        let input = """
+        $color4 = rgba(E4A136ee)
+        $color5 = rgba(8C9071ee)
+        bar {
+            col.window_title = $color4
+            col.workspaces_inactive = $color5
+            col.workspaces_active_bg = primary
+            col.workspaces_active_fg = "#131514"
+            col.battery = secondary
+            col.clock = secondary
+            col.volume = tertiary
+            col.network = primary
+            col.cpu = secondary
+            col.memory = secondary
+            col.notification = primary
+            col.power = error
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.barColors.windowTitle, "rgba(E4A136ee)")
+        XCTAssertEqual(config.barColors.workspacesInactive, "rgba(8C9071ee)")
+        XCTAssertEqual(config.barColors.workspacesActiveBg, "primary")
+        XCTAssertEqual(config.barColors.workspacesActiveFg, "#131514")
+        XCTAssertEqual(config.barColors.battery, "secondary")
+        XCTAssertEqual(config.barColors.clock, "secondary")
+        XCTAssertEqual(config.barColors.volume, "tertiary")
+        XCTAssertEqual(config.barColors.network, "primary")
+        XCTAssertEqual(config.barColors.cpu, "secondary")
+        XCTAssertEqual(config.barColors.memory, "secondary")
+        XCTAssertEqual(config.barColors.notification, "primary")
+        XCTAssertEqual(config.barColors.power, "error")
+    }
+
 }
