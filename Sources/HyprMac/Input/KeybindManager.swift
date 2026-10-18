@@ -906,7 +906,7 @@ public final class KeybindManager: @unchecked Sendable {
 
     /// Toggles fullscreen state for the active focused window.
     public func fullscreen() {
-        guard let focused = WindowDetector.shared.getFocusedWindow() else { return }
+        guard let focused = WindowDetector.shared.fastFocusedWindow() ?? WindowDetector.shared.getFocusedWindow() else { return }
         let wid = focused.windowID
 
         lock.lock()

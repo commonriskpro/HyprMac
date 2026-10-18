@@ -280,6 +280,33 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     /// Section-grouped settings dictionary (e.g. `sections["decoration.blur"]?["enabled"]`).
     public var sections: [String: [String: String]] = [:]
 
+    /// Whether window background blur is enabled (default: false).
+    public var blurEnabled: Bool {
+        let val = sections["decoration.blur"]?["enabled"]
+            ?? sections["decoration:blur"]?["enabled"]
+            ?? sections["blur"]?["enabled"]
+            ?? rawSettings["decoration.blur.enabled"]
+            ?? rawSettings["decoration:blur:enabled"]
+            ?? rawSettings["blur.enabled"]
+        guard let v = val?.trimmingCharacters(in: .whitespaces).lowercased() else { return false }
+        return v == "true" || v == "yes" || v == "1" || v == "on"
+    }
+
+    /// Background blur radius in points (computed from size * passes or default 15).
+    public var blurRadius: UInt32 {
+        let sizeStr = sections["decoration.blur"]?["size"]
+            ?? sections["decoration:blur"]?["size"]
+            ?? sections["blur"]?["size"]
+            ?? rawSettings["decoration.blur.size"]
+        let passesStr = sections["decoration.blur"]?["passes"]
+            ?? sections["decoration:blur"]?["passes"]
+            ?? sections["blur"]?["passes"]
+            ?? rawSettings["decoration.blur.passes"]
+        let size = UInt32(sizeStr?.trimmingCharacters(in: .whitespaces) ?? "") ?? 5
+        let passes = UInt32(passesStr?.trimmingCharacters(in: .whitespaces) ?? "") ?? 3
+        return max(1, size * passes)
+    }
+
     public init(
         gapsIn: CGFloat = 5.0,
         gapsOut: CGFloat = 10.0,

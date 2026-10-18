@@ -7,6 +7,7 @@ public final class BorderManager {
     public static let shared = BorderManager()
 
     public private(set) var overlays: [CGWindowID: BorderWindow] = [:]
+    public private(set) var managedWindowIDs: Set<CGWindowID> = []
 
     public init() {}
 
@@ -30,6 +31,40 @@ public final class BorderManager {
         managedFrames: [CGWindowID: CGRect],
         config: HyprConfig
     ) {
+        // Active border target: must be an admitted window in managedFrames.
+        // If a non-standard window (like Chrome's omnibox popup) is focused,
+        // it must not receive a border overlay.
+        let activeWid: CGWindowID?
+        if let f = focused, managedFrames.keys.contains(f.windowID) {
+            activeWid = f.windowID
+        } else {
+            activeWid = nil
+        }
+
+        let validWids = Set(managedFrames.keys)
+
+        // 1. Compositor-level Window Opacity and Blur Application
+        // Invariant: Windows must receive their focus opacity and backdrop blur
+        // regardless of whether borderSize > 0 or borderSize == 0 (frameless mode).
+        for wid in validWids {
+            let isFocused = (wid == activeWid)
+            let alpha = Float(isFocused ? config.windowOpacity : config.inactiveOpacity)
+            SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: alpha)
+            if config.blurEnabled {
+                SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: config.blurRadius)
+            } else {
+                SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
+            }
+        }
+
+        // Clean up windows that are no longer managed: restore alpha to 1.0 and blur to 0
+        let unmanagedWids = managedWindowIDs.subtracting(validWids)
+        for wid in unmanagedWids {
+            SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: 1.0)
+            SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
+        }
+        managedWindowIDs = validWids
+
         // Compositor / Border Invariant:
         // When config.borderSize == 0, cleanly hide and order out all border overlays
         // so zero overlay windows are drawn over or around the frameless windows.
@@ -44,19 +79,6 @@ public final class BorderManager {
             }
             return
         }
-
-        // Active border target: must be an admitted window in managedFrames.
-        // If a non-standard window (like Chrome's omnibox popup) is focused,
-        // it must not receive a border overlay.
-        let activeWid: CGWindowID?
-        if let f = focused, managedFrames.keys.contains(f.windowID) {
-            activeWid = f.windowID
-        } else {
-            activeWid = nil
-        }
-
-        // 1. Determine valid window IDs that should have overlays
-        let validWids = Set(managedFrames.keys)
 
         // 2. Clean up overlays for windows that are no longer present
         let staleWids = Set(overlays.keys).subtracting(validWids)
@@ -111,8 +133,14 @@ public final class BorderManager {
         }
     }
 
-    /// Hides and tears down all active border overlays.
+    /// Hides and tears down all active border overlays and restores window styles.
     public func hideAll() {
+        for wid in managedWindowIDs {
+            SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: 1.0)
+            SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
+        }
+        managedWindowIDs.removeAll()
+
         for overlay in overlays.values {
             overlay.hideBorder()
             overlay.close()
@@ -120,8 +148,11 @@ public final class BorderManager {
         overlays.removeAll()
     }
 
-    /// Hides and removes the overlay for a specific window.
+    /// Hides and removes the overlay for a specific window and restores default style.
     public func hideOverlay(for windowID: CGWindowID) {
+        SkyLightBridge.shared.setWindowAlpha(windowID: windowID, alpha: 1.0)
+        SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: windowID, radius: 0)
+        managedWindowIDs.remove(windowID)
         if let overlay = overlays.removeValue(forKey: windowID) {
             overlay.hideBorder()
             overlay.close()

@@ -234,3 +234,59 @@ public final class HyprTheme: @unchecked Sendable {
         self.outline = NSColor(hexString: Self.fallbackOutlineHex)
     }
 }
+
+@MainActor
+public enum HyprFont {
+    private static let candidateNerdFonts = [
+        "JetBrainsMonoNF-Regular",
+        "JetBrainsMono Nerd Font",
+        "HackNF-Regular",
+        "Hack Nerd Font",
+        "IosevkaNF",
+        "Iosevka Nerd Font",
+        "FiraCodeNF-Reg",
+        "FiraCode Nerd Font",
+        "SymbolsNerdFontMono-Regular",
+        "Symbols Nerd Font Mono"
+    ]
+
+    private static var cachedNerdFontDescriptors: [NSFontDescriptor]?
+
+    public static func nerdFontDescriptors() -> [NSFontDescriptor] {
+        if let cached = cachedNerdFontDescriptors {
+            return cached
+        }
+        var descriptors: [NSFontDescriptor] = []
+        for name in candidateNerdFonts {
+            if let font = NSFont(name: name, size: 12) {
+                descriptors.append(font.fontDescriptor)
+            }
+        }
+        cachedNerdFontDescriptors = descriptors
+        return descriptors
+    }
+
+    public static func barFont(ofSize size: CGFloat, weight: NSFont.Weight = .medium, monospacedDigits: Bool = false) -> NSFont {
+        let baseFont: NSFont = monospacedDigits
+            ? .monospacedDigitSystemFont(ofSize: size, weight: weight)
+            : .systemFont(ofSize: size, weight: weight)
+
+        let nerdDescriptors = nerdFontDescriptors()
+        guard !nerdDescriptors.isEmpty else {
+            return baseFont
+        }
+
+        let cascadeDesc = baseFont.fontDescriptor.addingAttributes([
+            .cascadeList: nerdDescriptors
+        ])
+
+        return NSFont(descriptor: cascadeDesc, size: size) ?? baseFont
+    }
+}
+
+@MainActor
+extension NSFont {
+    public static func barFont(ofSize size: CGFloat, weight: NSFont.Weight = .medium, monospacedDigits: Bool = false) -> NSFont {
+        HyprFont.barFont(ofSize: size, weight: weight, monospacedDigits: monospacedDigits)
+    }
+}

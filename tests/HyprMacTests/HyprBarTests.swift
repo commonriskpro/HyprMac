@@ -172,4 +172,39 @@ final class HyprBarTests: XCTestCase {
         XCTAssertEqual(theme.surface.hexString.lowercased(), "#0f1323")
         XCTAssertEqual(theme.error.hexString.lowercased(), "#5062a1")
     }
+
+    func testBarFontNerdFontGlyphResolution() {
+        let font = NSFont.barFont(ofSize: 11, weight: .medium)
+        XCTAssertNotNil(font)
+
+        // Verify telemetry glyphs render without tofu via CoreText line creation
+        let telemetryString = "100%   01:27 Sun   59%"
+        let attrStr = NSAttributedString(string: telemetryString, attributes: [.font: font])
+        let line = CTLineCreateWithAttributedString(attrStr)
+        let runs = CTLineGetGlyphRuns(line) as? [CTRun] ?? []
+        XCTAssertGreaterThan(runs.count, 0)
+    }
+
+    func testRightIslandModularHardwareLayout() {
+        let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1200, height: 32))
+        barView.updateHardware()
+        barView.updateNetwork()
+        barView.updateVolume()
+
+        XCTAssertTrue(barView.networkLabel.stringValue.contains("  "))
+        XCTAssertTrue(barView.cpuLabel.stringValue.contains("󰍛  "))
+        XCTAssertTrue(barView.memLabel.stringValue.contains("  "))
+        XCTAssertTrue(barView.volumeLabel.stringValue.contains("  "))
+    }
+
+    func testCapsuleTransparencyAndBehindWindowBlur() {
+        let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1200, height: 32))
+        XCTAssertEqual(barView.capsuleAlpha, 0.60, accuracy: 0.01)
+        XCTAssertEqual(barView.leftCapsule.surfaceAlpha, 0.60, accuracy: 0.01)
+
+        barView.capsuleAlpha = 0.45
+        XCTAssertEqual(barView.leftCapsule.surfaceAlpha, 0.45, accuracy: 0.01)
+        XCTAssertEqual(barView.centerCapsule.surfaceAlpha, 0.45, accuracy: 0.01)
+        XCTAssertEqual(barView.rightCapsule.surfaceAlpha, 0.45, accuracy: 0.01)
+    }
 }

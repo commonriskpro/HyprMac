@@ -142,123 +142,31 @@ public final class SessionManager: @unchecked Sendable {
     public func apply(mode: SessionMode) {
         switch mode {
         case .hyprMac:
-            ensureMenuBarInterposerActive()
+            setMenuBarAgentSuppressed(true)
             FileManager.default.createFile(atPath: SessionManager.menubarSuppressionFlag, contents: nil)
             _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true)
         case .aqua:
+            setMenuBarAgentSuppressed(false)
             try? FileManager.default.removeItem(atPath: SessionManager.menubarSuppressionFlag)
             _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: false)
         }
     }
 
-    // MARK: - Menu Bar Interposer Self-Healing
+    // MARK: - MenuBarAgent Lifecycle Management
 
-    /// Ensures that the MenuBarAgent launchd override plist is installed and active
-    /// with libMenuBarInterposer.dylib injected for dynamic menu bar suppression.
+    /// Controls whether the native macOS MenuBarAgent service is active.
+    /// In HyprMac mode, unloads MenuBarAgent from the GUI session via launchctl so WindowServer
+    /// never displays the native Apple menu bar upon window activation.
+    /// In Aqua mode, reloads MenuBarAgent so the native menu bar is completely restored.
+    public func setMenuBarAgentSuppressed(_ suppress: Bool) {
+        let plist = "/System/Library/LaunchAgents/com.apple.MenuBarAgent.plist"
+        let args = suppress ? ["unload", "-w", plist] : ["load", "-w", plist]
+        _ = runCommand(executable: "/bin/launchctl", arguments: args)
+    }
+
+    /// Legacy compatibility hook.
     public func ensureMenuBarInterposerActive() {
-        let plistPath = ("~/Library/LaunchAgents/com.apple.MenuBarAgent.plist" as NSString).expandingTildeInPath
-        if FileManager.default.fileExists(atPath: plistPath) {
-            return
-        }
-
-        let defaultDylibPath = "/Users/saturno/Developer/REA/MenuBarInterposer/libMenuBarInterposer.dylib"
-        var dylibPath = defaultDylibPath
-        if !FileManager.default.fileExists(atPath: dylibPath) {
-            let sourceRoot = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent() // Session
-                .deletingLastPathComponent() // HyprMac
-                .deletingLastPathComponent() // Sources
-                .deletingLastPathComponent() // REA
-            let candidate = sourceRoot.appendingPathComponent("MenuBarInterposer/libMenuBarInterposer.dylib").path
-            if FileManager.default.fileExists(atPath: candidate) || FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent("MenuBarInterposer").path) {
-                dylibPath = candidate
-            }
-        }
-
-        let interposerDir = URL(fileURLWithPath: dylibPath).deletingLastPathComponent().path
-        if !FileManager.default.fileExists(atPath: dylibPath) {
-            let makeProcess = Process()
-            makeProcess.executableURL = URL(fileURLWithPath: "/usr/bin/make")
-            makeProcess.arguments = ["-C", interposerDir]
-            try? makeProcess.run()
-            makeProcess.waitUntilExit()
-
-            let signProcess = Process()
-            signProcess.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-            signProcess.arguments = ["-fs-", dylibPath]
-            try? signProcess.run()
-            signProcess.waitUntilExit()
-        }
-
-        let plistDir = URL(fileURLWithPath: plistPath).deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: plistDir, withIntermediateDirectories: true, attributes: nil)
-
-        let plistContent = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key>
-            <string>com.apple.MenuBarAgent</string>
-            <key>Program</key>
-            <string>/System/Library/CoreServices/MenuBarAgent.app/Contents/MacOS/MenuBarAgent</string>
-            <key>EnvironmentVariables</key>
-            <dict>
-                <key>DYLD_INSERT_LIBRARIES</key>
-                <string>\(dylibPath)</string>
-            </dict>
-            <key>KeepAlive</key>
-            <true/>
-            <key>LimitLoadToSessionType</key>
-            <array>
-                <string>LoginWindow</string>
-                <string>Aqua</string>
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>POSIXSpawnType</key>
-            <string>App</string>
-            <key>MachServices</key>
-            <dict>
-                <key>com.apple.MenuBarAgent.systemservices</key>
-                <true/>
-                <key>com.apple.PreloginSystemBannerService</key>
-                <true/>
-            </dict>
-        </dict>
-        </plist>
-        """
-
-        try? plistContent.write(toFile: plistPath, atomically: true, encoding: .utf8)
-
-        // Unload system plist
-        let unloadProcess = Process()
-        unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        unloadProcess.arguments = ["unload", "/System/Library/LaunchAgents/com.apple.MenuBarAgent.plist"]
-        unloadProcess.standardOutput = Pipe()
-        unloadProcess.standardError = Pipe()
-        try? unloadProcess.run()
-        unloadProcess.waitUntilExit()
-
-        // Load user plist
-        let loadProcess = Process()
-        loadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        loadProcess.arguments = ["load", plistPath]
-        loadProcess.standardOutput = Pipe()
-        loadProcess.standardError = Pipe()
-        try? loadProcess.run()
-        loadProcess.waitUntilExit()
-
-        // Restart agent
-        let killProcess = Process()
-        killProcess.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        killProcess.arguments = ["MenuBarAgent"]
-        killProcess.standardOutput = Pipe()
-        killProcess.standardError = Pipe()
-        try? killProcess.run()
-        killProcess.waitUntilExit()
-
-        Thread.sleep(forTimeInterval: 0.3)
+        setMenuBarAgentSuppressed(true)
     }
 
     /// Transitions the system into the requested mode, applying system defaults and persisting state.
@@ -378,6 +286,8 @@ public final class SessionManager: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
         do {
             try process.run()
             process.waitUntilExit()

@@ -50,6 +50,7 @@ public final class SkyLightBridge: @unchecked Sendable {
     private typealias SLSSetWindowAlphaFunc = @convention(c) (CGSConnectionID, CGWindowID, Float) -> CGError
     private typealias SLSSetWindowLevelFunc = @convention(c) (CGSConnectionID, CGWindowID, Int32) -> CGError
     private typealias SLSSetWindowCornerRadiusFunc = @convention(c) (CGSConnectionID, CGWindowID, Float) -> CGError
+    private typealias SLSSetWindowBackgroundBlurRadiusFunc = @convention(c) (CGSConnectionID, CGWindowID, UInt32) -> CGError
     private typealias SLSDisableUpdateFunc = @convention(c) (CGSConnectionID) -> CGError
     private typealias SLSReenableUpdateFunc = @convention(c) (CGSConnectionID) -> CGError
     private typealias CGSetLocalEventsSuppressionIntervalFunc = @convention(c) (Double) -> Int32
@@ -72,6 +73,7 @@ public final class SkyLightBridge: @unchecked Sendable {
     private let _setWindowAlpha: SLSSetWindowAlphaFunc?
     private let _setWindowLevel: SLSSetWindowLevelFunc?
     private let _setWindowCornerRadius: SLSSetWindowCornerRadiusFunc?
+    private let _setWindowBackgroundBlurRadius: SLSSetWindowBackgroundBlurRadiusFunc?
     private let _disableUpdate: SLSDisableUpdateFunc?
     private let _reenableUpdate: SLSReenableUpdateFunc?
     private let _setLocalEventsSuppressionInterval: CGSetLocalEventsSuppressionIntervalFunc?
@@ -111,6 +113,7 @@ public final class SkyLightBridge: @unchecked Sendable {
         self._setWindowAlpha = resolve(["SLSSetWindowAlpha", "CGSSetWindowAlpha"])
         self._setWindowLevel = resolve(["SLSSetWindowLevel", "CGSSetWindowLevel"])
         self._setWindowCornerRadius = resolve(["SLSWindowSetCornerRadius", "CGSSetWindowCornerRadius", "SLSSetWindowCornerRadius", "CGSWindowSetCornerRadius"])
+        self._setWindowBackgroundBlurRadius = resolve(["SLSSetWindowBackgroundBlurRadius", "CGSSetWindowBackgroundBlurRadius"])
         self._disableUpdate = resolve(["SLSDisableUpdate", "CGSDisableUpdate"])
         self._reenableUpdate = resolve(["SLSReenableUpdate", "CGSReenableUpdate"])
         self._setLocalEventsSuppressionInterval = resolve(["CGSetLocalEventsSuppressionInterval"])
@@ -221,6 +224,12 @@ public final class SkyLightBridge: @unchecked Sendable {
             return fn(mainConnectionID, windowID, radius) == 0
         }
         return false
+    }
+
+    @discardableResult
+    public func setWindowBackgroundBlurRadius(windowID: CGWindowID, radius: UInt32) -> Bool {
+        guard let fn = _setWindowBackgroundBlurRadius else { return false }
+        return fn(mainConnectionID, windowID, radius) == 0
     }
 
     @discardableResult

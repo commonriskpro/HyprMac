@@ -224,6 +224,24 @@ final class ConfigParserTests: XCTestCase {
         XCTAssertTrue(ConfigParser.runSelfTest())
     }
 
+    func testParseBlurConfiguration() {
+        let input = """
+        decoration {
+            active_opacity = 0.88
+            inactive_opacity = 0.70
+            blur {
+                enabled = true
+                size = 5
+                passes = 3
+            }
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.windowOpacity, 0.88)
+        XCTAssertEqual(config.inactiveOpacity, 0.70)
+        XCTAssertTrue(config.blurEnabled)
+        XCTAssertEqual(config.blurRadius, 15)
+    }
     func testParseInactiveOpacity() {
         let input = """
         decoration {

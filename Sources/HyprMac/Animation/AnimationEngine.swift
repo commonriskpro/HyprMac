@@ -534,6 +534,13 @@ public final class AnimationEngine {
     /// Cancels animation for a specific window, resetting transforms to identity.
     public func cancelAnimation(for windowID: CGWindowID) {
         guard let anim = activeAnimations.removeValue(forKey: windowID) else { return }
+        var resetIDs: [CGWindowID] = [windowID]
+        if let bWid = anim.borderWindowID {
+            resetIDs.append(bWid)
+        }
+        if HyprServerBridge.shared.isAvailable {
+            HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: resetIDs)
+        }
         skyLight.setWindowTransform(windowID: windowID, transform: .identity)
         skyLight.setWindowAlpha(windowID: windowID, alpha: Float(config.windowOpacity))
         if let bWid = anim.borderWindowID {
@@ -548,13 +555,21 @@ public final class AnimationEngine {
     /// Cancels all active animations and resets transforms to identity.
     public func cancelAll() {
         cancelWorkspaceAnimation()
+        var allResetIDs: [CGWindowID] = []
         for (wid, anim) in activeAnimations {
+            allResetIDs.append(wid)
+            if let bWid = anim.borderWindowID {
+                allResetIDs.append(bWid)
+            }
             skyLight.setWindowTransform(windowID: wid, transform: .identity)
             skyLight.setWindowAlpha(windowID: wid, alpha: Float(config.windowOpacity))
             if let bWid = anim.borderWindowID {
                 skyLight.setWindowTransform(windowID: bWid, transform: .identity)
                 skyLight.setWindowAlpha(windowID: bWid, alpha: Float(config.windowOpacity))
             }
+        }
+        if HyprServerBridge.shared.isAvailable && !allResetIDs.isEmpty {
+            HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allResetIDs)
         }
         activeAnimations.removeAll()
         if !isSimulated {
@@ -598,9 +613,8 @@ public final class AnimationEngine {
 
             if finished {
                 wsAnim.isFinished = true
-                let allIDs = wsAnim.outgoingWindowIDs + wsAnim.incomingWindowIDs
-                if !allIDs.isEmpty {
-                    HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allIDs)
+                if !wsAnim.incomingWindowIDs.isEmpty {
+                    HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: wsAnim.incomingWindowIDs)
                 }
                 let cb = wsAnim.onComplete
                 self.activeWorkspaceAnimation = nil
@@ -651,6 +665,7 @@ public final class AnimationEngine {
         }
 
         var completedWids: [CGWindowID] = []
+        var windowTransformEntries: [(windowID: CGWindowID, transform: CGAffineTransform, alpha: Float)] = []
 
         for (wid, anim) in activeAnimations {
             anim.elapsed += dt
@@ -717,20 +732,31 @@ public final class AnimationEngine {
                 let ty = curY - baseFrame.origin.y
                 let transform = CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: tx, ty: ty)
 
-                // Apply transform atomically via SkyLight transaction
-                if let txRef = skyLight.transactionCreate() {
-                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: transform)
+                if HyprServerBridge.shared.isAvailable {
+                    windowTransformEntries.append((windowID: wid, transform: transform, alpha: anim.currentAlpha))
                     if let bWid = anim.borderWindowID {
-                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: transform)
+                        windowTransformEntries.append((windowID: bWid, transform: transform, alpha: anim.currentAlpha))
                     }
-                    skyLight.transactionCommit(transaction: txRef, sync: false)
                 } else {
-                    skyLight.setWindowTransform(windowID: wid, transform: transform)
-                    if let bWid = anim.borderWindowID {
-                        skyLight.setWindowTransform(windowID: bWid, transform: transform)
+                    // Apply transform atomically via SkyLight transaction
+                    if let txRef = skyLight.transactionCreate() {
+                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: transform)
+                        if let bWid = anim.borderWindowID {
+                            skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: transform)
+                        }
+                        skyLight.transactionCommit(transaction: txRef, sync: false)
+                    } else {
+                        skyLight.setWindowTransform(windowID: wid, transform: transform)
+                        if let bWid = anim.borderWindowID {
+                            skyLight.setWindowTransform(windowID: bWid, transform: transform)
+                        }
                     }
                 }
             }
+        }
+
+        if HyprServerBridge.shared.isAvailable && !windowTransformEntries.isEmpty {
+            HyprServerBridge.shared.setWorkspaceTransform(entries: windowTransformEntries)
         }
 
         // Finalize completed animations
@@ -739,16 +765,25 @@ public final class AnimationEngine {
 
             // 1. Reset transforms to identity and restore target opacity
             let finalAlpha = Float(config.windowOpacity)
-            if let txRef = skyLight.transactionCreate() {
-                skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
-                if let bWid = anim.borderWindowID {
-                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: .identity)
-                }
-                skyLight.transactionCommit(transaction: txRef, sync: true)
+            var resetIDs: [CGWindowID] = [wid]
+            if let bWid = anim.borderWindowID {
+                resetIDs.append(bWid)
+            }
+
+            if HyprServerBridge.shared.isAvailable {
+                HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: resetIDs)
             } else {
-                skyLight.setWindowTransform(windowID: wid, transform: .identity)
-                if let bWid = anim.borderWindowID {
-                    skyLight.setWindowTransform(windowID: bWid, transform: .identity)
+                if let txRef = skyLight.transactionCreate() {
+                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
+                    if let bWid = anim.borderWindowID {
+                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: .identity)
+                    }
+                    skyLight.transactionCommit(transaction: txRef, sync: true)
+                } else {
+                    skyLight.setWindowTransform(windowID: wid, transform: .identity)
+                    if let bWid = anim.borderWindowID {
+                        skyLight.setWindowTransform(windowID: bWid, transform: .identity)
+                    }
                 }
             }
             skyLight.setWindowAlpha(windowID: wid, alpha: finalAlpha)

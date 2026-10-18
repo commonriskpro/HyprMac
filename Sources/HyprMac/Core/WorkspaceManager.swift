@@ -555,6 +555,7 @@ public final class WorkspaceManager {
 
         // Step 2: Hide windows belonging to other workspaces
         let otherWindows = windowOrder.filter { windowWorkspaces[$0] != activeWorkspace }
+        let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
 
 
         let useGpuAnimation = HyprServerBridge.shared.isAvailable &&
@@ -567,6 +568,10 @@ public final class WorkspaceManager {
                 SkyLightBridge.shared.reenableUpdate()
             }
 
+            for wid in otherWindows {
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
+            }
+
             for wid in activeIDs {
                 if let target = targetFrames[wid] {
                     restoreWindow(wid: wid, targetFrame: target)
@@ -574,9 +579,21 @@ public final class WorkspaceManager {
                     restoreWindow(wid: wid)
                 }
                 SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
+
+                // Elevate secondary incoming windows so all windows on the new workspace appear together
+                if wid != targetFocusWid {
+                    if let pid = windowPIDs[wid] ?? getPID(for: wid), pid > 0 {
+                        _ = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)
+                        if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
+                            AXUIElementPerformAction(winElem, kAXRaiseAction as CFString)
+                        }
+                    }
+                }
             }
 
-            let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
+            if let wid = targetFocusWid {
+                focusWindow(wid: wid)
+            }
 
             onWorkspaceChange?(number)
             NotificationCenter.default.post(
@@ -597,6 +614,9 @@ public final class WorkspaceManager {
                     self.hideWindow(wid: wid)
                     borderManager.hideOverlay(for: wid)
                 }
+                if !otherWindows.isEmpty {
+                    HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: otherWindows)
+                }
                 if let wid = targetFocusWid {
                     self.focusWindow(wid: wid)
                 }
@@ -605,6 +625,10 @@ public final class WorkspaceManager {
             // Atomic Display Update Freezing (SLSDisableUpdate / SLSReenableUpdate)
             SkyLightBridge.shared.disableUpdate()
 
+            for wid in otherWindows {
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
+            }
+
             // Invariant (Reveal-First): Reveal and raise active workspace windows BEFORE hiding inactive windows
             // so target surfaces cover the display immediately and the desktop wallpaper is never exposed.
             for wid in activeIDs {
@@ -612,6 +636,17 @@ public final class WorkspaceManager {
                     restoreWindow(wid: wid, targetFrame: target)
                 } else {
                     restoreWindow(wid: wid)
+                }
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
+
+                // Elevate secondary incoming windows so all windows on the new workspace appear together
+                if wid != targetFocusWid {
+                    if let pid = windowPIDs[wid] ?? getPID(for: wid), pid > 0 {
+                        _ = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)
+                        if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
+                            AXUIElementPerformAction(winElem, kAXRaiseAction as CFString)
+                        }
+                    }
                 }
             }
 
@@ -633,8 +668,6 @@ public final class WorkspaceManager {
             // Commit atomic scene update to WindowServer
             SkyLightBridge.shared.reenableUpdate()
 
-            // Immediately focus the active window on the newly revealed workspace
-            let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
             if let wid = targetFocusWid {
                 focusWindow(wid: wid)
             }
@@ -664,6 +697,7 @@ public final class WorkspaceManager {
 
             let otherWindows = windowOrder.filter { windowWorkspaces[$0] != activeWorkspace }
             let activeIDs = activeWindowIDs()
+            let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
             var affectedPIDs = Set<pid_t>()
             for wid in otherWindows + activeIDs {
                 if let pid = getPID(for: wid) {
@@ -673,9 +707,24 @@ public final class WorkspaceManager {
 
             SkyLightBridge.shared.disableUpdate()
 
+            for wid in otherWindows {
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
+            }
+
             // Reveal active windows first
             for wid in activeIDs {
                 restoreWindow(wid: wid)
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
+
+                // Elevate secondary incoming windows so all windows on the new workspace appear together
+                if wid != targetFocusWid {
+                    if let pid = windowPIDs[wid] ?? getPID(for: wid), pid > 0 {
+                        _ = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)
+                        if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
+                            AXUIElementPerformAction(winElem, kAXRaiseAction as CFString)
+                        }
+                    }
+                }
             }
 
             // Hide other windows behind
@@ -693,7 +742,6 @@ public final class WorkspaceManager {
 
             SkyLightBridge.shared.reenableUpdate()
 
-            let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
             if let wid = targetFocusWid {
                 focusWindow(wid: wid)
             }

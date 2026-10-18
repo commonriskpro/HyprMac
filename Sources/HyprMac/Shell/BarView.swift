@@ -282,11 +282,11 @@ public final class WorkspacePill: NSView {
         if isActive {
             layer?.backgroundColor = theme.primary.cgColor
             label.textColor = theme.onPrimary
-            label.font = .systemFont(ofSize: 11, weight: .bold)
+            label.font = .barFont(ofSize: 11, weight: .bold)
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
             label.textColor = theme.onSurface
-            label.font = .systemFont(ofSize: 11, weight: .medium)
+            label.font = .barFont(ofSize: 11, weight: .medium)
         }
         needsLayout = true
     }
@@ -319,14 +319,21 @@ public final class FloatingCapsuleView: NSView {
         }
     }
 
+    public var surfaceAlpha: CGFloat = 0.60 {
+        didSet {
+            updateTheme()
+        }
+    }
+
     private let clipView = NSView()
     private let visualEffectView = NSVisualEffectView()
     private let darkOverlay = NSView()
     public let stackView = NSStackView()
 
-    public init(cornerRadius: CGFloat = 5.0, theme: HyprTheme = .shared) {
+    public init(cornerRadius: CGFloat = 5.0, theme: HyprTheme = .shared, surfaceAlpha: CGFloat = 0.60) {
         self.cornerRadius = cornerRadius
         self.theme = theme
+        self.surfaceAlpha = surfaceAlpha
         super.init(frame: .zero)
         setupViews()
     }
@@ -352,17 +359,18 @@ public final class FloatingCapsuleView: NSView {
         // Frosted glass background
         visualEffectView.translatesAutoresizingMaskIntoConstraints = false
         visualEffectView.material = .hudWindow
-        visualEffectView.blendingMode = .withinWindow
+        visualEffectView.blendingMode = .behindWindow
         visualEffectView.state = .active
+        visualEffectView.appearance = NSAppearance(named: .darkAqua)
         visualEffectView.wantsLayer = true
         clipView.addSubview(visualEffectView)
 
         // Dark surface layer matching Material You theme with subtle 1px border
         darkOverlay.translatesAutoresizingMaskIntoConstraints = false
         darkOverlay.wantsLayer = true
-        darkOverlay.layer?.backgroundColor = theme.surface.withAlphaComponent(0.85).cgColor
+        darkOverlay.layer?.backgroundColor = theme.surface.withAlphaComponent(surfaceAlpha).cgColor
         darkOverlay.layer?.borderWidth = 1.0
-        darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
         clipView.addSubview(darkOverlay)
 
         // Content stack inside capsule
@@ -406,8 +414,8 @@ public final class FloatingCapsuleView: NSView {
     }
 
     public func updateTheme() {
-        darkOverlay.layer?.backgroundColor = theme.surface.withAlphaComponent(0.85).cgColor
-        darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        darkOverlay.layer?.backgroundColor = theme.surface.withAlphaComponent(surfaceAlpha).cgColor
+        darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
     }
 
     public override func layout() {
@@ -435,6 +443,14 @@ public final class BarView: NSView {
         }
     }
 
+    public var capsuleAlpha: CGFloat = 0.60 {
+        didSet {
+            leftCapsule.surfaceAlpha = capsuleAlpha
+            centerCapsule.surfaceAlpha = capsuleAlpha
+            rightCapsule.surfaceAlpha = capsuleAlpha
+        }
+    }
+
     public private(set) var activeWorkspaceID: Int = 1
     public private(set) var currentAppName: String = ""
     public private(set) var currentWindowTitle: String = ""
@@ -456,14 +472,15 @@ public final class BarView: NSView {
     // Center Island Elements: Battery telemetry, Clock & Day, Volume
     public let batteryLabel = NSTextField(labelWithString: "100% ")
     public let clockLabel = NSTextField(labelWithString: "")
-    public let volumeLabel = NSTextField(labelWithString: " 80%")
+    public let volumeLabel = NSTextField(labelWithString: "  80%")
 
     // Right Island Elements: Notification, Network, Hardware (CPU/MEM), Power
     public let notificationContainer = ClickablePill()
     public let notificationLabel = NSTextField(labelWithString: "󱅫")
 
-    public let networkLabel = NSTextField(labelWithString: " Wi-Fi")
-    public let hardwareLabel = NSTextField(labelWithString: "󰍛 24% /  45%")
+    public let networkLabel = NSTextField(labelWithString: "  Wi-Fi")
+    public let cpuLabel = NSTextField(labelWithString: "󰍛  24%")
+    public let memLabel = NSTextField(labelWithString: "  45%")
 
     public let powerContainer = ClickablePill()
     public let powerLabel = NSTextField(labelWithString: "󰐥")
@@ -562,7 +579,7 @@ public final class BarView: NSView {
         windowTitleLabel.translatesAutoresizingMaskIntoConstraints = false
         windowTitleLabel.isEditable = false
         windowTitleLabel.isSelectable = false
-        windowTitleLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        windowTitleLabel.font = .barFont(ofSize: 11, weight: .medium)
         windowTitleLabel.lineBreakMode = .byTruncatingTail
         windowTitleLabel.maximumNumberOfLines = 1
 
@@ -580,7 +597,7 @@ public final class BarView: NSView {
         batteryLabel.translatesAutoresizingMaskIntoConstraints = false
         batteryLabel.isEditable = false
         batteryLabel.isSelectable = false
-        batteryLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        batteryLabel.font = .barFont(ofSize: 11, weight: .medium)
         batteryLabel.alignment = .center
         centerCapsule.stackView.addArrangedSubview(batteryLabel)
 
@@ -589,7 +606,7 @@ public final class BarView: NSView {
         clockLabel.isEditable = false
         clockLabel.isSelectable = false
         clockLabel.alignment = .center
-        clockLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        clockLabel.font = .barFont(ofSize: 11, weight: .medium, monospacedDigits: true)
         centerCapsule.stackView.addArrangedSubview(clockLabel)
 
         // 3. Volume / Audio:  {vol}%
@@ -597,13 +614,15 @@ public final class BarView: NSView {
         volumeLabel.isEditable = false
         volumeLabel.isSelectable = false
         volumeLabel.alignment = .center
-        volumeLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        volumeLabel.font = .barFont(ofSize: 11, weight: .medium)
         centerCapsule.stackView.addArrangedSubview(volumeLabel)
     }
 
     // MARK: - Right Island Setup
 
     private func setupRightIsland() {
+        rightCapsule.stackView.spacing = 11.0
+
         // 1. Notification: 󱅫
         notificationContainer.translatesAutoresizingMaskIntoConstraints = false
         notificationContainer.wantsLayer = true
@@ -614,7 +633,7 @@ public final class BarView: NSView {
         notificationLabel.translatesAutoresizingMaskIntoConstraints = false
         notificationLabel.isEditable = false
         notificationLabel.isSelectable = false
-        notificationLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        notificationLabel.font = .barFont(ofSize: 12, weight: .medium)
         notificationLabel.alignment = .center
         notificationLabel.stringValue = "󱅫"
         notificationContainer.addSubview(notificationLabel)
@@ -631,19 +650,32 @@ public final class BarView: NSView {
         networkLabel.translatesAutoresizingMaskIntoConstraints = false
         networkLabel.isEditable = false
         networkLabel.isSelectable = false
-        networkLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        networkLabel.font = .barFont(ofSize: 11, weight: .medium)
         networkLabel.alignment = .center
-        networkLabel.stringValue = " Wi-Fi"
+        networkLabel.stringValue = "  Wi-Fi"
         rightCapsule.stackView.addArrangedSubview(networkLabel)
 
-        // 3. Hardware: 󰍛 {cpu}% /  {mem}%
-        hardwareLabel.translatesAutoresizingMaskIntoConstraints = false
-        hardwareLabel.isEditable = false
-        hardwareLabel.isSelectable = false
-        hardwareLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        hardwareLabel.alignment = .center
-        hardwareLabel.stringValue = "󰍛 24% /  45%"
-        rightCapsule.stackView.addArrangedSubview(hardwareLabel)
+        // 3. Hardware Telemetry: Separated CPU & RAM metrics
+        cpuLabel.translatesAutoresizingMaskIntoConstraints = false
+        cpuLabel.isEditable = false
+        cpuLabel.isSelectable = false
+        cpuLabel.font = .barFont(ofSize: 11, weight: .medium)
+        cpuLabel.alignment = .center
+        cpuLabel.stringValue = "󰍛  24%"
+
+        memLabel.translatesAutoresizingMaskIntoConstraints = false
+        memLabel.isEditable = false
+        memLabel.isSelectable = false
+        memLabel.font = .barFont(ofSize: 11, weight: .medium)
+        memLabel.alignment = .center
+        memLabel.stringValue = "  45%"
+
+        let hardwareStack = NSStackView(views: [cpuLabel, memLabel])
+        hardwareStack.translatesAutoresizingMaskIntoConstraints = false
+        hardwareStack.orientation = .horizontal
+        hardwareStack.spacing = 8.0
+        hardwareStack.alignment = .centerY
+        rightCapsule.stackView.addArrangedSubview(hardwareStack)
 
         // 4. Power: 󰐥
         powerContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -655,7 +687,7 @@ public final class BarView: NSView {
         powerLabel.translatesAutoresizingMaskIntoConstraints = false
         powerLabel.isEditable = false
         powerLabel.isSelectable = false
-        powerLabel.font = .systemFont(ofSize: 12, weight: .bold)
+        powerLabel.font = .barFont(ofSize: 12, weight: .bold)
         powerLabel.alignment = .center
         powerLabel.stringValue = "󰐥"
         powerContainer.addSubview(powerLabel)
@@ -690,7 +722,8 @@ public final class BarView: NSView {
         volumeLabel.textColor = theme.tertiary
         notificationLabel.textColor = theme.primary
         networkLabel.textColor = theme.primary
-        hardwareLabel.textColor = theme.secondary
+        cpuLabel.textColor = theme.secondary
+        memLabel.textColor = theme.secondary
         powerLabel.textColor = theme.error
 
         leftCapsule.needsDisplay = true
@@ -756,17 +789,18 @@ public final class BarView: NSView {
     public func updateHardware() {
         let cpu = HardwareMonitor.currentCPULoad()
         let mem = HardwareMonitor.currentMemoryLoad()
-        hardwareLabel.stringValue = "󰍛 \(cpu)% /  \(mem)%"
+        cpuLabel.stringValue = "󰍛  \(cpu)%"
+        memLabel.stringValue = "  \(mem)%"
     }
 
     public func updateVolume() {
         let vol = VolumeMonitor.currentVolume()
-        volumeLabel.stringValue = " \(vol)%"
+        volumeLabel.stringValue = "  \(vol)%"
     }
 
     public func updateNetwork() {
         let ssid = NetworkMonitor.currentSSID()
-        networkLabel.stringValue = " \(ssid)"
+        networkLabel.stringValue = "  \(ssid)"
     }
 
     public func startTimers() {
