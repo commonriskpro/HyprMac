@@ -4,23 +4,31 @@ extension NSColor {
     public static func parseColorString(_ raw: String) -> NSColor? {
         let clean = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if clean.lowercased().hasPrefix("rgba(") && clean.hasSuffix(")") {
-            let inner = clean.dropFirst(5).dropLast()
-            let parts = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count >= 4,
-                  let r = Double(parts[0]),
-                  let g = Double(parts[1]),
-                  let b = Double(parts[2]),
-                  let a = Double(parts[3]) else { return nil }
-            let alpha = a > 1.0 ? a / 255.0 : a
-            return NSColor(srgbRed: CGFloat(r / 255.0), green: CGFloat(g / 255.0), blue: CGFloat(b / 255.0), alpha: CGFloat(alpha))
+            let inner = clean.dropFirst(5).dropLast().trimmingCharacters(in: .whitespaces)
+            if inner.contains(",") {
+                let parts = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                guard parts.count >= 4,
+                      let r = Double(parts[0]),
+                      let g = Double(parts[1]),
+                      let b = Double(parts[2]),
+                      let a = Double(parts[3]) else { return nil }
+                let alpha = a > 1.0 ? a / 255.0 : a
+                return NSColor(srgbRed: CGFloat(r / 255.0), green: CGFloat(g / 255.0), blue: CGFloat(b / 255.0), alpha: CGFloat(alpha))
+            } else {
+                return parseColorString(inner)
+            }
         } else if clean.lowercased().hasPrefix("rgb(") && clean.hasSuffix(")") {
-            let inner = clean.dropFirst(4).dropLast()
-            let parts = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count >= 3,
-                  let r = Double(parts[0]),
-                  let g = Double(parts[1]),
-                  let b = Double(parts[2]) else { return nil }
-            return NSColor(srgbRed: CGFloat(r / 255.0), green: CGFloat(g / 255.0), blue: CGFloat(b / 255.0), alpha: 1.0)
+            let inner = clean.dropFirst(4).dropLast().trimmingCharacters(in: .whitespaces)
+            if inner.contains(",") {
+                let parts = inner.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                guard parts.count >= 3,
+                      let r = Double(parts[0]),
+                      let g = Double(parts[1]),
+                      let b = Double(parts[2]) else { return nil }
+                return NSColor(srgbRed: CGFloat(r / 255.0), green: CGFloat(g / 255.0), blue: CGFloat(b / 255.0), alpha: 1.0)
+            } else {
+                return parseColorString(inner)
+            }
         } else {
             var hex = clean
             if hex.hasPrefix("#") {
@@ -221,6 +229,28 @@ public final class HyprTheme: @unchecked Sendable {
         self.tertiary = extractColor(keys: ["tertiary", "accent"], fallbackHex: Self.fallbackTertiaryHex)
         self.outline = extractColor(keys: ["outline", "outline_variant"], fallbackHex: Self.fallbackOutlineHex)
         self.error = extractColor(keys: ["error"], fallbackHex: Self.fallbackErrorHex)
+    }
+
+
+    public func resolveColor(_ spec: String?, fallback: NSColor) -> NSColor {
+        guard let spec = spec?.trimmingCharacters(in: .whitespacesAndNewlines), !spec.isEmpty else {
+            return fallback
+        }
+        switch spec.lowercased() {
+        case "primary": return self.primary
+        case "on_primary", "onprimary": return self.onPrimary
+        case "secondary": return self.secondary
+        case "tertiary": return self.tertiary
+        case "on_surface", "onsurface", "foreground": return self.onSurface
+        case "surface", "background": return self.surface
+        case "outline": return self.outline
+        case "error": return self.error
+        default:
+            if let parsed = NSColor.parseColorString(spec) {
+                return parsed
+            }
+            return fallback
+        }
     }
 
     private func applyFallbacks() {

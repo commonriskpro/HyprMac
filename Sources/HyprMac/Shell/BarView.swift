@@ -231,6 +231,15 @@ public final class WorkspacePill: NSView {
     public var isActive: Bool = false {
         didSet { updateAppearance() }
     }
+    public var activeBgColor: NSColor? {
+        didSet { updateAppearance() }
+    }
+    public var activeFgColor: NSColor? {
+        didSet { updateAppearance() }
+    }
+    public var inactiveTextColor: NSColor? {
+        didSet { updateAppearance() }
+    }
     public var onSelect: ((Int) -> Void)?
 
     public let label = NSTextField(labelWithString: "")
@@ -280,12 +289,12 @@ public final class WorkspacePill: NSView {
         label.stringValue = symbol
 
         if isActive {
-            layer?.backgroundColor = theme.primary.cgColor
-            label.textColor = theme.onPrimary
+            layer?.backgroundColor = (activeBgColor ?? theme.primary).cgColor
+            label.textColor = activeFgColor ?? theme.onPrimary
             label.font = .barFont(ofSize: 11, weight: .bold)
         } else {
             layer?.backgroundColor = NSColor.clear.cgColor
-            label.textColor = theme.onSurface
+            label.textColor = inactiveTextColor ?? theme.onSurface
             label.font = .barFont(ofSize: 11, weight: .medium)
         }
         needsLayout = true
@@ -438,6 +447,12 @@ public final class BarView: NSView {
     }
 
     public var theme: HyprTheme = .shared {
+        didSet {
+            applyTheme()
+        }
+    }
+
+    public var barColors: HyprBarColors = HyprBarColors() {
         didSet {
             applyTheme()
         }
@@ -711,20 +726,27 @@ public final class BarView: NSView {
         rightCapsule.theme = theme
         rightCapsule.updateTheme()
 
+        let actBg = theme.resolveColor(barColors.workspacesActiveBg, fallback: theme.primary)
+        let actFg = theme.resolveColor(barColors.workspacesActiveFg, fallback: theme.onPrimary)
+        let inactFg = theme.resolveColor(barColors.workspacesInactive, fallback: theme.onSurface)
+
         for pill in workspacePills {
             pill.theme = theme
+            pill.activeBgColor = actBg
+            pill.activeFgColor = actFg
+            pill.inactiveTextColor = inactFg
             pill.updateAppearance()
         }
 
-        windowTitleLabel.textColor = theme.onSurface
-        batteryLabel.textColor = theme.secondary
-        clockLabel.textColor = theme.secondary
-        volumeLabel.textColor = theme.tertiary
-        notificationLabel.textColor = theme.primary
-        networkLabel.textColor = theme.primary
-        cpuLabel.textColor = theme.secondary
-        memLabel.textColor = theme.secondary
-        powerLabel.textColor = theme.error
+        windowTitleLabel.textColor = theme.resolveColor(barColors.windowTitle, fallback: theme.onSurface)
+        batteryLabel.textColor = theme.resolveColor(barColors.battery, fallback: theme.secondary)
+        clockLabel.textColor = theme.resolveColor(barColors.clock, fallback: theme.secondary)
+        volumeLabel.textColor = theme.resolveColor(barColors.volume, fallback: theme.tertiary)
+        notificationLabel.textColor = theme.resolveColor(barColors.notification, fallback: theme.primary)
+        networkLabel.textColor = theme.resolveColor(barColors.network, fallback: theme.primary)
+        cpuLabel.textColor = theme.resolveColor(barColors.cpu, fallback: theme.secondary)
+        memLabel.textColor = theme.resolveColor(barColors.memory, fallback: theme.secondary)
+        powerLabel.textColor = theme.resolveColor(barColors.power, fallback: theme.error)
 
         leftCapsule.needsDisplay = true
         centerCapsule.needsDisplay = true
@@ -783,7 +805,7 @@ public final class BarView: NSView {
     public func updateBattery() {
         let status = BatteryMonitor.currentStatus()
         batteryLabel.stringValue = status.formattedText
-        batteryLabel.textColor = theme.secondary
+        batteryLabel.textColor = theme.resolveColor(barColors.battery, fallback: theme.secondary)
     }
 
     public func updateHardware() {

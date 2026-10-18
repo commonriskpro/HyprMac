@@ -999,6 +999,7 @@ func runIntegratedDaemon(configPath: String?) {
     // 2. Launch native Waybar-style status bar
     let bar = HyprBarWindow()
     HyprBarWindow.shared = bar
+    bar.barView.barColors = config.barColors
     bar.showBar()
     _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true, exemptWid: UInt32(bar.windowNumber))
 
@@ -1333,7 +1334,7 @@ func runIntegratedDaemon(configPath: String?) {
         }
     }
 
-    keyManager.onReloadConfig = { [weak keyManager] in
+    keyManager.onReloadConfig = { [weak keyManager, weak bar] in
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 guard let km = keyManager else { return }
@@ -1345,6 +1346,7 @@ func runIntegratedDaemon(configPath: String?) {
                 print("[HyprMac] Hot-reloading configuration from \(confPath)...")
                 let newConfig = ConfigParser.parseFile(atPath: confPath)
                 animationEngine.config = newConfig
+                bar?.barView.barColors = newConfig.barColors
                 km.clearBindings()
                 km.register(bindings: newConfig.bindings)
                 print("[HyprMac] Successfully reloaded \(newConfig.bindings.count) bindings from \(confPath)")
