@@ -640,21 +640,14 @@ public final class WorkspaceManager {
                 // Within the same application, move outgoing windows offscreen before positioning incoming windows
                 let sortedMoves = batch.sorted { $0.isHidden && !$1.isHidden }
                 for move in sortedMoves {
-                    guard let elem = WindowDetector.shared.getWindowAXElement(windowID: move.wid, pid: move.pid) else {
+                    if move.isHidden {
                         _ = WindowDetector.shared.setWindowPosition(windowID: move.wid, point: move.targetOrigin, pid: move.pid)
-                        continue
-                    }
-
-                    if let sz = move.targetSize {
-                        var s = sz
-                        if let sv = AXValueCreate(.cgSize, &s) {
-                            AXUIElementSetAttributeValue(elem, kAXSizeAttribute as CFString, sv)
-                        }
-                    }
-
-                    var pt = move.targetOrigin
-                    if let pv = AXValueCreate(.cgPoint, &pt) {
-                        AXUIElementSetAttributeValue(elem, kAXPositionAttribute as CFString, pv)
+                    } else {
+                        let finalFrame = CGRect(
+                            origin: move.targetOrigin,
+                            size: move.targetSize ?? storedFrames[move.wid]?.size ?? fallbackFrame.size
+                        )
+                        _ = WindowDetector.shared.setWindowFrame(windowID: move.wid, frame: finalFrame, pid: move.pid)
                     }
                 }
             }
@@ -858,21 +851,23 @@ public final class WorkspaceManager {
         let tileBounds = bounds ?? self.boundsProvider?() ?? defaultTilingBounds()
 
         if targetWorkspace != activeWorkspace {
-            hideWindow(wid: windowID)
-            bMgr?.hideOverlay(for: windowID)
+            if !follow {
+                hideWindow(wid: windowID)
+                bMgr?.hideOverlay(for: windowID)
 
-            // Retile remaining active windows on current workspace
-            let activeIDs = activeWindowIDs()
-            let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) && !(isFullscreen?($0) ?? false) }
-            if let engine = engine {
-                let frames = engine.tileWindows(windowIDs: tiledIDs, in: tileBounds)
-                engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
-            }
+                // Retile remaining active windows on current workspace
+                let activeIDs = activeWindowIDs()
+                let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) }
+                if let engine = engine {
+                    let frames = engine.tileWindows(windowIDs: tiledIDs, in: tileBounds)
+                    engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                }
 
-            if lastFocusedPerWorkspace[activeWorkspace] == windowID {
-                lastFocusedPerWorkspace[activeWorkspace] = activeIDs.first
-                if let newFocus = activeIDs.first {
-                    focusWindow(wid: newFocus)
+                if lastFocusedPerWorkspace[activeWorkspace] == windowID {
+                    lastFocusedPerWorkspace[activeWorkspace] = activeIDs.first
+                    if let newFocus = activeIDs.first {
+                        focusWindow(wid: newFocus)
+                    }
                 }
             }
         }
