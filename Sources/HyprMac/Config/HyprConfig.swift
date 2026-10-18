@@ -239,6 +239,54 @@ public struct HyprBinding: Equatable, Hashable, Sendable, CustomStringConvertibl
     }
 }
 
+
+/// Declarative bar color tokens configured in hyprland.conf inside bar { ... }.
+public struct HyprBarColors: Equatable, Hashable, Sendable {
+    public var windowTitle: String?
+    public var workspacesInactive: String?
+    public var workspacesActiveBg: String?
+    public var workspacesActiveFg: String?
+    public var battery: String?
+    public var clock: String?
+    public var volume: String?
+    public var network: String?
+    public var cpu: String?
+    public var memory: String?
+    public var notification: String?
+    public var power: String?
+    public var surface: String?
+
+    public init(
+        windowTitle: String? = nil,
+        workspacesInactive: String? = nil,
+        workspacesActiveBg: String? = nil,
+        workspacesActiveFg: String? = nil,
+        battery: String? = nil,
+        clock: String? = nil,
+        volume: String? = nil,
+        network: String? = nil,
+        cpu: String? = nil,
+        memory: String? = nil,
+        notification: String? = nil,
+        power: String? = nil,
+        surface: String? = nil
+    ) {
+        self.windowTitle = windowTitle
+        self.workspacesInactive = workspacesInactive
+        self.workspacesActiveBg = workspacesActiveBg
+        self.workspacesActiveFg = workspacesActiveFg
+        self.battery = battery
+        self.clock = clock
+        self.volume = volume
+        self.network = network
+        self.cpu = cpu
+        self.memory = memory
+        self.notification = notification
+        self.power = power
+        self.surface = surface
+    }
+}
+
 /// Data model representing Hyprland configuration variables, styles, and bindings.
 public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     /// Inner gap between adjacent windows in points (default: 5.0).
@@ -271,6 +319,8 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var layout: String { rawSettings["general:layout"] ?? rawSettings["general.layout"] ?? "dwindle" }
     /// Ordered list of keybindings parsed from `bind` directives.
     public var bindings: [HyprBinding] = []
+    /// Declarative bar module color overrides parsed from bar { ... }.
+    public var barColors: HyprBarColors = HyprBarColors()
     /// Map of user-defined and resolved configuration variables (e.g. `$mainMod: "SUPER"`).
     public var variables: [String: String] = [:]
 
@@ -322,6 +372,7 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         stripDecorations: Bool = false,
         animationsEnabled: Bool = true,
         animationTree: HyprAnimationTree = .default,
+        barColors: HyprBarColors = HyprBarColors(),
         bindings: [HyprBinding] = [],
         variables: [String: String] = [:],
         sourceFiles: [String] = [],
@@ -341,6 +392,7 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         self.stripDecorations = stripDecorations
         self.animationsEnabled = animationsEnabled
         self.animationTree = animationTree
+        self.barColors = barColors
         self.bindings = bindings
         self.variables = variables
         self.sourceFiles = sourceFiles

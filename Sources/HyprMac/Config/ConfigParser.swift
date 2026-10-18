@@ -436,6 +436,45 @@ public final class ConfigParser {
         // Normalized key for mapping
         let normalizedKey = rawKey.components(separatedBy: CharacterSet(charactersIn: ":.")).last ?? rawKey
 
+        // 3d. Declarative Bar module color tokens (bar { ... } or bar:key)
+        if currentSection == "bar" || rawKey.lowercased().hasPrefix("bar.") || rawKey.lowercased().hasPrefix("bar:") {
+            let barProp = normalizedKey.lowercased()
+            switch barProp {
+            case "col.window_title", "col.windowtitle", "window_title", "windowtitle":
+                config.barColors.windowTitle = rawVal
+            case "col.workspaces_inactive", "col.workspacesinactive", "workspaces_inactive", "workspacesinactive",
+                 "col.workspaces_text", "workspaces_text":
+                config.barColors.workspacesInactive = rawVal
+            case "col.workspaces_active_bg", "col.workspacesactivebg", "workspaces_active_bg", "workspacesactivebg",
+                 "col.workspaces_active", "workspaces_active":
+                config.barColors.workspacesActiveBg = rawVal
+            case "col.workspaces_active_fg", "col.workspacesactivefg", "workspaces_active_fg", "workspacesactivefg",
+                 "col.workspaces_active_text", "workspaces_active_text":
+                config.barColors.workspacesActiveFg = rawVal
+            case "col.battery", "battery":
+                config.barColors.battery = rawVal
+            case "col.clock", "clock", "col.time", "time":
+                config.barColors.clock = rawVal
+            case "col.volume", "volume":
+                config.barColors.volume = rawVal
+            case "col.network", "network", "col.wifi", "wifi":
+                config.barColors.network = rawVal
+            case "col.cpu", "cpu":
+                config.barColors.cpu = rawVal
+            case "col.memory", "memory", "col.mem", "mem":
+                config.barColors.memory = rawVal
+            case "col.notification", "notification":
+                config.barColors.notification = rawVal
+            case "col.power", "power":
+                config.barColors.power = rawVal
+            case "col.surface", "surface", "col.background", "background":
+                config.barColors.surface = rawVal
+            default:
+                break
+            }
+        }
+
+
         switch normalizedKey.lowercased() {
         case "gaps_in", "gapsin":
             if let d = Double(rawVal) { config.gapsIn = CGFloat(d) }
