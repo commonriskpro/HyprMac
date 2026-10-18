@@ -921,22 +921,13 @@ public final class KeybindManager: @unchecked Sendable {
 
         let nowFullscreen = !wasFullscreen
 
-        runOnMainActor { [weak self] in
-            guard let self = self else { return }
-            if nowFullscreen {
-                _ = SkyLightBridge.shared.setWindowTags(windowID: wid, tag0: WindowTags.fullScreen.rawValue)
-            } else {
-                _ = SkyLightBridge.shared.clearWindowTags(windowID: wid, tag0: WindowTags.fullScreen.rawValue)
-            }
+        self.onFullscreenToggle?(wid, nowFullscreen)
 
-            self.onFullscreenToggle?(wid, nowFullscreen)
-
-            NotificationCenter.default.post(
-                name: Notification.Name("HyprMacToggleFullscreen"),
-                object: self,
-                userInfo: ["windowID": wid, "isFullscreen": nowFullscreen]
-            )
-        }
+        NotificationCenter.default.post(
+            name: Notification.Name("HyprMacToggleFullscreen"),
+            object: self,
+            userInfo: ["windowID": wid, "isFullscreen": nowFullscreen]
+        )
     }
 
     /// Moves the focused window to the target workspace (1..9).

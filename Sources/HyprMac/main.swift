@@ -1204,12 +1204,13 @@ func runIntegratedDaemon(configPath: String?) {
             let activeTiledIDs = activeIDs.filter { !km.isFloating(windowID: $0) && !km.isFullscreen(windowID: $0) }
 
             if isFullscreen {
+                let fullBounds = computeTilingBounds()
+                let curBounds = km.getStoredFullscreenFrame(wid) ?? engine.currentFrames()[wid] ?? WindowDetector.shared.fastFocusedWindow()?.bounds ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
+
                 // Recalculate layout for remaining tiled windows
                 let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
 
-                let fullBounds = computeTilingBounds()
-                let curBounds = WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
                 let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
@@ -1223,45 +1224,33 @@ func runIntegratedDaemon(configPath: String?) {
                     bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }
             } else {
-                // Recalculate layout with wid restored to tiled set
+                // Restoring from fullscreen
                 let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
+                let fullBounds = computeTilingBounds()
+                let targetFrame: CGRect
 
                 if km.isFloating(windowID: wid) {
-                    let targetFrame = km.getStoredFullscreenFrame(wid) ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? tilingBounds
-                    let curBounds = WindowDetector.shared.getWindowBounds(windowID: wid) ?? targetFrame
-                    let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
-                    AnimationEngine.shared.animateFullscreen(
-                        windowID: wid,
-                        from: curBounds,
-                        to: targetFrame,
-                        isFullscreen: false,
-                        borderWindowID: borderWid
-                    ) { _ in
-                        WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
-                        let f = WindowDetector.shared.getFocusedWindow()
-                        bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
-                    }
+                    targetFrame = km.getStoredFullscreenFrame(wid) ?? tilingBounds
                 } else if let targetTile = frames[wid] {
-                    let curBounds = WindowDetector.shared.getWindowBounds(windowID: wid) ?? targetTile
-                    let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
-
-                    var otherFrames = frames
-                    otherFrames.removeValue(forKey: wid)
-                    engine.applyToSystem(windowFrames: otherFrames, bridge: SkyLightBridge.shared)
-
-                    AnimationEngine.shared.animateFullscreen(
-                        windowID: wid,
-                        from: curBounds,
-                        to: targetTile,
-                        isFullscreen: false,
-                        borderWindowID: borderWid
-                    ) { _ in
-                        WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetTile)
-                        let f = WindowDetector.shared.getFocusedWindow()
-                        bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
-                    }
+                    targetFrame = targetTile
                 } else {
-                    engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                    targetFrame = tilingBounds
+                }
+
+                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
+
+                var otherFrames = frames
+                otherFrames.removeValue(forKey: wid)
+                engine.applyToSystem(windowFrames: otherFrames, bridge: SkyLightBridge.shared)
+
+                AnimationEngine.shared.animateFullscreen(
+                    windowID: wid,
+                    from: fullBounds,
+                    to: targetFrame,
+                    isFullscreen: false,
+                    borderWindowID: borderWid
+                ) { _ in
+                    WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
                     let f = WindowDetector.shared.getFocusedWindow()
                     bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }

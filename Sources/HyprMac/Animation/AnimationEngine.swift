@@ -521,9 +521,8 @@ public final class AnimationEngine {
     /// Cancels active workspace transition and resets transforms to identity.
     public func cancelWorkspaceAnimation() {
         guard let wsAnim = activeWorkspaceAnimation else { return }
-        let allIDs = wsAnim.outgoingWindowIDs + wsAnim.incomingWindowIDs
-        if !allIDs.isEmpty {
-            HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allIDs)
+        if !wsAnim.incomingWindowIDs.isEmpty {
+            HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: wsAnim.incomingWindowIDs)
         }
         activeWorkspaceAnimation = nil
         if activeAnimations.isEmpty && !isSimulated {

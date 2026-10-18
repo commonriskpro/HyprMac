@@ -563,6 +563,23 @@ public final class WorkspaceManager {
             AnimationEngine.shared.config.animationTree.getConfig(for: "workspaces").enabled
 
         if useGpuAnimation {
+            AnimationEngine.shared.animateWorkspaceTransition(
+                oldWorkspace: oldWorkspace,
+                newWorkspace: number,
+                outgoingWindowIDs: otherWindows,
+                incomingWindowIDs: activeIDs,
+                screenWidth: bounds.width
+            ) { [weak self] in
+                guard let self = self else { return }
+                for wid in otherWindows {
+                    self.hideWindow(wid: wid)
+                    borderManager.hideOverlay(for: wid)
+                }
+                if let wid = targetFocusWid {
+                    self.focusWindow(wid: wid)
+                }
+            }
+
             SkyLightBridge.shared.disableUpdate()
             defer {
                 SkyLightBridge.shared.reenableUpdate()
@@ -579,20 +596,6 @@ public final class WorkspaceManager {
                     restoreWindow(wid: wid)
                 }
                 SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
-
-                // Elevate secondary incoming windows so all windows on the new workspace appear together
-                if wid != targetFocusWid {
-                    if let pid = windowPIDs[wid] ?? getPID(for: wid), pid > 0 {
-                        _ = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)
-                        if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
-                            AXUIElementPerformAction(winElem, kAXRaiseAction as CFString)
-                        }
-                    }
-                }
-            }
-
-            if let wid = targetFocusWid {
-                focusWindow(wid: wid)
             }
 
             onWorkspaceChange?(number)
@@ -601,26 +604,6 @@ public final class WorkspaceManager {
                 object: self,
                 userInfo: ["workspace": number, "oldWorkspace": oldWorkspace]
             )
-
-            AnimationEngine.shared.animateWorkspaceTransition(
-                oldWorkspace: oldWorkspace,
-                newWorkspace: number,
-                outgoingWindowIDs: otherWindows,
-                incomingWindowIDs: activeIDs,
-                screenWidth: bounds.width
-            ) { [weak self] in
-                guard let self = self else { return }
-                for wid in otherWindows {
-                    self.hideWindow(wid: wid)
-                    borderManager.hideOverlay(for: wid)
-                }
-                if !otherWindows.isEmpty {
-                    HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: otherWindows)
-                }
-                if let wid = targetFocusWid {
-                    self.focusWindow(wid: wid)
-                }
-            }
         } else {
             // Atomic Display Update Freezing (SLSDisableUpdate / SLSReenableUpdate)
             SkyLightBridge.shared.disableUpdate()
@@ -638,16 +621,6 @@ public final class WorkspaceManager {
                     restoreWindow(wid: wid)
                 }
                 SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
-
-                // Elevate secondary incoming windows so all windows on the new workspace appear together
-                if wid != targetFocusWid {
-                    if let pid = windowPIDs[wid] ?? getPID(for: wid), pid > 0 {
-                        _ = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)
-                        if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
-                            AXUIElementPerformAction(winElem, kAXRaiseAction as CFString)
-                        }
-                    }
-                }
             }
 
             // Hide windows belonging to other workspaces behind the newly revealed windows
@@ -715,16 +688,6 @@ public final class WorkspaceManager {
             for wid in activeIDs {
                 restoreWindow(wid: wid)
                 SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
-
-                // Elevate secondary incoming windows so all windows on the new workspace appear together
-                if wid != targetFocusWid {
-                    if let pid = windowPIDs[wid] ?? getPID(for: wid), pid > 0 {
-                        _ = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)
-                        if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
-                            AXUIElementPerformAction(winElem, kAXRaiseAction as CFString)
-                        }
-                    }
-                }
             }
 
             // Hide other windows behind
