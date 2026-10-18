@@ -100,7 +100,7 @@ public final class KeybindManager: @unchecked Sendable {
     /// Notification/callback hook for floating state changes.
     public var onToggleFloating: (@Sendable (CGWindowID, Bool) -> Void)?
     /// Notification/callback hook for fullscreen state changes.
-    public var onFullscreenToggle: (@Sendable (CGWindowID, Bool) -> Void)?
+    public var onFullscreenToggle: (@Sendable (CGWindowID, Bool, CGRect?) -> Void)?
     /// Notification/callback hook for window swapping.
     public var onSwapWindow: (@Sendable (CGWindowID, CGWindowID) -> Void)?
     /// Notification/callback hook for window focus changes.
@@ -920,8 +920,9 @@ public final class KeybindManager: @unchecked Sendable {
         lock.unlock()
 
         let nowFullscreen = !wasFullscreen
+        let targetFrame = wasFullscreen ? savedRect : focused.bounds
 
-        self.onFullscreenToggle?(wid, nowFullscreen)
+        self.onFullscreenToggle?(wid, nowFullscreen, targetFrame)
 
         NotificationCenter.default.post(
             name: Notification.Name("HyprMacToggleFullscreen"),

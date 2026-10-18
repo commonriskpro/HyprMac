@@ -237,6 +237,9 @@ public final class WorkspaceManager {
     /// Optional provider to identify floating windows and exclude them from auto-tiling during transitions.
     public var isFloating: (@Sendable (CGWindowID) -> Bool)?
 
+    /// Optional provider to identify fullscreen windows and preserve their fullscreen bounds across workspace transitions.
+    public var isFullscreen: (@Sendable (CGWindowID) -> Bool)?
+
     public init() {}
 
     // MARK: - Window Assignment & Lifecycle
@@ -310,6 +313,7 @@ public final class WorkspaceManager {
         minimizedWindowIDs.removeAll()
         windowOrder.removeAll()
         isFloating = nil
+        isFullscreen = nil
         WindowDetector.shared.clearCache()
     }
 
@@ -550,100 +554,128 @@ public final class WorkspaceManager {
 
         // Step 1: Pre-calculate the new layout upfront using Dwindle BEFORE moving any window
         let activeIDs = activeWindowIDs()
-        let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) }
-        let targetFrames = dwindle.tileWindows(windowIDs: tiledIDs, in: bounds)
+        let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) && !(isFullscreen?($0) ?? false) }
+        var targetFrames = dwindle.tileWindows(windowIDs: tiledIDs, in: bounds)
+        for wid in activeIDs where isFullscreen?(wid) == true {
+            targetFrames[wid] = bounds
+        }
 
-        // Step 2: Hide windows belonging to other workspaces
+        // Step 2: Inactive windows belonging to other workspaces
         let otherWindows = windowOrder.filter { windowWorkspaces[$0] != activeWorkspace }
         let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
 
+        let allScreens = HiddenWindowPlacement.allCGScreens()
+        let defaultScreen = NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? bounds
+        let defaultSize = CGSize(width: max(200.0, defaultScreen.width * 0.5), height: max(200.0, defaultScreen.height * 0.5))
+        let fallbackFrame = CGRect(origin: defaultScreen.origin, size: defaultSize)
 
-        let useGpuAnimation = HyprServerBridge.shared.isAvailable &&
-            AnimationEngine.shared.config.animationsEnabled &&
-            AnimationEngine.shared.config.animationTree.getConfig(for: "workspaces").enabled
+        struct WindowMoveItem: Sendable {
+            let wid: CGWindowID
+            let pid: pid_t
+            let targetOrigin: CGPoint
+            let targetSize: CGSize?
+            let isHidden: Bool
+        }
 
-        if useGpuAnimation {
-            AnimationEngine.shared.animateWorkspaceTransition(
-                oldWorkspace: oldWorkspace,
-                newWorkspace: number,
-                outgoingWindowIDs: otherWindows,
-                incomingWindowIDs: activeIDs,
-                screenWidth: bounds.width
-            ) { [weak self] in
-                guard let self = self else { return }
-                for wid in otherWindows {
-                    self.hideWindow(wid: wid)
-                    borderManager.hideOverlay(for: wid)
-                }
-                if let wid = targetFocusWid {
-                    self.focusWindow(wid: wid)
-                }
+        var perApp: [pid_t: [WindowMoveItem]] = [:]
+
+        // 1. Outgoing windows: pre-calculate 1px anchor geometry offscreen
+        for wid in otherWindows {
+            let pid = windowPIDs[wid] ?? getPID(for: wid) ?? 0
+            if pid > 0 { windowPIDs[wid] = pid }
+
+            let baseFrame = storedFrames[wid] ?? fallbackFrame
+            if storedFrames[wid] == nil {
+                storedFrames[wid] = baseFrame
             }
+            let targetScreen = HiddenWindowPlacement.screen(for: baseFrame, among: allScreens)
+            let otherScreens = allScreens.filter { $0 != targetScreen }
 
-            SkyLightBridge.shared.disableUpdate()
-            defer {
-                SkyLightBridge.shared.reenableUpdate()
-            }
-
-            for wid in otherWindows {
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
-            }
-
-            for wid in activeIDs {
-                if let target = targetFrames[wid] {
-                    restoreWindow(wid: wid, targetFrame: target)
-                } else {
-                    restoreWindow(wid: wid)
-                }
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
-            }
-
-            onWorkspaceChange?(number)
-            NotificationCenter.default.post(
-                name: Notification.Name("HyprMacWorkspaceDidChange"),
-                object: self,
-                userInfo: ["workspace": number, "oldWorkspace": oldWorkspace]
+            let hiddenRect = HiddenWindowPlacement.calculate(
+                screen: targetScreen,
+                windowSize: baseFrame.size,
+                preferredCorner: .bottomRight,
+                otherScreens: otherScreens
             )
-        } else {
-            // Atomic Display Update Freezing (SLSDisableUpdate / SLSReenableUpdate)
-            SkyLightBridge.shared.disableUpdate()
+            perApp[pid, default: []].append(WindowMoveItem(
+                wid: wid,
+                pid: pid,
+                targetOrigin: hiddenRect.origin,
+                targetSize: nil,
+                isHidden: true
+            ))
+        }
 
-            for wid in otherWindows {
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
-            }
+        // 2. Incoming windows: pre-calculate layout frame geometry on screen
+        for wid in activeIDs {
+            let pid = windowPIDs[wid] ?? getPID(for: wid) ?? 0
+            if pid > 0 { windowPIDs[wid] = pid }
 
-            // Invariant (Reveal-First): Reveal and raise active workspace windows BEFORE hiding inactive windows
-            // so target surfaces cover the display immediately and the desktop wallpaper is never exposed.
-            for wid in activeIDs {
-                if let target = targetFrames[wid] {
-                    restoreWindow(wid: wid, targetFrame: target)
-                } else {
-                    restoreWindow(wid: wid)
-                }
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
-            }
+            let targetFrame = targetFrames[wid] ?? storedFrames[wid] ?? fallbackFrame
+            let curSz = storedFrames[wid]?.size ?? targetFrame.size
+            let sizeChanged = abs(curSz.width - targetFrame.size.width) > 0.5 || abs(curSz.height - targetFrame.size.height) > 0.5
 
-            // Hide windows belonging to other workspaces behind the newly revealed windows
-            for wid in otherWindows {
-                hideWindow(wid: wid)
-                borderManager.hideOverlay(for: wid)
-            }
+            storedFrames[wid] = targetFrame
 
-            // Synchronously update Waybar active workspace indicator BEFORE re-enabling updates
-            // so both the bar pill and the windows commit to the screen in the EXACT same V-Sync frame!
-            onWorkspaceChange?(number)
-            NotificationCenter.default.post(
-                name: Notification.Name("HyprMacWorkspaceDidChange"),
-                object: self,
-                userInfo: ["workspace": number, "oldWorkspace": oldWorkspace]
-            )
+            perApp[pid, default: []].append(WindowMoveItem(
+                wid: wid,
+                pid: pid,
+                targetOrigin: targetFrame.origin,
+                targetSize: sizeChanged ? targetFrame.size : nil,
+                isHidden: false
+            ))
+        }
 
-            // Commit atomic scene update to WindowServer
+        // Atomic Display Update Freezing (SLSDisableUpdate / SLSReenableUpdate)
+        SkyLightBridge.shared.disableUpdate()
+        defer {
             SkyLightBridge.shared.reenableUpdate()
+        }
 
-            if let wid = targetFocusWid {
-                focusWindow(wid: wid)
+        // 3. Dispatch parallel per-app window movement (exact Rift AppActor concurrency model)
+        let appBatches = Array(perApp.values)
+        if !appBatches.isEmpty {
+            DispatchQueue.concurrentPerform(iterations: appBatches.count) { index in
+                let batch = appBatches[index]
+                // Within the same application, move outgoing windows offscreen before positioning incoming windows
+                let sortedMoves = batch.sorted { $0.isHidden && !$1.isHidden }
+                for move in sortedMoves {
+                    guard let elem = WindowDetector.shared.getWindowAXElement(windowID: move.wid, pid: move.pid) else {
+                        _ = WindowDetector.shared.setWindowPosition(windowID: move.wid, point: move.targetOrigin, pid: move.pid)
+                        continue
+                    }
+
+                    if let sz = move.targetSize {
+                        var s = sz
+                        if let sv = AXValueCreate(.cgSize, &s) {
+                            AXUIElementSetAttributeValue(elem, kAXSizeAttribute as CFString, sv)
+                        }
+                    }
+
+                    var pt = move.targetOrigin
+                    if let pv = AXValueCreate(.cgPoint, &pt) {
+                        AXUIElementSetAttributeValue(elem, kAXPositionAttribute as CFString, pv)
+                    }
+                }
             }
+        }
+
+        // 4. Clean up overlays for inactive workspace windows
+        for wid in otherWindows {
+            borderManager.hideOverlay(for: wid)
+        }
+
+        // 5. Synchronously update Waybar active workspace indicator BEFORE re-enabling updates
+        onWorkspaceChange?(number)
+        NotificationCenter.default.post(
+            name: Notification.Name("HyprMacWorkspaceDidChange"),
+            object: self,
+            userInfo: ["workspace": number, "oldWorkspace": oldWorkspace]
+        )
+
+        // 6. Immediately focus the active window on the newly revealed workspace
+        if let wid = targetFocusWid {
+            focusWindow(wid: wid)
         }
     }
 
@@ -678,32 +710,79 @@ public final class WorkspaceManager {
                 }
             }
 
-            SkyLightBridge.shared.disableUpdate()
+            let bounds = boundsProvider?() ?? defaultTilingBounds()
+            let allScreens = HiddenWindowPlacement.allCGScreens()
+            let defaultScreen = NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? bounds
+            let defaultSize = CGSize(width: max(200.0, defaultScreen.width * 0.5), height: max(200.0, defaultScreen.height * 0.5))
+            let fallbackFrame = CGRect(origin: defaultScreen.origin, size: defaultSize)
+
+            struct WindowMoveItem: Sendable {
+                let wid: CGWindowID
+                let pid: pid_t
+                let targetOrigin: CGPoint
+                let targetSize: CGSize?
+                let isHidden: Bool
+            }
+
+            var perApp: [pid_t: [WindowMoveItem]] = [:]
 
             for wid in otherWindows {
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
+                let pid = windowPIDs[wid] ?? getPID(for: wid) ?? 0
+                if pid > 0 { windowPIDs[wid] = pid }
+                let baseFrame = storedFrames[wid] ?? fallbackFrame
+                if storedFrames[wid] == nil { storedFrames[wid] = baseFrame }
+                let targetScreen = HiddenWindowPlacement.screen(for: baseFrame, among: allScreens)
+                let otherScreens = allScreens.filter { $0 != targetScreen }
+                let hiddenRect = HiddenWindowPlacement.calculate(
+                    screen: targetScreen,
+                    windowSize: baseFrame.size,
+                    preferredCorner: .bottomRight,
+                    otherScreens: otherScreens
+                )
+                perApp[pid, default: []].append(WindowMoveItem(wid: wid, pid: pid, targetOrigin: hiddenRect.origin, targetSize: nil, isHidden: true))
             }
 
-            // Reveal active windows first
             for wid in activeIDs {
-                restoreWindow(wid: wid)
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
+                let pid = windowPIDs[wid] ?? getPID(for: wid) ?? 0
+                if pid > 0 { windowPIDs[wid] = pid }
+                let targetFrame = (isFullscreen?(wid) == true ? bounds : storedFrames[wid]) ?? fallbackFrame
+                if isFullscreen?(wid) == true {
+                    storedFrames[wid] = targetFrame
+                }
+                perApp[pid, default: []].append(WindowMoveItem(wid: wid, pid: pid, targetOrigin: targetFrame.origin, targetSize: nil, isHidden: false))
             }
 
-            // Hide other windows behind
+            SkyLightBridge.shared.disableUpdate()
+            defer { SkyLightBridge.shared.reenableUpdate() }
+
+            let appBatches = Array(perApp.values)
+            if !appBatches.isEmpty {
+                DispatchQueue.concurrentPerform(iterations: appBatches.count) { index in
+                    let batch = appBatches[index]
+                    let sortedMoves = batch.sorted { $0.isHidden && !$1.isHidden }
+                    for move in sortedMoves {
+                        guard let elem = WindowDetector.shared.getWindowAXElement(windowID: move.wid, pid: move.pid) else {
+                            _ = WindowDetector.shared.setWindowPosition(windowID: move.wid, point: move.targetOrigin, pid: move.pid)
+                            continue
+                        }
+                        var pt = move.targetOrigin
+                        if let pv = AXValueCreate(.cgPoint, &pt) {
+                            AXUIElementSetAttributeValue(elem, kAXPositionAttribute as CFString, pv)
+                        }
+                    }
+                }
+            }
+
             for wid in otherWindows {
                 hideWindow(wid: wid)
             }
 
-            // Synchronously update bar before re-enabling updates so changes commit in the same frame
             onWorkspaceChange?(number)
             NotificationCenter.default.post(
                 name: Notification.Name("HyprMacWorkspaceDidChange"),
                 object: self,
                 userInfo: ["workspace": number, "oldWorkspace": oldWorkspace]
             )
-
-            SkyLightBridge.shared.reenableUpdate()
 
             if let wid = targetFocusWid {
                 focusWindow(wid: wid)
@@ -784,7 +863,7 @@ public final class WorkspaceManager {
 
             // Retile remaining active windows on current workspace
             let activeIDs = activeWindowIDs()
-            let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) }
+            let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) && !(isFullscreen?($0) ?? false) }
             if let engine = engine {
                 let frames = engine.tileWindows(windowIDs: tiledIDs, in: tileBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
@@ -817,9 +896,7 @@ public final class WorkspaceManager {
         if let ws = windowWorkspaces[wid] {
             lastFocusedPerWorkspace[ws] = wid
         }
-        SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
-
-        let pid = windowPIDs[wid] ?? getPID(for: wid)
+                let pid = windowPIDs[wid] ?? getPID(for: wid)
 
         if let pid = pid, pid > 0 {
             let madeKey = SkyLightBridge.shared.makeKeyWindow(pid: pid, windowID: wid)

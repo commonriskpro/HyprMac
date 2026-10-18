@@ -536,4 +536,31 @@ final class WorkspaceManagerTests: XCTestCase {
         XCTAssertFalse(manager.manualSwitchInProgress)
         XCTAssertFalse(manager.isSwitchInProgress(settleInterval: 0.500))
     }
+
+    func testFullscreenWindowPreservesFullscreenBoundsAcrossWorkspaceSwitches() {
+        let manager = WorkspaceManager()
+        let dwindle = DwindleEngine()
+        let border = BorderManager()
+        let bounds = CGRect(x: 0, y: 30, width: 1920, height: 1050)
+
+        // Assign windows 101 and 102 to workspace 1
+        manager.assignWindow(wid: 101, to: 1)
+        manager.assignWindow(wid: 102, to: 1)
+        // Assign window 201 to workspace 2
+        manager.assignWindow(wid: 201, to: 2)
+
+        // Window 101 is marked fullscreen
+        let fullscreenSet: Set<CGWindowID> = [101]
+        manager.isFullscreen = { fullscreenSet.contains($0) }
+
+        // Switch to workspace 2
+        manager.switchToWorkspace(number: 2, in: bounds, dwindle: dwindle, borderManager: border)
+        XCTAssertEqual(manager.activeWorkspace, 2)
+
+        // Switch back to workspace 1: window 101 must NOT shrink into a half-screen dwindle tile!
+        manager.switchToWorkspace(number: 1, in: bounds, dwindle: dwindle, borderManager: border)
+        XCTAssertEqual(manager.storedFrame(for: 101), bounds, "Window 101 must remain fullscreen at bounds when switching back to workspace 1")
+        let expectedTile = CGRect(x: 10, y: 40, width: 1900, height: 1030)
+        XCTAssertEqual(manager.storedFrame(for: 102), expectedTile, "Window 102 tiles with dwindle gaps underneath fullscreen window 101")
+    }
 }

@@ -1044,6 +1044,9 @@ func runIntegratedDaemon(configPath: String?) {
     workspaceManager.isFloating = { [weak keyManager] wid in
         keyManager?.isFloating(windowID: wid) ?? false
     }
+    workspaceManager.isFullscreen = { [weak keyManager] wid in
+        keyManager?.isFullscreen(windowID: wid) ?? false
+    }
 
     let handleUnminimize: @MainActor (CGWindowID, pid_t?) -> Void = { wid, pid in
         guard wid > 0 else { return }
@@ -1196,7 +1199,7 @@ func runIntegratedDaemon(configPath: String?) {
         }
     }
 
-    keyManager.onFullscreenToggle = { [weak dwindleEngine, weak workspaceManager, weak borderManager, weak keyManager] wid, isFullscreen in
+    keyManager.onFullscreenToggle = { [weak dwindleEngine, weak workspaceManager, weak borderManager, weak keyManager] wid, isFullscreen, savedFrame in
         MainActor.assumeIsolated {
             guard let engine = dwindleEngine, let wsMgr = workspaceManager, let bMgr = borderManager, let km = keyManager else { return }
             let tilingBounds = computeTilingBounds()
@@ -1205,7 +1208,8 @@ func runIntegratedDaemon(configPath: String?) {
 
             if isFullscreen {
                 let fullBounds = computeTilingBounds()
-                let curBounds = km.getStoredFullscreenFrame(wid) ?? engine.currentFrames()[wid] ?? WindowDetector.shared.fastFocusedWindow()?.bounds ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
+                wsMgr.setStoredFrame(fullBounds, for: wid)
+                let curBounds = savedFrame ?? engine.currentFrames()[wid] ?? WindowDetector.shared.fastFocusedWindow()?.bounds ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
 
                 // Recalculate layout for remaining tiled windows
                 let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
@@ -1230,12 +1234,13 @@ func runIntegratedDaemon(configPath: String?) {
                 let targetFrame: CGRect
 
                 if km.isFloating(windowID: wid) {
-                    targetFrame = km.getStoredFullscreenFrame(wid) ?? tilingBounds
+                    targetFrame = savedFrame ?? km.getStoredFullscreenFrame(wid) ?? tilingBounds
                 } else if let targetTile = frames[wid] {
                     targetFrame = targetTile
                 } else {
-                    targetFrame = tilingBounds
+                    targetFrame = savedFrame ?? tilingBounds
                 }
+                wsMgr.setStoredFrame(targetFrame, for: wid)
 
                 let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
 
