@@ -200,7 +200,7 @@ public final class KeybindManager: @unchecked Sendable {
                 let arg = binding.args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if arg == "previous" {
                     self.switchToLastWorkspace()
-                } else if let num = Int(binding.args) {
+                } else if let num = Int(arg) {
                     self.workspace(number: num)
                 }
             case "switch_to_last_workspace":
@@ -214,7 +214,8 @@ public final class KeybindManager: @unchecked Sendable {
             case "fullscreen", "toggle_fullscreen", "toggle_fullscreen_within_gaps":
                 self.fullscreen()
             case "movetoworkspace", "move_window_to_workspace":
-                if let num = Int(binding.args) {
+                let arg = binding.args.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let num = Int(arg) {
                     self.movetoworkspace(number: num)
                 }
             case "togglesplit", "toggle_orientation":
@@ -419,7 +420,6 @@ public final class KeybindManager: @unchecked Sendable {
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let relevantFlags = event.flags.intersection(Self.standardModifierMask)
         let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-        print("[KeyTap] keyDown keyCode: \(keyCode) flags: \(relevantFlags.rawValue)")
 
         var matched: KeyBinding? = nil
         lock.lock()
@@ -432,7 +432,6 @@ public final class KeybindManager: @unchecked Sendable {
         lock.unlock()
 
         if let binding = matched {
-            print("[KeyTap] MATCHED binding: \(binding.description), action: killactive/other")
             // Drop autorepeat for navigation, workspace, and window action keys so holding Alt + 1 does not bounce or spam transitions
             if isAutorepeat && !binding.allowAutorepeat {
                 if binding.isExclusive {

@@ -140,7 +140,16 @@ fi
 
 log_info "Running swift build..."
 swift build
-log_pass "Swift CLI package built successfully (HyprMac)"
+SWIFT_BIN_DIR="$(swift build --show-bin-path 2>/dev/null || true)"
+SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application:" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "${SIGN_ID}" ]; then
+    SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development:" | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
+if [ -n "${SIGN_ID}" ] && [ -n "${SWIFT_BIN_DIR}" ] && [ -f "${SWIFT_BIN_DIR}/HyprMac" ]; then
+    log_info "Signing HyprMac with ${SIGN_ID}..."
+    codesign -s "${SIGN_ID}" --force --timestamp "${SWIFT_BIN_DIR}/HyprMac"
+fi
+log_pass "Swift CLI package built and signed successfully (HyprMac)"
 
 log_info "Compiling IPC test harness..."
 make -C tests
