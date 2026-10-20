@@ -118,7 +118,7 @@ On Linux, a Hyprland rice gives you total control: square corners, zero shadows,
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/saturno/HyprMac.git
+git clone https://github.com/commonriskpro/HyprMac.git
 cd HyprMac
 
 # 2. Build native ARM64e injector, compositor hook, and Swift application
