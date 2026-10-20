@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>50 Command Centers & Dotfiles Gallery</title>
+  <style>
+    :root {
+      --bg: #090b10;
+      --card-bg: #141721;
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent: #f59e0b;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 24px;
+      line-height: 1.5;
+    }
+    header {
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .badge {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--accent);
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .counter {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 20px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(245, 158, 11, 0.4);
+    }
+    .img-wrap {
+      width: 100%;
+      height: 210px;
+      background: #000;
+      overflow: hidden;
+      cursor: pointer;
+      position: relative;
+    }
+    .img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      display: block;
+      transition: transform 0.3s ease;
+    }
+    .img-wrap:hover img {
+      transform: scale(1.03);
+    }
+    .card-num {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      color: #fff;
+      font-weight: 700;
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .card-body {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .tag {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+    .tag.wm { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+    .tag.tool { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      padding-top: 10px;
+    }
+    .author { font-size: 11px; color: var(--text-muted); }
+    .gh-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .gh-link:hover { text-decoration: underline; }
+    /* Modal */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.9);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+      cursor: zoom-out;
+    }
+    .modal img {
+      max-width: 95vw;
+      max-height: 95vh;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Galeria de 50 Command Centers <span class="badge">50 Temas</span></h1>
+      <p class="counter">Hacé click en cualquier foto para agrandarla a pantalla completa.</p>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_01_pq8m5r__dwm__Widgets__two_layout__Do_.jpg')">
+        <span class="card-num">#01</span>
+        <img src="cc_01_pq8m5r__dwm__Widgets__two_layout__Do_.jpg" alt="[dwm] Widgets, two layout. Do you like light theme?" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[dwm] Widgets, two layout. Do you like light theme?</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">dwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 2190</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Rashad_707</span>
+          <a class="gh-link" href="https://github.com/Rashad-707/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_02_mioauy__Openbox__Eww__Its_Pastel_.png')">
+        <span class="card-num">#02</span>
+        <img src="cc_02_mioauy__Openbox__Eww__Its_Pastel_.png" alt="[Openbox] Eww, Its Pastel!" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Openbox] Eww, Its Pastel!</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Openbox</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1866</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/TheSuburbanExorcist</span>
+          <a class="gh-link" href="https://github.com/obliviousofcraps/mf-dots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_03_nqri3y__openbox__Did_someone_say____W.png')">
+        <span class="card-num">#03</span>
+        <img src="cc_03_nqri3y__openbox__Did_someone_say____W.png" alt="[openbox] Did someone say... Widgets?" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[openbox] Did someone say... Widgets?</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Openbox</span>
+            <span class="tag tool">Widgets / EWW</span>
+            <span class="tag">★ 1538</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/adi1090x</span>
+          <a class="gh-link" href="https://github.com/archcraft-os/archcraft-style-openbox" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_04_o9fa24__Openbox__Eww__Not_Again__Its_.png')">
+        <span class="card-num">#04</span>
+        <img src="cc_04_o9fa24__Openbox__Eww__Not_Again__Its_.png" alt="[Openbox] Eww! Not Again. Its Pastel Once More." loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Openbox] Eww! Not Again. Its Pastel Once More.</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Openbox</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1529</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/TheSuburbanExorcist</span>
+          <a class="gh-link" href="https://github.com/obliviousofcraps/mf-dots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_05_q9x3f5__Sway__My_attempt_at_creating_.png')">
+        <span class="card-num">#05</span>
+        <img src="cc_05_q9x3f5__Sway__My_attempt_at_creating_.png" alt="[Sway] My attempt at creating an eye-pleasing environment." loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Sway] My attempt at creating an eye-pleasing environment.</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Sway</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1479</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/ponos_ebuchij</span>
+          <a class="gh-link" href="https://github.com/n0tsteve/glorious-dots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_06_rvdfvv__i3-gaps__My_first_rice__What_.png')">
+        <span class="card-num">#06</span>
+        <img src="cc_06_rvdfvv__i3-gaps__My_first_rice__What_.png" alt="[i3-gaps] My first rice. What do you think about it?" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[i3-gaps] My first rice. What do you think about it?</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">i3</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1424</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/InflationFluffy3162</span>
+          <a class="gh-link" href="https://github.com/CodeHeister/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_07_vvrb3j__bspwm__Me_humble_first_EWW_ri.png')">
+        <span class="card-num">#07</span>
+        <img src="cc_07_vvrb3j__bspwm__Me_humble_first_EWW_ri.png" alt="[bspwm] Me humble first EWW rice!" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[bspwm] Me humble first EWW rice!</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1209</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Gwynsaov</span>
+          <a class="gh-link" href="https://github.com/Gwynsav/messydots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_08_13kw0uy_Roses_are_red___Hyprland__is_b.png')">
+        <span class="card-num">#08</span>
+        <img src="cc_08_13kw0uy_Roses_are_red___Hyprland__is_b.png" alt="Roses are red, [Hyprland] is blue, when the world ends, all I need is Eww!" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">Roses are red, [Hyprland] is blue, when the world ends, all I need is Eww!</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1158</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/anantnrg</span>
+          <a class="gh-link" href="https://github.com/anantnrg/hypr_eww" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_09_x8nlf4__Hyprland__WOOOO_ANIMATIONS.png')">
+        <span class="card-num">#09</span>
+        <img src="cc_09_x8nlf4__Hyprland__WOOOO_ANIMATIONS.png" alt="[Hyprland] WOOOO ANIMATIONS" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] WOOOO ANIMATIONS</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1149</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/OVERRATEDADDICT</span>
+          <a class="gh-link" href="https://github.com/anchovyyy/hyprlandots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_10_ygn0s5__BSPWM__Updated_my_rice_with_n.jpg')">
+        <span class="card-num">#10</span>
+        <img src="cc_10_ygn0s5__BSPWM__Updated_my_rice_with_n.jpg" alt="[BSPWM] Updated my rice with new EWW bar and material you like control center." loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM] Updated my rice with new EWW bar and material you like control center.</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">Widgets / EWW</span>
+            <span class="tag">★ 1142</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/PoSayDone</span>
+          <a class="gh-link" href="https://github.com/PoSayDone/.dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_11_wwtq70__openbox___Eww_is_so_cool.png')">
+        <span class="card-num">#11</span>
+        <img src="cc_11_wwtq70__openbox___Eww_is_so_cool.png" alt="[openbox]: Eww is so cool" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[openbox]: Eww is so cool</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Openbox</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1095</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/AlphaTechnolog</span>
+          <a class="gh-link" href="https://github.com/alphatechnolog/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_12_108wizo__Hyprland__Green_and_Gruvbox_.png')">
+        <span class="card-num">#12</span>
+        <img src="cc_12_108wizo__Hyprland__Green_and_Gruvbox_.png" alt="[Hyprland] Green and Gruvbox™" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Green and Gruvbox™</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1013</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/AIDS-RAT</span>
+          <a class="gh-link" href="https://github.com/prettykool/dots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_13_weshsb__BSPWM___EWW__Introducing_Quix.png')">
+        <span class="card-num">#13</span>
+        <img src="cc_13_weshsb__BSPWM___EWW__Introducing_Quix.png" alt="[BSPWM + EWW] Introducing Quixotic Color Scheme with a Clean & Simple Rice" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM + EWW] Introducing Quixotic Color Scheme with a Clean & Simple Rice</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 1005</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/_dystop</span>
+          <a class="gh-link" href="https://github.com/ljmill/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_14_vs46w3__eww__MacOS_like_control_cente.png')">
+        <span class="card-num">#14</span>
+        <img src="cc_14_vs46w3__eww__MacOS_like_control_cente.png" alt="[eww] MacOS like control center.... but better" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[eww] MacOS like control center.... but better</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 886</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/_dystop</span>
+          <a class="gh-link" href="https://github.com/ljmill/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_15_s2u052__BSPWM__I_Like_Green.jpg')">
+        <span class="card-num">#15</span>
+        <img src="cc_15_s2u052__BSPWM__I_Like_Green.jpg" alt="[BSPWM] I Like Green" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM] I Like Green</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 877</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Niraj998</span>
+          <a class="gh-link" href="https://github.com/niraj998/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_16_1k4sv22__Hyprland_________.png')">
+        <span class="card-num">#16</span>
+        <img src="cc_16_1k4sv22__Hyprland_________.png" alt="[Hyprland] 【=◈︿◈=】" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] 【=◈︿◈=】</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">AGS</span>
+            <span class="tag">★ 829</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/InternetExplorer9999</span>
+          <a class="gh-link" href="https://github.com/hyprwm/Hyprland" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_17_mfbrkx__BSPWM__bspwm_is_my_new_best_f.png')">
+        <span class="card-num">#17</span>
+        <img src="cc_17_mfbrkx__BSPWM__bspwm_is_my_new_best_f.png" alt="[BSPWM] bspwm is my new best friend" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM] bspwm is my new best friend</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 742</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/TheRealKizu</span>
+          <a class="gh-link" href="https://github.com/TheRealKizu/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_18_w4fgds__BSPWM___EWW__Sizzling_Rice_So.png')">
+        <span class="card-num">#18</span>
+        <img src="cc_18_w4fgds__BSPWM___EWW__Sizzling_Rice_So.png" alt="[BSPWM + EWW] Sizzling Rice Soup and Yum Yum Sauce" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM + EWW] Sizzling Rice Soup and Yum Yum Sauce</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 739</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/_dystop</span>
+          <a class="gh-link" href="https://github.com/ljmill/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_19_w9s22b__Hyprland__Noble.png')">
+        <span class="card-num">#19</span>
+        <img src="cc_19_w9s22b__Hyprland__Noble.png" alt="[Hyprland] Noble" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Noble</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 697</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/taylor85345</span>
+          <a class="gh-link" href="https://github.com/taylor85345/garden-hyprland-dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_20_wb831o__bspwm__Another_rice_with_my_c.jpg')">
+        <span class="card-num">#20</span>
+        <img src="cc_20_wb831o__bspwm__Another_rice_with_my_c.jpg" alt="[bspwm] Another rice with my custom theme called Wave (inspired by rxyhn's night colorscheme)! LMK your thoughts!" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[bspwm] Another rice with my custom theme called Wave (inspired by rxyhn's night colorscheme)! LMK your thoughts!</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 648</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/ChadCat5207</span>
+          <a class="gh-link" href="https://github.com/dark-Jedi2108/dots.sh" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_21_1lytvrc__Hyprland__Everforest_is_so_so.png')">
+        <span class="card-num">#21</span>
+        <img src="cc_21_1lytvrc__Hyprland__Everforest_is_so_so.png" alt="[Hyprland] Everforest is so soothing to the eyes 🌸" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Everforest is so soothing to the eyes 🌸</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Swaync</span>
+            <span class="tag">★ 597</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Clear_Finding_8038</span>
+          <a class="gh-link" href="https://github.com/Abhra00/hyprdots.git" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_22_1r9h3qb__Hyprland__Man_I_love__F6A0CA.png')">
+        <span class="card-num">#22</span>
+        <img src="cc_22_1r9h3qb__Hyprland__Man_I_love__F6A0CA.png" alt="[Hyprland] Man I love #F6A0CA" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Man I love #F6A0CA</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">AGS</span>
+            <span class="tag">★ 587</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Khymmmm</span>
+          <a class="gh-link" href="https://github.com/gitKhym/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_23_141d234__Hyprland__Updated_my_config.png')">
+        <span class="card-num">#23</span>
+        <img src="cc_23_141d234__Hyprland__Updated_my_config.png" alt="[Hyprland] Updated my config" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Updated my config</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 564</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/NespoliBT</span>
+          <a class="gh-link" href="https://github.com/NespoliBT/.dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_24_wf23xr__DWM__It_s__suck_s_less___.png')">
+        <span class="card-num">#24</span>
+        <img src="cc_24_wf23xr__DWM__It_s__suck_s_less___.png" alt="[DWM] It(s) suck(s)less :)" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[DWM] It(s) suck(s)less :)</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">dwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 560</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Mortal22Soul</span>
+          <a class="gh-link" href="https://github.com/Mortal22Soul/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_25_12cgczg__Hyprland__New_life__new_rice.png')">
+        <span class="card-num">#25</span>
+        <img src="cc_25_12cgczg__Hyprland__New_life__new_rice.png" alt="[Hyprland] New life, new rice" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] New life, new rice</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 524</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/NespoliBT</span>
+          <a class="gh-link" href="https://github.com/NespoliBT/.dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_26_141vlmd__BSPWM__Updated_my_old_EWW_con.png')">
+        <span class="card-num">#26</span>
+        <img src="cc_26_141vlmd__BSPWM__Updated_my_old_EWW_con.png" alt="[BSPWM] Updated my old EWW config" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM] Updated my old EWW config</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 523</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/dliuzhiyu</span>
+          <a class="gh-link" href="https://github.com/mountain-theme/Mountain" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_27_1rfiltp__Niri__Switched_to_Niri_6_Mont.png')">
+        <span class="card-num">#27</span>
+        <img src="cc_27_1rfiltp__Niri__Switched_to_Niri_6_Mont.png" alt="[Niri] Switched to Niri 6 Months ago, Forgot to post my rice." loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Niri] Switched to Niri 6 Months ago, Forgot to post my rice.</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Niri</span>
+            <span class="tag tool">Swaync</span>
+            <span class="tag">★ 523</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/pretty_lame_jokes</span>
+          <a class="gh-link" href="https://github.com/swaykh/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_28_v9ea6z__herbstluftwm__Trying_out_titl.png')">
+        <span class="card-num">#28</span>
+        <img src="cc_28_v9ea6z__herbstluftwm__Trying_out_titl.png" alt="[herbstluftwm] Trying out title bars" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[herbstluftwm] Trying out title bars</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Herbstluftwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 522</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/is0n_</span>
+          <a class="gh-link" href="https://github.com/is0n/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_29_1kvosly__Niri__Took_something_from_pew.png')">
+        <span class="card-num">#29</span>
+        <img src="cc_29_1kvosly__Niri__Took_something_from_pew.png" alt="[Niri] Took something from pewdiepie" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Niri] Took something from pewdiepie</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Niri</span>
+            <span class="tag tool">AGS</span>
+            <span class="tag">★ 513</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/oihhhhio</span>
+          <a class="gh-link" href="https://github.com/ogios/dots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_30_1eawln9__Hyprland__My_first_cooked_ric.png')">
+        <span class="card-num">#30</span>
+        <img src="cc_30_1eawln9__Hyprland__My_first_cooked_ric.png" alt="[Hyprland] My first cooked rice" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] My first cooked rice</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Swaync</span>
+            <span class="tag">★ 482</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Ebanay_Logical1354</span>
+          <a class="gh-link" href="https://github.com/hyprwm/Hyprland" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_31_114jjxn__XMonad__Ep_3__Ewwification___.png')">
+        <span class="card-num">#31</span>
+        <img src="cc_31_114jjxn__XMonad__Ep_3__Ewwification___.png" alt="[XMonad] Ep 3: Ewwification ++ Starter Kit (see comments)" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[XMonad] Ep 3: Ewwification ++ Starter Kit (see comments)</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Xmonad</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 479</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/SlytherinDescendant</span>
+          <a class="gh-link" href="https://github.com/xmonad/xmonad" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_32_1qnvgjm__Hyprland__Wasted_time.png')">
+        <span class="card-num">#32</span>
+        <img src="cc_32_1qnvgjm__Hyprland__Wasted_time.png" alt="[Hyprland] Wasted time" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Wasted time</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Quickshell</span>
+            <span class="tag">★ 478</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/obsqrbtz</span>
+          <a class="gh-link" href="https://github.com/obsqrbtz/archdots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_33_1i79aqc__Hyprland_NiOS_with_hyprland_w.png')">
+        <span class="card-num">#33</span>
+        <img src="cc_33_1i79aqc__Hyprland_NiOS_with_hyprland_w.png" alt="[Hyprland]NiOS with hyprland with hyprscroller and hyprpanel" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland]NiOS with hyprland with hyprscroller and hyprpanel</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">HyprPanel</span>
+            <span class="tag">★ 448</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Lumpy-Ad-9813</span>
+          <a class="gh-link" href="https://github.com/maotseantonio/home" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_34_1s0yhny__Hyprland__Matugen_with_quicks.png')">
+        <span class="card-num">#34</span>
+        <img src="cc_34_1s0yhny__Hyprland__Matugen_with_quicks.png" alt="[Hyprland] Matugen with quickshell: dynamic ui colors for hyprland" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Matugen with quickshell: dynamic ui colors for hyprland</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Quickshell</span>
+            <span class="tag">★ 440</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/ilyamiro1</span>
+          <a class="gh-link" href="https://github.com/ilyamiro/nixos-configuration" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_35_1g7y3nl__swayFX__tokyonight_is_so_unde.png')">
+        <span class="card-num">#35</span>
+        <img src="cc_35_1g7y3nl__swayFX__tokyonight_is_so_unde.png" alt="[swayFX] tokyonight is so underrated" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[swayFX] tokyonight is so underrated</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">SwayFX</span>
+            <span class="tag tool">Swaync</span>
+            <span class="tag">★ 428</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Artemis-Arrow-795</span>
+          <a class="gh-link" href="https://github.com/4rtemis-4rrow/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_36_1lnbgzm__doWM__photodump_of_my_WM.png')">
+        <span class="card-num">#36</span>
+        <img src="cc_36_1lnbgzm__doWM__photodump_of_my_WM.png" alt="[doWM] photodump of my WM" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[doWM] photodump of my WM</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">dowm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 422</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/BobdaProgrammer</span>
+          <a class="gh-link" href="https://github.com/BobdaProgrammer/doWM" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_37_tnwauz__Qtile__I_am_finally_done_with.png')">
+        <span class="card-num">#37</span>
+        <img src="cc_37_tnwauz__Qtile__I_am_finally_done_with.png" alt="[Qtile] I am finally done with my setup. No more ricing!" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Qtile] I am finally done with my setup. No more ricing!</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Qtile</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 407</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Asocia</span>
+          <a class="gh-link" href="https://github.com/Asocia/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_38_1nc1yxu__Hyprland__Its_high_time_I_ric.png')">
+        <span class="card-num">#38</span>
+        <img src="cc_38_1nc1yxu__Hyprland__Its_high_time_I_ric.png" alt="[Hyprland] Its high time I riced the f*** up" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Its high time I riced the f*** up</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">HyprPanel</span>
+            <span class="tag">★ 400</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/SimBoiii</span>
+          <a class="gh-link" href="https://github.com/SimBoi/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_39_1s5kqrk__Hyprland__WEEEEEHOOO__Current.png')">
+        <span class="card-num">#39</span>
+        <img src="cc_39_1s5kqrk__Hyprland__WEEEEEHOOO__Current.png" alt="[Hyprland] WEEEEEHOOO. Current rice showcase." loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] WEEEEEHOOO. Current rice showcase.</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Quickshell</span>
+            <span class="tag">★ 389</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/ilyamiro1</span>
+          <a class="gh-link" href="https://github.com/ilyamiro/nixos-configuration" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_40_1mnqg8e__swayfx__a_setup_that_never_gi.png')">
+        <span class="card-num">#40</span>
+        <img src="cc_40_1mnqg8e__swayfx__a_setup_that_never_gi.png" alt="[swayfx] a setup that never gives you up" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[swayfx] a setup that never gives you up</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">SwayFX</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 386</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/leo1359531</span>
+          <a class="gh-link" href="https://github.com/jepvini/ozzy" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_41_1icpuqv__Hyprland__Broke_up_with_arch_.png')">
+        <span class="card-num">#41</span>
+        <img src="cc_41_1icpuqv__Hyprland__Broke_up_with_arch_.png" alt="[Hyprland] Broke up with arch, now on nix" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Broke up with arch, now on nix</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">AGS</span>
+            <span class="tag">★ 381</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Aln76467</span>
+          <a class="gh-link" href="https://github.com/aworldc/dots" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_42_1tsppq7__Hyprland__Cozy_Setup__Refined.png')">
+        <span class="card-num">#42</span>
+        <img src="cc_42_1tsppq7__Hyprland__Cozy_Setup__Refined.png" alt="[Hyprland] Cozy Setup, Refined" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Cozy Setup, Refined</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Swaync</span>
+            <span class="tag">★ 375</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Yug_699</span>
+          <a class="gh-link" href="https://github.com/yugg755i/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_43_wberis__Plasma__Banana_Kush.png')">
+        <span class="card-num">#43</span>
+        <img src="cc_43_wberis__Plasma__Banana_Kush.png" alt="[Plasma] Banana Kush" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Plasma] Banana Kush</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">KDE Plasma</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 350</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/TheFlyingDwarf</span>
+          <a class="gh-link" href="https://github.com/andarilho42/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_44_1kneqtc__KDE_i3__Easy_on_the_eyes__Pre.png')">
+        <span class="card-num">#44</span>
+        <img src="cc_44_1kneqtc__KDE_i3__Easy_on_the_eyes__Pre.png" alt="[KDE/i3] Easy on the eyes, Pretty, Effective" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[KDE/i3] Easy on the eyes, Pretty, Effective</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">i3</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 348</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Mmmatsu</span>
+          <a class="gh-link" href="https://github.com/Matsuuu/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_45_1h8iz8i__Hyprland__finalized_updating_.png')">
+        <span class="card-num">#45</span>
+        <img src="cc_45_1h8iz8i__Hyprland__finalized_updating_.png" alt="[Hyprland] finalized updating to hyprpanel, Nord is peak" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] finalized updating to hyprpanel, Nord is peak</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Widgets / EWW</span>
+            <span class="tag">★ 347</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/MasterchacooLLL</span>
+          <a class="gh-link" href="https://github.com/nordtheme/nord" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_46_1ubdt2q__Hyprland__Green_leaf__SO_refr.png')">
+        <span class="card-num">#46</span>
+        <img src="cc_46_1ubdt2q__Hyprland__Green_leaf__SO_refr.png" alt="[Hyprland] Green leaf, SO refreshingg" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] Green leaf, SO refreshingg</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Swaync</span>
+            <span class="tag">★ 344</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Noro18</span>
+          <a class="gh-link" href="https://github.com/Noro18/linux-ricing-dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_47_10o9njt__bspwm__umi.png')">
+        <span class="card-num">#47</span>
+        <img src="cc_47_10o9njt__bspwm__umi.png" alt="[bspwm] umi" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[bspwm] umi</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 341</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/battlesqui_d</span>
+          <a class="gh-link" href="https://github.com/Battlesquid/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_48_1stmd4u__Hyprland__NixOS___Hyprland_It.png')">
+        <span class="card-num">#48</span>
+        <img src="cc_48_1stmd4u__Hyprland__NixOS___Hyprland_It.png" alt="[Hyprland] NixOS + Hyprland It is" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] NixOS + Hyprland It is</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">Quickshell</span>
+            <span class="tag">★ 315</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Ok_One612</span>
+          <a class="gh-link" href="https://github.com/robbsbro69/nixos" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_49_11q946a__BSPWM____refreshing_tokyonigh.png')">
+        <span class="card-num">#49</span>
+        <img src="cc_49_11q946a__BSPWM____refreshing_tokyonigh.png" alt="[BSPWM] – refreshing tokyonight rice" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[BSPWM] – refreshing tokyonight rice</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">bspwm</span>
+            <span class="tag tool">eww</span>
+            <span class="tag">★ 299</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/EnergyCreator</span>
+          <a class="gh-link" href="https://github.com/bloznelis/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="img-wrap" onclick="openModal('cc_50_1gts5vb__Hyprland__NixOS_really_is_all.png')">
+        <span class="card-num">#50</span>
+        <img src="cc_50_1gts5vb__Hyprland__NixOS_really_is_all.png" alt="[Hyprland] NixOS really is all that, turns out" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div>
+          <h2 class="card-title">[Hyprland] NixOS really is all that, turns out</h2>
+          <div class="meta-row" style="margin-top: 8px;">
+            <span class="tag wm">Hyprland</span>
+            <span class="tag tool">AGS</span>
+            <span class="tag">★ 298</span>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="author">u/Moist_Soup_231</span>
+          <a class="gh-link" href="https://github.com/professional-username/dotfiles" target="_blank">GitHub ↗</a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="modal" class="modal" onclick="closeModal()">
+    <img id="modal-img" src="" alt="Zoom">
+  </div>
+
+  <script>
+    function openModal(src) {
+      document.getElementById('modal-img').src = src;
+      document.getElementById('modal').style.display = 'flex';
+    }
+    function closeModal() {
+      document.getElementById('modal').style.display = 'none';
+    }
+  </script>
+</body>
+</html>

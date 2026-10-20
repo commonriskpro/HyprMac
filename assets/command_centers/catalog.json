@@ -1,0 +1,921 @@
+[
+  {
+    "index": 1,
+    "id": "pq8m5r",
+    "title": "[dwm] Widgets, two layout. Do you like light theme?",
+    "author": "Rashad_707",
+    "wm": "dwm",
+    "distro": null,
+    "score": 2190,
+    "github": "https://github.com/Rashad-707/dotfiles",
+    "utils": [
+      "eww",
+      "Polybar",
+      "dunst",
+      "Rofi"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_01_pq8m5r__dwm__Widgets__two_layout__Do_.jpg",
+    "source_url": "https://i.redd.it/fjhkzh0ol4o71.jpg"
+  },
+  {
+    "index": 2,
+    "id": "mioauy",
+    "title": "[Openbox] Eww, Its Pastel!",
+    "author": "TheSuburbanExorcist",
+    "wm": "Openbox",
+    "distro": "Arch Linux",
+    "score": 1866,
+    "github": "https://github.com/obliviousofcraps/mf-dots",
+    "utils": [
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_02_mioauy__Openbox__Eww__Its_Pastel_.png",
+    "source_url": "https://i.redd.it/hmy571afhsq61.png"
+  },
+  {
+    "index": 3,
+    "id": "nqri3y",
+    "title": "[openbox] Did someone say... Widgets?",
+    "author": "adi1090x",
+    "wm": "Openbox",
+    "distro": null,
+    "score": 1538,
+    "github": "https://github.com/archcraft-os/archcraft-style-openbox",
+    "utils": [
+      "Openbox"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_03_nqri3y__openbox__Did_someone_say____W.png",
+    "source_url": "https://i.redd.it/u18f00k92w271.png"
+  },
+  {
+    "index": 4,
+    "id": "o9fa24",
+    "title": "[Openbox] Eww! Not Again. Its Pastel Once More.",
+    "author": "TheSuburbanExorcist",
+    "wm": "Openbox",
+    "distro": null,
+    "score": 1529,
+    "github": "https://github.com/obliviousofcraps/mf-dots",
+    "utils": [
+      "eww",
+      "Kitty"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_04_o9fa24__Openbox__Eww__Not_Again__Its_.png",
+    "source_url": "https://i.redd.it/arotf0oiky771.png"
+  },
+  {
+    "index": 5,
+    "id": "q9x3f5",
+    "title": "[Sway] My attempt at creating an eye-pleasing environment.",
+    "author": "ponos_ebuchij",
+    "wm": "Sway",
+    "distro": "Arch Linux",
+    "score": 1479,
+    "github": "https://github.com/n0tsteve/glorious-dots",
+    "utils": [
+      "Alacritty",
+      "Waybar",
+      "eww",
+      "Firefox",
+      "Nvim with NvChad",
+      "BetterDiscord",
+      "Spicetify",
+      "Nemo",
+      "GIMP",
+      "Rofi",
+      "Wayland",
+      "Sway"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_05_q9x3f5__Sway__My_attempt_at_creating_.png",
+    "source_url": "https://i.redd.it/m6qrq6dlzzt71.png"
+  },
+  {
+    "index": 6,
+    "id": "rvdfvv",
+    "title": "[i3-gaps] My first rice. What do you think about it?",
+    "author": "InflationFluffy3162",
+    "wm": "i3",
+    "distro": "Arch Linux",
+    "score": 1424,
+    "github": "https://github.com/CodeHeister/dotfiles",
+    "utils": [
+      "lemonbar",
+      "picom",
+      "Rofi",
+      "eww",
+      "zathura",
+      "cava"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_06_rvdfvv__i3-gaps__My_first_rice__What_.png",
+    "source_url": "https://i.redd.it/hd045lhbqj981.png"
+  },
+  {
+    "index": 7,
+    "id": "vvrb3j",
+    "title": "[bspwm] Me humble first EWW rice!",
+    "author": "Gwynsaov",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 1209,
+    "github": "https://github.com/Gwynsav/messydots",
+    "utils": [
+      "cmus",
+      "eww",
+      "Rofi",
+      "dunst",
+      "bunnyfetch"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_07_vvrb3j__bspwm__Me_humble_first_EWW_ri.png",
+    "source_url": "https://i.redd.it/8wdu1j90rqa91.png"
+  },
+  {
+    "index": 8,
+    "id": "13kw0uy",
+    "title": "Roses are red, [Hyprland] is blue, when the world ends, all I need is Eww!",
+    "author": "anantnrg",
+    "wm": "Hyprland",
+    "distro": "Arch Linux",
+    "score": 1158,
+    "github": "https://github.com/anantnrg/hypr_eww",
+    "utils": [
+      "eww",
+      "Kitty",
+      "neovim",
+      "dunst",
+      "btop"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_08_13kw0uy_Roses_are_red___Hyprland__is_b.png",
+    "source_url": "https://i.redd.it/s3ipjk80qk0b1.png"
+  },
+  {
+    "index": 9,
+    "id": "x8nlf4",
+    "title": "[Hyprland] WOOOO ANIMATIONS",
+    "author": "OVERRATEDADDICT",
+    "wm": "Hyprland",
+    "distro": null,
+    "score": 1149,
+    "github": "https://github.com/anchovyyy/hyprlandots",
+    "utils": [
+      "Kitty",
+      "eww",
+      "dunst"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_09_x8nlf4__Hyprland__WOOOO_ANIMATIONS.png",
+    "source_url": "https://external-preview.redd.it/lPiywA4sFnStHsReplxt7d1CLAzAM7B4C3lZCh-z0WY.png?format=pjpg&auto=webp&s=6685bf5b62f5e981e8096e3180122a59785d4d84"
+  },
+  {
+    "index": 10,
+    "id": "ygn0s5",
+    "title": "[BSPWM] Updated my rice with new EWW bar and material you like control center.",
+    "author": "PoSayDone",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 1142,
+    "github": "https://github.com/PoSayDone/.dotfiles",
+    "utils": [
+      "st",
+      "qutebrowser"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_10_ygn0s5__BSPWM__Updated_my_rice_with_n.jpg",
+    "source_url": "https://i.redd.it/gr5iw2xanrw91.jpg"
+  },
+  {
+    "index": 11,
+    "id": "wwtq70",
+    "title": "[openbox]: Eww is so cool",
+    "author": "AlphaTechnolog",
+    "wm": "Openbox",
+    "distro": null,
+    "score": 1095,
+    "github": "https://github.com/alphatechnolog/dotfiles",
+    "utils": [
+      "Polybar",
+      "eww",
+      "jgmenu",
+      "visualizer",
+      "cava"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_11_wwtq70__openbox___Eww_is_so_cool.png",
+    "source_url": "https://i.redd.it/cu8obof50qj91.png"
+  },
+  {
+    "index": 12,
+    "id": "108wizo",
+    "title": "[Hyprland] Green and Gruvbox\u2122",
+    "author": "AIDS-RAT",
+    "wm": "Hyprland",
+    "distro": "openSUSE",
+    "score": 1013,
+    "github": "https://github.com/prettykool/dots",
+    "utils": [
+      "eww",
+      "Emacs",
+      "Rofi",
+      "nnn",
+      "zathura",
+      "Alacritty",
+      "newsboat",
+      "ncmpcpp"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_12_108wizo__Hyprland__Green_and_Gruvbox_.png",
+    "source_url": "https://i.redd.it/2jcuxnnoicba1.png"
+  },
+  {
+    "index": 13,
+    "id": "weshsb",
+    "title": "[BSPWM + EWW] Introducing Quixotic Color Scheme with a Clean & Simple Rice",
+    "author": "_dystop",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 1005,
+    "github": "https://github.com/ljmill/dotfiles",
+    "utils": [
+      "eww",
+      "bspwm"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_13_weshsb__BSPWM___EWW__Introducing_Quix.png",
+    "source_url": "https://i.redd.it/3gf9lqwmcef91.png"
+  },
+  {
+    "index": 14,
+    "id": "vs46w3",
+    "title": "[eww] MacOS like control center.... but better",
+    "author": "_dystop",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 886,
+    "github": "https://github.com/ljmill/dotfiles",
+    "utils": [
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_14_vs46w3__eww__MacOS_like_control_cente.png",
+    "source_url": "https://external-preview.redd.it/MBMn3f_z4UHYS0zTePVYb2OM1qIw8e6KYYhL9nJTN3c.png?format=pjpg&auto=webp&s=61403ea8a6b828946b49a98b2b1e50aae1a8073b"
+  },
+  {
+    "index": 15,
+    "id": "s2u052",
+    "title": "[BSPWM] I Like Green",
+    "author": "Niraj998",
+    "wm": "bspwm",
+    "distro": "Arch Linux",
+    "score": 877,
+    "github": "https://github.com/niraj998/dotfiles",
+    "utils": [
+      "Kitty",
+      "Rofi",
+      "eww",
+      "Spotify",
+      "cava",
+      "zsh",
+      "Brave"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_15_s2u052__BSPWM__I_Like_Green.jpg",
+    "source_url": "https://i.redd.it/f3j8wmz1ueb81.jpg"
+  },
+  {
+    "index": 16,
+    "id": "1k4sv22",
+    "title": "[Hyprland] \u3010=\u25c8\ufe3f\u25c8=\u3011",
+    "author": "InternetExplorer9999",
+    "wm": "Hyprland",
+    "distro": "SecureBlue",
+    "score": 829,
+    "github": "https://github.com/hyprwm/Hyprland",
+    "utils": [
+      "WezTerm",
+      "Spotify",
+      "Zed",
+      "matugen",
+      "AGS",
+      "HyprPanel"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_16_1k4sv22__Hyprland_________.png",
+    "source_url": "https://preview.redd.it/mnz9sv2j3awe1.png?width=1920&format=png&auto=webp&s=c4d67045fb7dfd39d57d9f2e7fd699a26ed43458"
+  },
+  {
+    "index": 17,
+    "id": "mfbrkx",
+    "title": "[BSPWM] bspwm is my new best friend",
+    "author": "TheRealKizu",
+    "wm": "bspwm",
+    "distro": "EndeavourOS",
+    "score": 742,
+    "github": "https://github.com/TheRealKizu/dotfiles",
+    "utils": [
+      "nvim",
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_17_mfbrkx__BSPWM__bspwm_is_my_new_best_f.png",
+    "source_url": "https://i.redd.it/7s2kg3jbjup61.png"
+  },
+  {
+    "index": 18,
+    "id": "w4fgds",
+    "title": "[BSPWM + EWW] Sizzling Rice Soup and Yum Yum Sauce",
+    "author": "_dystop",
+    "wm": "bspwm",
+    "distro": "EndeavourOS",
+    "score": 739,
+    "github": "https://github.com/ljmill/dotfiles",
+    "utils": [
+      "bspwm",
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_18_w4fgds__BSPWM___EWW__Sizzling_Rice_So.png",
+    "source_url": "https://external-preview.redd.it/b9qLA_LCdCe5UTLvIXXrp3K5Uc4dIBgJgu9js_vi554.png?format=pjpg&auto=webp&s=d95b9b96a6facbf20663eed54a141e555986cb9c"
+  },
+  {
+    "index": 19,
+    "id": "w9s22b",
+    "title": "[Hyprland] Noble",
+    "author": "taylor85345",
+    "wm": "Hyprland",
+    "distro": "Arch Linux",
+    "score": 697,
+    "github": "https://github.com/taylor85345/garden-hyprland-dotfiles",
+    "utils": [
+      "Kitty",
+      "nitch",
+      "eww",
+      "JetBrainsMono"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_19_w9s22b__Hyprland__Noble.png",
+    "source_url": "https://external-preview.redd.it/GSui0w_sl5KmDliF03JvYAStyXwp2ig7vabwpyVWQ2w.png?format=pjpg&auto=webp&s=67d344f48a83ab19958b01e851466205fe2fe6c3"
+  },
+  {
+    "index": 20,
+    "id": "wb831o",
+    "title": "[bspwm] Another rice with my custom theme called Wave (inspired by rxyhn's night colorscheme)! LMK your thoughts!",
+    "author": "ChadCat5207",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 648,
+    "github": "https://github.com/dark-Jedi2108/dots.sh",
+    "utils": [
+      "eww",
+      "Spicetify",
+      "jgmenu",
+      "fet.sh",
+      "Polybar",
+      "dunst",
+      "cava"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_20_wb831o__bspwm__Another_rice_with_my_c.jpg",
+    "source_url": "https://i.redd.it/z1ir19552je91.jpg"
+  },
+  {
+    "index": 21,
+    "id": "1lytvrc",
+    "title": "[Hyprland] Everforest is so soothing to the eyes \ud83c\udf38",
+    "author": "Clear_Finding_8038",
+    "wm": "Hyprland",
+    "distro": "Arch Linux",
+    "score": 597,
+    "github": "https://github.com/Abhra00/hyprdots.git",
+    "utils": [
+      "Rofi",
+      "Swaync",
+      "Waybar"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_21_1lytvrc__Hyprland__Everforest_is_so_so.png",
+    "source_url": "https://preview.redd.it/xn1xu2lugncf1.png?width=1920&format=png&auto=webp&s=bf0943bb6e8dc1c692a25a5104f44903a740e95e"
+  },
+  {
+    "index": 22,
+    "id": "1r9h3qb",
+    "title": "[Hyprland] Man I love #F6A0CA",
+    "author": "Khymmmm",
+    "wm": "Hyprland",
+    "distro": "Arch Linux",
+    "score": 587,
+    "github": "https://github.com/gitKhym/dotfiles",
+    "utils": [
+      "AGS",
+      "Kitty",
+      "neovim",
+      "zathura",
+      "Obsidian"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_22_1r9h3qb__Hyprland__Man_I_love__F6A0CA.png",
+    "source_url": "https://preview.redd.it/64xqiodsnjkg1.png?width=2560&format=png&auto=webp&s=d62989ac12b4fe4b3cd06903f6317c890ac49dc1"
+  },
+  {
+    "index": 23,
+    "id": "141d234",
+    "title": "[Hyprland] Updated my config",
+    "author": "NespoliBT",
+    "wm": "Hyprland",
+    "distro": null,
+    "score": 564,
+    "github": "https://github.com/NespoliBT/.dotfiles",
+    "utils": [
+      "Kitty",
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_23_141d234__Hyprland__Updated_my_config.png",
+    "source_url": "https://i.redd.it/33uo2g60074b1.png"
+  },
+  {
+    "index": 24,
+    "id": "wf23xr",
+    "title": "[DWM] It(s) suck(s)less :)",
+    "author": "Mortal22Soul",
+    "wm": "dwm",
+    "distro": "Linux Mint",
+    "score": 560,
+    "github": "https://github.com/Mortal22Soul/dotfiles",
+    "utils": [
+      "eww",
+      "picom"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_24_wf23xr__DWM__It_s__suck_s_less___.png",
+    "source_url": "https://i.redd.it/8o75fpb3xgf91.png"
+  },
+  {
+    "index": 25,
+    "id": "12cgczg",
+    "title": "[Hyprland] New life, new rice",
+    "author": "NespoliBT",
+    "wm": "Hyprland",
+    "distro": null,
+    "score": 524,
+    "github": "https://github.com/NespoliBT/.dotfiles",
+    "utils": [
+      "Kitty",
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_25_12cgczg__Hyprland__New_life__new_rice.png",
+    "source_url": "https://i.redd.it/n6iwf0v8r1sa1.png"
+  },
+  {
+    "index": 26,
+    "id": "141vlmd",
+    "title": "[BSPWM] Updated my old EWW config",
+    "author": "dliuzhiyu",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 523,
+    "github": "https://github.com/mountain-theme/Mountain",
+    "utils": [
+      "eww",
+      "Kitty",
+      "Firefox"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_26_141vlmd__BSPWM__Updated_my_old_EWW_con.png",
+    "source_url": "https://i.redd.it/nvumo7eh7a4b1.png"
+  },
+  {
+    "index": 27,
+    "id": "1rfiltp",
+    "title": "[Niri] Switched to Niri 6 Months ago, Forgot to post my rice.",
+    "author": "pretty_lame_jokes",
+    "wm": "Niri",
+    "distro": "Arch Linux",
+    "score": 523,
+    "github": "https://github.com/swaykh/dotfiles",
+    "utils": [
+      "Waybar",
+      "Foot running tmux",
+      "Yazi",
+      "Rofiwayland",
+      "neovim",
+      "fastfetch",
+      "cava",
+      "Swaync"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_27_1rfiltp__Niri__Switched_to_Niri_6_Mont.png",
+    "source_url": "https://preview.redd.it/hml5rswnwvlg1.png?width=1920&format=png&auto=webp&s=a84056c24f5484aeb0b1182a0a88d1c2cf9d58c3"
+  },
+  {
+    "index": 28,
+    "id": "v9ea6z",
+    "title": "[herbstluftwm] Trying out title bars",
+    "author": "is0n_",
+    "wm": "Herbstluftwm",
+    "distro": "Arch Linux",
+    "score": 522,
+    "github": "https://github.com/is0n/dotfiles",
+    "utils": [
+      "zsh",
+      "neovim",
+      "Alacritty",
+      "picom",
+      "Firefox",
+      "eww",
+      "ncmpcpp",
+      "Rofi",
+      "lf",
+      "sxiv"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_28_v9ea6z__herbstluftwm__Trying_out_titl.png",
+    "source_url": "https://i.redd.it/niw1qm7f7u491.png"
+  },
+  {
+    "index": 29,
+    "id": "1kvosly",
+    "title": "[Niri] Took something from pewdiepie",
+    "author": "oihhhhio",
+    "wm": "Niri",
+    "distro": null,
+    "score": 513,
+    "github": "https://github.com/ogios/dots",
+    "utils": [
+      "AGS"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_29_1kvosly__Niri__Took_something_from_pew.png",
+    "source_url": "https://external-preview.redd.it/Njh6b3d6amkwMzNmMUOkcFa36yBVBcCigW1FUjGahX3-kLLcvhex7dILUFnc.png?format=pjpg&auto=webp&s=23df8a53c4cc0b91646c0621b9f044812b69f131"
+  },
+  {
+    "index": 30,
+    "id": "1eawln9",
+    "title": "[Hyprland] My first cooked rice",
+    "author": "Ebanay_Logical1354",
+    "wm": "Hyprland",
+    "distro": null,
+    "score": 482,
+    "github": "https://github.com/hyprwm/Hyprland",
+    "utils": [
+      "Hyprlock",
+      "Waybar",
+      "Alacritty",
+      "Rofi",
+      "Swaync"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_30_1eawln9__Hyprland__My_first_cooked_ric.png",
+    "source_url": "https://preview.redd.it/4wftm9cpkfed1.png?width=1920&format=png&auto=webp&s=1706f9f38d62b965861dc23843134797a377e616"
+  },
+  {
+    "index": 31,
+    "id": "114jjxn",
+    "title": "[XMonad] Ep 3: Ewwification ++ Starter Kit (see comments)",
+    "author": "SlytherinDescendant",
+    "wm": "Xmonad",
+    "distro": "Arch Linux",
+    "score": 479,
+    "github": "https://github.com/xmonad/xmonad",
+    "utils": [
+      "fish",
+      "Kitty",
+      "neovim",
+      "Thunar",
+      "Rofi",
+      "jgmenu",
+      "eww",
+      "nighttab"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_31_114jjxn__XMonad__Ep_3__Ewwification___.png",
+    "source_url": "https://i.redd.it/k6k3b867oqia1.png"
+  },
+  {
+    "index": 32,
+    "id": "1qnvgjm",
+    "title": "[Hyprland] Wasted time",
+    "author": "obsqrbtz",
+    "wm": "Hyprland",
+    "distro": "Arch Linux",
+    "score": 478,
+    "github": "https://github.com/obsqrbtz/archdots",
+    "utils": [
+      "Quickshell",
+      "Kitty",
+      "JetBrains Mono",
+      "Inter"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_32_1qnvgjm__Hyprland__Wasted_time.png",
+    "source_url": "https://i.redd.it/hx55bgzutrfg1.png"
+  },
+  {
+    "index": 33,
+    "id": "1i79aqc",
+    "title": "[Hyprland]NiOS with hyprland with hyprscroller and hyprpanel",
+    "author": "Lumpy-Ad-9813",
+    "wm": "Hyprland",
+    "distro": "NixOS",
+    "score": 448,
+    "github": "https://github.com/maotseantonio/home",
+    "utils": [
+      "SDDM",
+      "HyprPanel"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_33_1i79aqc__Hyprland_NiOS_with_hyprland_w.png",
+    "source_url": "https://preview.redd.it/w47p1rqf9jee1.png?width=2160&format=png&auto=webp&s=1fd8cc7b3ad06cd0c992daff6ffde7d3e84d62c0"
+  },
+  {
+    "index": 34,
+    "id": "1s0yhny",
+    "title": "[Hyprland] Matugen with quickshell: dynamic ui colors for hyprland",
+    "author": "ilyamiro1",
+    "wm": "Hyprland",
+    "distro": "NixOS",
+    "score": 440,
+    "github": "https://github.com/ilyamiro/nixos-configuration",
+    "utils": [
+      "Quickshell"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_34_1s0yhny__Hyprland__Matugen_with_quicks.png",
+    "source_url": "https://external-preview.redd.it/MTZpN20wd3czb3FnMan7zIRIQqpLTy-5HEqd9puuPvzDa70VjIGDw0cGax_K.png?format=pjpg&auto=webp&s=b743c35e30aa73ecbec88dfd125f42366fdc9563"
+  },
+  {
+    "index": 35,
+    "id": "1g7y3nl",
+    "title": "[swayFX] tokyonight is so underrated",
+    "author": "Artemis-Arrow-795",
+    "wm": "SwayFX",
+    "distro": null,
+    "score": 428,
+    "github": "https://github.com/4rtemis-4rrow/dotfiles",
+    "utils": [
+      "WezTerm",
+      "Swaync",
+      "neovim",
+      "Rofi",
+      "Waybar"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_35_1g7y3nl__swayFX__tokyonight_is_so_unde.png",
+    "source_url": "https://i.redd.it/ertpqc7iswvd1.png"
+  },
+  {
+    "index": 36,
+    "id": "1lnbgzm",
+    "title": "[doWM] photodump of my WM",
+    "author": "BobdaProgrammer",
+    "wm": "dowm",
+    "distro": null,
+    "score": 422,
+    "github": "https://github.com/BobdaProgrammer/doWM",
+    "utils": [
+      "Polybar",
+      "eww"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_36_1lnbgzm__doWM__photodump_of_my_WM.png",
+    "source_url": "https://preview.redd.it/3z77a44teu9f1.png?width=1920&format=png&auto=webp&s=e28a42ef6d247b7f1d99b663dbdb02311f33d7e3"
+  },
+  {
+    "index": 37,
+    "id": "tnwauz",
+    "title": "[Qtile] I am finally done with my setup. No more ricing!",
+    "author": "Asocia",
+    "wm": "Qtile",
+    "distro": null,
+    "score": 407,
+    "github": "https://github.com/Asocia/dotfiles",
+    "utils": [
+      "picom",
+      "eww",
+      "st",
+      "zsh",
+      "Powerlevel10k",
+      "neovim",
+      "dunst"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_37_tnwauz__Qtile__I_am_finally_done_with.png",
+    "source_url": "https://i.redd.it/kpekazshtkp81.png"
+  },
+  {
+    "index": 38,
+    "id": "1nc1yxu",
+    "title": "[Hyprland] Its high time I riced the f*** up",
+    "author": "SimBoiii",
+    "wm": "Hyprland",
+    "distro": "CachyOS",
+    "score": 400,
+    "github": "https://github.com/SimBoi/dotfiles",
+    "utils": [
+      "fish",
+      "Ghostty",
+      "Rofi",
+      "HyprPanel",
+      "Yazi",
+      "Hyprlock",
+      "vscode"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_38_1nc1yxu__Hyprland__Its_high_time_I_ric.png",
+    "source_url": "https://preview.redd.it/yfh3oewxo0of1.png?width=3000&format=png&auto=webp&s=cd54261ff4e15793c1d1c8b92d75f1965a46fd90"
+  },
+  {
+    "index": 39,
+    "id": "1s5kqrk",
+    "title": "[Hyprland] WEEEEEHOOO. Current rice showcase.",
+    "author": "ilyamiro1",
+    "wm": "Hyprland",
+    "distro": "NixOS",
+    "score": 389,
+    "github": "https://github.com/ilyamiro/nixos-configuration",
+    "utils": [
+      "Quickshell"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_39_1s5kqrk__Hyprland__WEEEEEHOOO__Current.png",
+    "source_url": "https://external-preview.redd.it/ZGt1d3I4cmJkb3JnMQe7qccewrLv1hGCGAI3Q9PFzLGd5NGjRLWeU-OrLUZM.png?format=pjpg&auto=webp&s=f88fe546b8fb56aa5a15b54bd26eb34c4f7d6eb5"
+  },
+  {
+    "index": 40,
+    "id": "1mnqg8e",
+    "title": "[swayfx] a setup that never gives you up",
+    "author": "leo1359531",
+    "wm": "SwayFX",
+    "distro": null,
+    "score": 386,
+    "github": "https://github.com/jepvini/ozzy",
+    "utils": [
+      "eww",
+      "dunst"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_40_1mnqg8e__swayfx__a_setup_that_never_gi.png",
+    "source_url": "https://i.redd.it/b8wc0an3pgif1.png"
+  },
+  {
+    "index": 41,
+    "id": "1icpuqv",
+    "title": "[Hyprland] Broke up with arch, now on nix",
+    "author": "Aln76467",
+    "wm": "Hyprland",
+    "distro": "NixOS",
+    "score": 381,
+    "github": "https://github.com/aworldc/dots",
+    "utils": [
+      "AGS",
+      "Catppuccin",
+      "Hyprland"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_41_1icpuqv__Hyprland__Broke_up_with_arch_.png",
+    "source_url": "https://i.redd.it/5ml2j9yngwfe1.png"
+  },
+  {
+    "index": 42,
+    "id": "1tsppq7",
+    "title": "[Hyprland] Cozy Setup, Refined",
+    "author": "Yug_699",
+    "wm": "Hyprland",
+    "distro": null,
+    "score": 375,
+    "github": "https://github.com/yugg755i/dotfiles",
+    "utils": [
+      "Waybar",
+      "Kitty",
+      "fish",
+      "mpd",
+      "rmpc",
+      "Swaync",
+      "micro",
+      "vscode",
+      "Yazi",
+      "Nautilus",
+      "fastfetch"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_42_1tsppq7__Hyprland__Cozy_Setup__Refined.png",
+    "source_url": "https://preview.redd.it/n4dvghswpf4h1.png?width=1920&format=png&auto=webp&s=f2211529defa16fd85163a5ddfb65b7c22c60077"
+  },
+  {
+    "index": 43,
+    "id": "wberis",
+    "title": "[Plasma] Banana Kush",
+    "author": "TheFlyingDwarf",
+    "wm": "KDE Plasma",
+    "distro": null,
+    "score": 350,
+    "github": "https://github.com/andarilho42/dotfiles",
+    "utils": [
+      "Konsole",
+      "eww",
+      "Plasma"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_43_wberis__Plasma__Banana_Kush.png",
+    "source_url": "https://i.redd.it/l33a6sahgke91.png"
+  },
+  {
+    "index": 44,
+    "id": "1kneqtc",
+    "title": "[KDE/i3] Easy on the eyes, Pretty, Effective",
+    "author": "Mmmatsu",
+    "wm": "i3",
+    "distro": null,
+    "score": 348,
+    "github": "https://github.com/Matsuuu/dotfiles",
+    "utils": [
+      "bash",
+      "neovim",
+      "Alacritty",
+      "Fantasque Sans Mono",
+      "eww",
+      "KDE",
+      "i3"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_44_1kneqtc__KDE_i3__Easy_on_the_eyes__Pre.png",
+    "source_url": "https://i.redd.it/0ygogii9iz0f1.png"
+  },
+  {
+    "index": 45,
+    "id": "1h8iz8i",
+    "title": "[Hyprland] finalized updating to hyprpanel, Nord is peak",
+    "author": "MasterchacooLLL",
+    "wm": "Hyprland",
+    "distro": "EndeavourOS",
+    "score": 347,
+    "github": "https://github.com/nordtheme/nord",
+    "utils": [
+      "nano",
+      "Hyperpanel",
+      "Kitty",
+      "ohmyzsh",
+      "zsh",
+      "Thunar",
+      "Rofi",
+      "Hyprland"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_45_1h8iz8i__Hyprland__finalized_updating_.png",
+    "source_url": "https://preview.redd.it/er7rda8o5c5e1.png?width=1920&format=png&auto=webp&s=2a5ad4dad8413463d529f7c29badca718d7afec4"
+  },
+  {
+    "index": 46,
+    "id": "1ubdt2q",
+    "title": "[Hyprland] Green leaf, SO refreshingg",
+    "author": "Noro18",
+    "wm": "Hyprland",
+    "distro": null,
+    "score": 344,
+    "github": "https://github.com/Noro18/linux-ricing-dotfiles",
+    "utils": [
+      "Waybar",
+      "Kitty",
+      "Rofi",
+      "Swaync"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_46_1ubdt2q__Hyprland__Green_leaf__SO_refr.png",
+    "source_url": "https://preview.redd.it/je07vvklmj8h1.png?width=1920&format=png&auto=webp&s=3f3acd70c772f2bc6e8500e9d81c5df3cbec0eec"
+  },
+  {
+    "index": 47,
+    "id": "10o9njt",
+    "title": "[bspwm] umi",
+    "author": "battlesqui_d",
+    "wm": "bspwm",
+    "distro": null,
+    "score": 341,
+    "github": "https://github.com/Battlesquid/dotfiles",
+    "utils": [
+      "picom",
+      "zsh",
+      "Kitty",
+      "eww",
+      "Rofi",
+      "dunst",
+      "github.com"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_47_10o9njt__bspwm__umi.png",
+    "source_url": "https://i.redd.it/kbsuflvwyzea1.png"
+  },
+  {
+    "index": 48,
+    "id": "1stmd4u",
+    "title": "[Hyprland] NixOS + Hyprland It is",
+    "author": "Ok_One612",
+    "wm": "Hyprland",
+    "distro": "NixOS",
+    "score": 315,
+    "github": "https://github.com/robbsbro69/nixos",
+    "utils": [
+      "Quickshell",
+      "Hyprlock",
+      "Yazi",
+      "Kitty",
+      "neovim"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_48_1stmd4u__Hyprland__NixOS___Hyprland_It.png",
+    "source_url": "https://external-preview.redd.it/ZTc0dHV2OGtseXdnMRJg9wtg2RPADhau5Cnv4prCJae-zsWUsprnZNDIb_MV.png?format=pjpg&auto=webp&s=18ab1cb4d4d351f48608ea44561c270084218d67"
+  },
+  {
+    "index": 49,
+    "id": "11q946a",
+    "title": "[BSPWM] \u2013 refreshing tokyonight rice",
+    "author": "EnergyCreator",
+    "wm": "bspwm",
+    "distro": "Arch Linux",
+    "score": 299,
+    "github": "https://github.com/bloznelis/dotfiles",
+    "utils": [
+      "eww",
+      "dunst",
+      "nvim",
+      "Rofi"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_49_11q946a__BSPWM____refreshing_tokyonigh.png",
+    "source_url": "https://i.redd.it/qwklycxj7ina1.png"
+  },
+  {
+    "index": 50,
+    "id": "1gts5vb",
+    "title": "[Hyprland] NixOS really is all that, turns out",
+    "author": "Moist_Soup_231",
+    "wm": "Hyprland",
+    "distro": "NixOS",
+    "score": 298,
+    "github": "https://github.com/professional-username/dotfiles",
+    "utils": [
+      "AGS",
+      "Emacs"
+    ],
+    "local_path": "/Users/saturno/Developer/REA/assets/command_centers/cc_50_1gts5vb__Hyprland__NixOS_really_is_all.png",
+    "source_url": "https://preview.redd.it/i78ahydn1k1e1.png?width=3840&format=png&auto=webp&s=9a6fd92e8bfb05e32ce047d54e49b3ba049cf883"
+  }
+]
