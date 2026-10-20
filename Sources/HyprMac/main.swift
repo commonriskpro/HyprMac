@@ -978,8 +978,8 @@ func runIntegratedDaemon(configPath: String?) {
     bar.showBar()
     _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true, exemptWid: UInt32(bar.windowNumber))
 
-    // 3. Multi-window Border Manager setup (Active vs Inactive Borders)
-    let borderManager = BorderManager.shared
+    // 3. Compositor Effects Manager setup (Opacity & Backdrop Blur)
+    let effectsManager = CompositorEffectsManager.shared
 
     // 3b. Auto-tiling Dwindle Engine setup (Decoupled from transient Z-order)
     let dwindleEngine = DwindleEngine(gapsIn: config.gapsIn, gapsOut: config.gapsOut)
@@ -987,7 +987,7 @@ func runIntegratedDaemon(configPath: String?) {
     // 3c. Virtual Workspaces Manager (Single Source of Truth for workspaces 1..9)
     let workspaceManager = WorkspaceManager.shared
     workspaceManager.dwindleEngine = dwindleEngine
-    workspaceManager.borderManager = borderManager
+    workspaceManager.borderManager = effectsManager
     workspaceManager.boundsProvider = { computeTilingBounds() }
 
     // 3d. Hyprland-identical window animation subsystem
@@ -1062,7 +1062,7 @@ func runIntegratedDaemon(configPath: String?) {
         }
         workspaceManager.focusWindow(wid: wid)
         let f = WindowDetector.shared.getFocusedWindow()
-        borderManager.update(focused: f, managedFrames: dwindleEngine.currentFrames(), config: config)
+        effectsManager.update(focused: f, managedFrames: dwindleEngine.currentFrames(), config: config)
         if let focused = f {
             bar.updateActiveWindow(title: focused.title, app: focused.appName)
         }
@@ -1188,27 +1188,27 @@ func runIntegratedDaemon(configPath: String?) {
         }
     }
 
-    keyManager.onToggleFloating = { [weak dwindleEngine, weak workspaceManager, weak borderManager, weak keyManager] wid, isFloating in
+    keyManager.onToggleFloating = { [weak dwindleEngine, weak workspaceManager, weak effectsManager, weak keyManager] wid, isFloating in
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                guard let engine = dwindleEngine, let wsMgr = workspaceManager, let bMgr = borderManager, let km = keyManager else { return }
+                guard let engine = dwindleEngine, let wsMgr = workspaceManager, let eMgr = effectsManager, let km = keyManager else { return }
                 let tilingBounds = computeTilingBounds()
                 let activeIDs = wsMgr.activeWindowIDs()
                 let activeTiledIDs = activeIDs.filter { !km.isFloating(windowID: $0) }
                 let frames = engine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
                 if isFloating {
-                    bMgr.hideOverlay(for: wid)
+                    eMgr.hideOverlay(for: wid)
                 }
                 let f = WindowDetector.shared.getFocusedWindow()
-                bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
+                eMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
             }
         }
     }
 
-    keyManager.onFullscreenToggle = { [weak dwindleEngine, weak workspaceManager, weak borderManager, weak keyManager] wid, isFullscreen, savedFrame in
+    keyManager.onFullscreenToggle = { [weak dwindleEngine, weak workspaceManager, weak effectsManager, weak keyManager] wid, isFullscreen, savedFrame in
         MainActor.assumeIsolated {
-            guard let engine = dwindleEngine, let wsMgr = workspaceManager, let bMgr = borderManager, let km = keyManager else { return }
+            guard let engine = dwindleEngine, let wsMgr = workspaceManager, let eMgr = effectsManager, let km = keyManager else { return }
             let tilingBounds = computeTilingBounds()
             let activeIDs = wsMgr.activeWindowIDs()
 
@@ -1227,7 +1227,7 @@ func runIntegratedDaemon(configPath: String?) {
                 // We do NOT retile or resize them to prevent background DOM reflows and relayout thrashing.
 
                 // 3. Trigger smooth visual animation from curBounds to fullBounds
-                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
+                let borderWid = eMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: curBounds,
@@ -1236,7 +1236,7 @@ func runIntegratedDaemon(configPath: String?) {
                     borderWindowID: borderWid
                 ) { _ in
                     let f = WindowDetector.shared.getFocusedWindow()
-                    bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
+                    eMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }
             } else {
                 // Restoring from fullscreen: recompute tiling with all active windows restored
@@ -1269,7 +1269,7 @@ func runIntegratedDaemon(configPath: String?) {
                 }
 
                 // 3. Animate fullscreen window from fullBounds to targetFrame
-                let borderWid = bMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
+                let borderWid = eMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: fullBounds,
@@ -1278,7 +1278,7 @@ func runIntegratedDaemon(configPath: String?) {
                     borderWindowID: borderWid
                 ) { _ in
                     let f = WindowDetector.shared.getFocusedWindow()
-                    bMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
+                    eMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }
             }
         }
@@ -1293,26 +1293,26 @@ func runIntegratedDaemon(configPath: String?) {
         }
     }
 
-    keyManager.onWindowMinimize = { [weak dwindleEngine, weak borderManager] wid in
+    keyManager.onWindowMinimize = { [weak dwindleEngine, weak effectsManager] wid in
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 guard let engine = dwindleEngine else { return }
                 let tilingBounds = computeTilingBounds()
                 let frames = engine.removeWindow(windowID: wid, in: tilingBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
-                borderManager?.hideOverlay(for: wid)
+                effectsManager?.hideOverlay(for: wid)
             }
         }
     }
 
-    keyManager.onWindowClose = { [weak dwindleEngine, weak borderManager] wid in
+    keyManager.onWindowClose = { [weak dwindleEngine, weak effectsManager] wid in
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 guard let engine = dwindleEngine else { return }
                 let tilingBounds = computeTilingBounds()
                 let frames = engine.removeWindow(windowID: wid, in: tilingBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
-                borderManager?.hideOverlay(for: wid)
+                effectsManager?.hideOverlay(for: wid)
             }
         }
     }
@@ -1371,7 +1371,7 @@ func runIntegratedDaemon(configPath: String?) {
             bar.barView.barColors = newConfig.barColors
             bar.barView.applyTheme()
             let f = WindowDetector.shared.getFocusedWindow()
-            borderManager.update(focused: f, managedFrames: dwindleEngine.currentFrames(), config: newConfig)
+            effectsManager.update(focused: f, managedFrames: dwindleEngine.currentFrames(), config: newConfig)
             print("[HyprMac] Dynamic theme & border colors reloaded from \(confPath)")
         }
     }
@@ -1407,7 +1407,7 @@ func runIntegratedDaemon(configPath: String?) {
                     mouseState.local = nil
                 }
                 bar.hideBar()
-                borderManager.hideAll()
+                effectsManager.hideAll()
                 animationEngine.cancelAll()
                 keyManager.stop()
                 KeybindManager.shared.isMenuBarSuppressed = false
@@ -1494,7 +1494,7 @@ func runIntegratedDaemon(configPath: String?) {
                         workspaceManager.setWindowMinimized(wid, minimized: true)
                         if dwindleEngine.managedWindowSet.contains(wid) {
                             dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
-                            borderManager.hideOverlay(for: wid)
+                            effectsManager.hideOverlay(for: wid)
                             minimizedChanged = true
                         }
                     } else if wasMinimized && !isMin {
@@ -1514,7 +1514,7 @@ func runIntegratedDaemon(configPath: String?) {
                     if !allAliveWindowIDs.contains(wid) {
                         workspaceManager.removeWindow(wid: wid)
                         dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
-                        borderManager.hideOverlay(for: wid)
+                        effectsManager.hideOverlay(for: wid)
                         WindowDetector.shared.invalidateWindow(windowID: wid)
                     }
                 }
@@ -1533,7 +1533,7 @@ func runIntegratedDaemon(configPath: String?) {
 
                     for wid in closedWindows {
                         dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
-                        borderManager.hideOverlay(for: wid)
+                        effectsManager.hideOverlay(for: wid)
                         AnimationEngine.shared.cancelAnimation(for: wid)
                         if !allAliveWindowIDs.contains(wid) {
                             workspaceManager.removeWindow(wid: wid)
@@ -1557,7 +1557,7 @@ func runIntegratedDaemon(configPath: String?) {
 
             let barWid = CGWindowID(bar.windowNumber)
             let rawFocused = (tileCheckCounter % 30 == 0) ? WindowDetector.shared.getFocusedWindow() : WindowDetector.shared.fastFocusedWindow()
-            let isBarOrBorder = rawFocused != nil && (rawFocused!.windowID == barWid || borderManager.isBorderWindow(windowID: rawFocused!.windowID))
+            let isBarOrBorder = rawFocused != nil && (rawFocused!.windowID == barWid || effectsManager.isBorderWindow(windowID: rawFocused!.windowID))
             let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
             let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused
 
@@ -1705,7 +1705,7 @@ func runIntegratedDaemon(configPath: String?) {
             if currentFocusedWid != lastWid || currentFocusedFrame != lastFrame || framesChanged {
                 lastWid = currentFocusedWid
                 lastFrame = currentFocusedFrame
-                borderManager.update(focused: focused, managedFrames: dwindleEngine.currentFrames(), config: config)
+                effectsManager.update(focused: focused, managedFrames: dwindleEngine.currentFrames(), config: config)
             }
 
             if let focused = focused {

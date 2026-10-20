@@ -4,8 +4,8 @@ import CoreGraphics
 /// Manages compositor-level window styling (opacity and background blur) for managed windows.
 /// Operates in 100% frameless mode: creates zero overlay panels over windows.
 @MainActor
-public final class BorderManager {
-    public static let shared = BorderManager()
+public final class CompositorEffectsManager {
+    public static let shared = CompositorEffectsManager()
 
     public private(set) var managedWindowIDs: Set<CGWindowID> = []
     private var appliedAlpha: [CGWindowID: Float] = [:]
@@ -84,10 +84,10 @@ public final class BorderManager {
         appliedBlur.removeValue(forKey: windowID)
     }
 
-    /// Diagnostic self-test verifying frameless BorderManager lifecycle.
+    /// Diagnostic self-test verifying frameless CompositorEffectsManager lifecycle.
     public static func runSelfTest() -> Bool {
-        print("=== [BorderManager Self-Test (Frameless Mode)] ===")
-        let manager = BorderManager()
+        print("=== [CompositorEffectsManager Self-Test (Frameless Mode)] ===")
+        let manager = CompositorEffectsManager()
         var config = HyprConfig()
         config.borderSize = 0
         config.windowOpacity = 0.95
@@ -125,7 +125,10 @@ public final class BorderManager {
             return false
         }
         print("  [✓] Clean teardown verified")
-        print("=== [BorderManager Self-Test Result: PASSED] ===")
+        print("=== [CompositorEffectsManager Self-Test Result: PASSED] ===")
         return true
     }
 }
+
+/// Backwards compatibility alias
+public typealias BorderManager = CompositorEffectsManager

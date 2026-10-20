@@ -3,15 +3,15 @@ import Cocoa
 @testable import HyprMac
 
 @MainActor
-final class BorderManagerTests: XCTestCase {
+final class CompositorEffectsManagerTests: XCTestCase {
 
-    func testBorderManagerSelfTest() {
-        let success = BorderManager.runSelfTest()
-        XCTAssertTrue(success, "BorderManager.runSelfTest() must return true")
+    func testCompositorEffectsManagerSelfTest() {
+        let success = CompositorEffectsManager.runSelfTest()
+        XCTAssertTrue(success, "CompositorEffectsManager.runSelfTest() must return true")
     }
 
     func testFramelessModeSpawnsZeroOverlays() {
-        let manager = BorderManager()
+        let manager = CompositorEffectsManager()
         var config = HyprConfig()
         config.borderSize = 0
         config.rounding = 14.0
@@ -41,7 +41,7 @@ final class BorderManagerTests: XCTestCase {
     }
 
     func testFocusSwitchUpdatesManagedWindowsWithoutOverlays() {
-        let manager = BorderManager()
+        let manager = CompositorEffectsManager()
         var config = HyprConfig()
         config.borderSize = 0
 
@@ -78,7 +78,7 @@ final class BorderManagerTests: XCTestCase {
     }
 
     func testClosedWindowCleanup() {
-        let manager = BorderManager()
+        let manager = CompositorEffectsManager()
         let config = HyprConfig()
 
         let target = FocusedWindowInfo(
@@ -130,7 +130,7 @@ final class BorderManagerTests: XCTestCase {
     }
 
     func testBorderSizeZeroHidesAllOverlays() {
-        let manager = BorderManager()
+        let manager = CompositorEffectsManager()
         var config = HyprConfig()
         config.borderSize = 0
 
