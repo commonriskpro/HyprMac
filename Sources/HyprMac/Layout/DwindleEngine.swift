@@ -12,6 +12,11 @@ public final class DwindleEngine {
     public var managedWindowOrder: [CGWindowID] = []
     public var managedWindowSet: Set<CGWindowID> = []
     public var isFullscreen: (@Sendable (CGWindowID) -> Bool)?
+    private var _cachedFrames: [CGWindowID: CGRect]? = nil
+
+    public func invalidateCachedFrames() {
+        _cachedFrames = nil
+    }
 
     public init(gapsIn: CGFloat = 5.0, gapsOut: CGFloat = 10.0) {
         self.root = nil
@@ -40,6 +45,7 @@ public final class DwindleEngine {
                 managedWindowSet.insert(windowID)
             }
             node.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+            invalidateCachedFrames()
             return currentFrames()
         }
 
@@ -51,6 +57,7 @@ public final class DwindleEngine {
                 managedWindowSet.insert(windowID)
             }
             currentRoot.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+            invalidateCachedFrames()
             return currentFrames()
         }
 
@@ -102,6 +109,7 @@ public final class DwindleEngine {
         }
 
         root?.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+        invalidateCachedFrames()
         return currentFrames()
     }
 
@@ -122,12 +130,14 @@ public final class DwindleEngine {
             // Node was root
             root = nil
             lastTargetID = nil
+            invalidateCachedFrames()
             return [:]
         }
 
         guard let (left, right) = parent.children else {
             root = nil
             lastTargetID = nil
+            invalidateCachedFrames()
             return [:]
         }
 
@@ -154,6 +164,7 @@ public final class DwindleEngine {
         }
 
         root?.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+        invalidateCachedFrames()
         return currentFrames()
     }
 
@@ -167,6 +178,7 @@ public final class DwindleEngine {
         lastTargetID = nil
         managedWindowOrder = []
         managedWindowSet = []
+        invalidateCachedFrames()
         for wid in windowIDs {
             _ = addWindow(windowID: wid, in: screenBounds)
         }
@@ -192,6 +204,7 @@ public final class DwindleEngine {
             managedWindowOrder.swapAt(idxA, idxB)
         }
         root?.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+        invalidateCachedFrames()
         return currentFrames()
     }
 
@@ -214,6 +227,7 @@ public final class DwindleEngine {
         if let node = splitNode {
             node.splitDirection = (node.splitDirection == .vertical) ? .horizontal : .vertical
             r.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+            invalidateCachedFrames()
         }
         return currentFrames()
     }
@@ -241,6 +255,7 @@ public final class DwindleEngine {
 
         if targetNode != nil {
             r.recalculate(in: screenBounds, gapsIn: gapsIn, gapsOut: gapsOut)
+            invalidateCachedFrames()
         }
         return currentFrames()
     }
@@ -255,8 +270,11 @@ public final class DwindleEngine {
         adjustSplitRatio(delta: delta, for: windowID, in: screenBounds)
     }
 
-    /// Returns current mapped window frames from all leaf nodes.
+    /// Returns current mapped window frames from all leaf nodes (cached until tree topology or split changes).
     public func currentFrames() -> [CGWindowID: CGRect] {
+        if let cached = _cachedFrames {
+            return cached
+        }
         guard let r = root else { return [:] }
         var dict: [CGWindowID: CGRect] = [:]
         for leaf in r.allLeaves() {
@@ -264,6 +282,7 @@ public final class DwindleEngine {
                 dict[wid] = leaf.box
             }
         }
+        _cachedFrames = dict
         return dict
     }
 

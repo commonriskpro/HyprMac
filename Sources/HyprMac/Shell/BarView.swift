@@ -211,14 +211,30 @@ final class LocationDelegate: NSObject, CLLocationManagerDelegate {
     }
 }
 
+final class WiFiEventObserver: NSObject, CWEventDelegate, @unchecked Sendable {
+    func ssidDidChangeForWiFiInterface(withName interfaceName: String) {
+        NetworkMonitor.refreshAsync()
+    }
+    func linkDidChangeForWiFiInterface(withName interfaceName: String) {
+        NetworkMonitor.refreshAsync()
+    }
+    func modeDidChangeForWiFiInterface(withName interfaceName: String) {
+        NetworkMonitor.refreshAsync()
+    }
+    func bssidDidChangeForWiFiInterface(withName interfaceName: String) {
+        NetworkMonitor.refreshAsync()
+    }
+}
+
 public enum NetworkMonitor {
     nonisolated(unsafe) private static var cachedSSID: String = "Wi-Fi"
-    nonisolated(unsafe) private static var lastCheckTime: TimeInterval = 0
+    nonisolated(unsafe) private static var isInitialized: Bool = false
+    nonisolated(unsafe) private static var wifiObserver: WiFiEventObserver?
     nonisolated(unsafe) private static var locationManager: CLLocationManager?
     nonisolated(unsafe) private static var locationDelegate: LocationDelegate?
 
     public static func resetCache() {
-        lastCheckTime = 0
+        refreshAsync()
     }
 
     @MainActor
@@ -235,60 +251,81 @@ public enum NetworkMonitor {
         }
     }
 
-    public static func currentSSID() -> String {
-        let now = Date().timeIntervalSince1970
-        if now - lastCheckTime < 3.0 {
-            return cachedSSID
-        }
-        lastCheckTime = now
+    public static func initializeEventMonitoringIfNeeded() {
+        guard !isInitialized else { return }
+        isInitialized = true
 
-        // Request location permission from Aqua session so macOS allows SSID reading
+        let observer = WiFiEventObserver()
+        wifiObserver = observer
+
+        let client = CWWiFiClient.shared()
+        client.delegate = observer
+        _ = try? client.startMonitoringEvent(with: .ssidDidChange)
+        _ = try? client.startMonitoringEvent(with: .linkDidChange)
+        _ = try? client.startMonitoringEvent(with: .powerDidChange)
+        _ = try? client.startMonitoringEvent(with: .bssidDidChange)
+
+        refreshAsync()
+    }
+
+    public static func refreshAsync() {
+        // Request location permission so macOS allows SSID reading
         Task { @MainActor in
             requestAuthorizationIfNeeded()
         }
 
-        // 1. Direct CoreWLAN interface reading (requires Location authorization on macOS 14+)
+        // 1. Direct CoreWLAN interface reading
         if let wifiIface = CWWiFiClient.shared().interface() {
             if !wifiIface.powerOn() {
                 cachedSSID = "Off"
-                return cachedSSID
+                return
             }
             if let ssid = wifiIface.ssid(), !ssid.isEmpty, ssid != "<redacted>" {
                 cachedSSID = ssid
-                return ssid
+                return
             }
         }
 
-        // 2. Fallback to ipconfig getsummary
-        let iface = CWWiFiClient.shared().interface()?.interfaceName ?? "en1"
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/ipconfig")
-        task.arguments = ["getsummary", iface]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = Pipe()
+        // 2. Asynchronous background fallback to ipconfig (never blocks the main thread)
+        DispatchQueue.global(qos: .utility).async {
+            let iface = CWWiFiClient.shared().interface()?.interfaceName ?? "en0"
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/ipconfig")
+            task.arguments = ["getsummary", iface]
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
 
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let str = String(data: data, encoding: .utf8) {
-                for line in str.components(separatedBy: .newlines) {
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    if trimmed.hasPrefix("SSID : ") {
-                        let ssid = trimmed.replacingOccurrences(of: "SSID : ", with: "").trimmingCharacters(in: .whitespaces)
-                        if !ssid.isEmpty && ssid != "<redacted>" {
-                            cachedSSID = ssid
-                            return ssid
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let str = String(data: data, encoding: .utf8) {
+                    for line in str.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        if trimmed.hasPrefix("SSID : ") {
+                            let ssid = trimmed.replacingOccurrences(of: "SSID : ", with: "").trimmingCharacters(in: .whitespaces)
+                            if !ssid.isEmpty && ssid != "<redacted>" {
+                                DispatchQueue.main.async {
+                                    self.cachedSSID = ssid
+                                }
+                                return
+                            }
                         }
                     }
                 }
-            }
-        } catch {}
+            } catch {}
 
-        if cachedSSID == "<redacted>" {
-            cachedSSID = "Wi-Fi"
+            DispatchQueue.main.async {
+                if self.cachedSSID == "<redacted>" {
+                    self.cachedSSID = "Wi-Fi"
+                }
+            }
         }
+    }
+
+    public static func currentSSID() -> String {
+        initializeEventMonitoringIfNeeded()
         return cachedSSID
     }
 }

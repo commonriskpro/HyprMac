@@ -363,7 +363,12 @@ public final class WallpaperGridView: NSView {
         let totalWidth = (CGFloat(cols) * Self.cardWidth) + (CGFloat(cols - 1) * Self.horizontalSpacing) + (Self.padding * 2.0)
         let totalHeight = (CGFloat(rows) * Self.cardHeight) + (CGFloat(max(0, rows - 1)) * Self.verticalSpacing) + (Self.padding * 2.0)
 
-        setFrameSize(NSSize(width: max(bounds.width, totalWidth), height: max(bounds.height, totalHeight)))
+        let viewportWidth = enclosingScrollView?.contentView.bounds.width ?? bounds.width
+        let viewportHeight = enclosingScrollView?.contentView.bounds.height ?? bounds.height
+        let targetWidth = max(viewportWidth, totalWidth)
+        let targetHeight = max(viewportHeight, totalHeight)
+
+        setFrameSize(NSSize(width: targetWidth, height: targetHeight))
 
         for (i, item) in items.enumerated() {
             let col = i % cols
@@ -388,6 +393,13 @@ public final class WallpaperGridView: NSView {
         }
 
         updateVisibleThumbnails()
+    }
+
+    public func scrollToTop() {
+        if let clipView = enclosingScrollView?.contentView {
+            clipView.scroll(to: .zero)
+            enclosingScrollView?.reflectScrolledClipView(clipView)
+        }
     }
 
     public func setSelectedCardIndex(_ index: Int) {
@@ -757,6 +769,7 @@ public final class WallpaperGalleryWindow: NSPanel, NSTextFieldDelegate {
 
         selectedIndex = 0
         gridView.reloadGrid(items: filteredWallpapers, selectedIndex: selectedIndex)
+        gridView.scrollToTop()
 
         let catName = selectedCategory == "all" ? "Todos" : selectedCategory.capitalized
         statusLabel.stringValue = "\(filteredWallpapers.count) fondos • Categoría: \(catName)"

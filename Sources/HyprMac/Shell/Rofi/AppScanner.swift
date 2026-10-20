@@ -6,13 +6,20 @@ public struct AppItem: @unchecked Sendable, Identifiable, Equatable, Hashable {
     public let name: String
     public let bundleURL: URL
     public let bundleIdentifier: String?
-    public let icon: NSImage
+    private let _icon: NSImage?
 
-    public init(name: String, bundleURL: URL, bundleIdentifier: String?, icon: NSImage) {
+    public var icon: NSImage {
+        if let i = _icon {
+            return i
+        }
+        return AppScanner.cachedIcon(for: bundleURL.path)
+    }
+
+    public init(name: String, bundleURL: URL, bundleIdentifier: String?, icon: NSImage? = nil) {
         self.name = name
         self.bundleURL = bundleURL
         self.bundleIdentifier = bundleIdentifier
-        self.icon = icon
+        self._icon = icon
     }
 
     public static func == (lhs: AppItem, rhs: AppItem) -> Bool {
@@ -27,6 +34,18 @@ public struct AppItem: @unchecked Sendable, Identifiable, Equatable, Hashable {
 /// Scans and caches macOS applications across standard application directories
 public final class AppScanner: @unchecked Sendable {
     public static let shared = AppScanner()
+
+    nonisolated(unsafe) private static let iconCache = NSCache<NSString, NSImage>()
+
+    public static func cachedIcon(for path: String) -> NSImage {
+        if let img = iconCache.object(forKey: path as NSString) {
+            return img
+        }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        icon.size = NSSize(width: 36, height: 36)
+        iconCache.setObject(icon, forKey: path as NSString)
+        return icon
+    }
 
     private let lock = NSLock()
     private var cachedApps: [AppItem] = []
@@ -100,14 +119,11 @@ public final class AppScanner: @unchecked Sendable {
             }
             seenNames.insert(nameKey)
 
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: 36, height: 36)
-
             let item = AppItem(
                 name: displayName,
                 bundleURL: url,
                 bundleIdentifier: bundleId,
-                icon: icon
+                icon: nil
             )
             appItems.append(item)
         }
