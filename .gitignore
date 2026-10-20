@@ -8,3 +8,5 @@ reference/
 /tmp/
 *.bak
 index.html
+artifacts/
+reviews/

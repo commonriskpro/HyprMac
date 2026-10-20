@@ -600,13 +600,10 @@ public final class WallpaperScanner: @unchecked Sendable {
         let home = fm.homeDirectoryForCurrentUser.path
         let directories: [String] = [
             (home as NSString).appendingPathComponent("Pictures/Wallpapers"),
-            (home as NSString).appendingPathComponent("Downloads/mxmrn-dotfiles-wallpapers"),
+            (home as NSString).appendingPathComponent("Pictures"),
             (home as NSString).appendingPathComponent(".config/hypr/wallpapers"),
-            (home as NSString).appendingPathComponent("Developer/REA/assets"),
-            (home as NSString).appendingPathComponent("Developer/REA/assets/rices"),
-            (home as NSString).appendingPathComponent("Developer/REA/reference/mxmrn/wallpapers"),
-            (home as NSString).appendingPathComponent("Developer/REA/reference/noro18/wallpapers"),
-            (home as NSString).appendingPathComponent("Pictures")
+            (home as NSString).appendingPathComponent("Downloads/wallpapers"),
+            FileManager.default.currentDirectoryPath + "/assets/showcase"
         ]
 
         let allowedExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "heic"]

@@ -226,7 +226,7 @@ public final class ClientDecorationLoader: @unchecked Sendable {
         let home = NSHomeDirectory()
         let searchPaths = [
             Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name).path,
-            home + "/Developer/REA/build/" + name,
+            FileManager.default.currentDirectoryPath + "/build/" + name,
             home + "/.config/hypr/" + name,
             "/usr/local/bin/" + name,
             "/usr/local/lib/" + name

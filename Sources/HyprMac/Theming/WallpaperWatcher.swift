@@ -148,9 +148,11 @@ public final class WallpaperWatcher: @unchecked Sendable {
         print("[+] [WallpaperWatcher] Wallpaper transition detected: \(standardizedPath)")
 
         let candidates = [
-            NSString(string: "~/Developer/REA/scripts/wallset.sh").expandingTildeInPath,
+            NSString(string: "~/.config/hypr/scripts/wallset.sh").expandingTildeInPath,
             NSString(string: "~/.local/bin/wallset").expandingTildeInPath,
-            (Bundle.main.bundlePath as NSString).appendingPathComponent("scripts/wallset.sh")
+            (Bundle.main.bundlePath as NSString).appendingPathComponent("Contents/Resources/scripts/wallset.sh"),
+            (Bundle.main.bundlePath as NSString).appendingPathComponent("scripts/wallset.sh"),
+            FileManager.default.currentDirectoryPath + "/scripts/wallset.sh"
         ]
         guard let wallsetScript = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
             print("[-] [WallpaperWatcher] wallset.sh script not found in candidate paths")

@@ -9,7 +9,7 @@
 <img src="assets/hyprmac_bar_rendered.png" alt="HyprBar — Waybar-style status bar on macOS" width="850"/>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Platform-macOS%2014%2B%20(Apple%20Silicon)-black?style=flat-square&logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Platform-macOS%2027%2B%20(Apple%20Silicon)-black?style=flat-square&logo=apple" alt="macOS 27+">
   <img src="https://img.shields.io/badge/Architecture-ARM64e%20PAC-blue?style=flat-square" alt="ARM64e">
   <img src="https://img.shields.io/badge/Swift-6%20Strict%20Concurrency-orange?style=flat-square&logo=swift" alt="Swift 6">
   <img src="https://img.shields.io/badge/Idle%20CPU-0.0%25%20(Event--driven)-brightgreen?style=flat-square" alt="0% Idle CPU">
@@ -108,7 +108,7 @@ On Linux, a Hyprland rice gives you total control: square corners, zero shadows,
 
 ## Prerequisites
 
-- **macOS 14+ (Sonoma or Sequoia)** on Apple Silicon (arm64e)
+- **macOS 27+ (tested on macOS 27.0.1)** on Apple Silicon (arm64e)
 - **SIP disabled** (`csrutil disable` from Recovery Mode — required for `WindowServer` task port access)
 - **Xcode Command Line Tools**
 
