@@ -1172,6 +1172,7 @@ func runIntegratedDaemon(configPath: String?) {
             }
 
             guard let pid = activatedPid, pid > 0, pid != getpid() else { return }
+            _ = WindowDetector.shared.getFocusedWindow()
 
             // 1. Check if any window belonging to the activated application unminimized
             for wid in workspaceManager.windowOrder where workspaceManager.getPID(for: wid) == pid {
@@ -1590,7 +1591,7 @@ func runIntegratedDaemon(configPath: String?) {
             }
 
             let barWid = CGWindowID(bar.windowNumber)
-            let rawFocused = WindowDetector.shared.getFocusedWindow()
+            let rawFocused = (tileCheckCounter % 10 == 0) ? WindowDetector.shared.getFocusedWindow() : WindowDetector.shared.fastFocusedWindow()
             let isBarOrBorder = rawFocused != nil && (rawFocused!.windowID == barWid || borderManager.isBorderWindow(windowID: rawFocused!.windowID))
             let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
             let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused

@@ -74,8 +74,6 @@ public final class BorderView: NSView {
     // Neon Border Sublayers & Animation
     private let gradientLayer = CAGradientLayer()
     private let neonMaskLayer = CAShapeLayer()
-    nonisolated(unsafe) private var angleTimer: Timer?
-    private var currentAngle: CGFloat = 0.0
 
     // Outline Border Sublayer
     private let outlineLayer = CAShapeLayer()
@@ -88,10 +86,6 @@ public final class BorderView: NSView {
     public required init?(coder: NSCoder) {
         super.init(coder: coder)
         commonInit()
-    }
-
-    deinit {
-        angleTimer?.invalidate()
     }
 
     private func commonInit() {
@@ -241,34 +235,38 @@ public final class BorderView: NSView {
         }
     }
 
-    /// Animates the gradient angle along the perimeter for the Hyprland active border feel
+    /// Animates the gradient angle along the perimeter for the Hyprland active border feel using GPU CoreAnimation
     private func startGradientRotation() {
-        guard angleTimer == nil else { return }
-        angleTimer = Timer.scheduledTimer(withTimeInterval: 0.033, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self = self else { return }
-                self.currentAngle += 0.03
-                if self.currentAngle > 2 * .pi {
-                    self.currentAngle -= 2 * .pi
-                }
+        guard gradientLayer.animation(forKey: "hyprlandGradientStart") == nil else { return }
 
-                let x1 = 0.5 + 0.5 * cos(self.currentAngle)
-                let y1 = 0.5 + 0.5 * sin(self.currentAngle)
-                let x2 = 0.5 + 0.5 * cos(self.currentAngle + .pi)
-                let y2 = 0.5 + 0.5 * sin(self.currentAngle + .pi)
-
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                self.gradientLayer.startPoint = CGPoint(x: x1, y: y1)
-                self.gradientLayer.endPoint = CGPoint(x: x2, y: y2)
-                CATransaction.commit()
-            }
+        let steps = 60
+        var startPoints: [CGPoint] = []
+        var endPoints: [CGPoint] = []
+        for i in 0...steps {
+            let angle = (Double(i) / Double(steps)) * 2.0 * .pi
+            startPoints.append(CGPoint(x: 0.5 + 0.5 * cos(angle), y: 0.5 + 0.5 * sin(angle)))
+            endPoints.append(CGPoint(x: 0.5 + 0.5 * cos(angle + .pi), y: 0.5 + 0.5 * sin(angle + .pi)))
         }
+
+        let animStart = CAKeyframeAnimation(keyPath: "startPoint")
+        animStart.values = startPoints
+        animStart.duration = 6.0
+        animStart.repeatCount = .infinity
+        animStart.isRemovedOnCompletion = false
+
+        let animEnd = CAKeyframeAnimation(keyPath: "endPoint")
+        animEnd.values = endPoints
+        animEnd.duration = 6.0
+        animEnd.repeatCount = .infinity
+        animEnd.isRemovedOnCompletion = false
+
+        gradientLayer.add(animStart, forKey: "hyprlandGradientStart")
+        gradientLayer.add(animEnd, forKey: "hyprlandGradientEnd")
     }
 
     private func stopGradientRotation() {
-        angleTimer?.invalidate()
-        angleTimer = nil
+        gradientLayer.removeAnimation(forKey: "hyprlandGradientStart")
+        gradientLayer.removeAnimation(forKey: "hyprlandGradientEnd")
     }
 }
 

@@ -330,7 +330,7 @@ public final class SessionManager: @unchecked Sendable {
     @discardableResult
     public static func runSelfTest() -> Bool {
         print("=== [SessionManager Self-Test] ===")
-        var allPassed = true
+        var allPassed = (ProcessInfo.processInfo.processIdentifier > 0)
 
         func assertCond(_ condition: Bool, _ message: String) {
             if condition {

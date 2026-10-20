@@ -61,6 +61,32 @@ public enum BatteryMonitor {
 
         return BatteryStatus(isPresent: false, isCharging: true, percentage: 100, powerSource: "AC Power")
     }
+
+    nonisolated(unsafe) private static var runLoopSource: CFRunLoopSource?
+    nonisolated(unsafe) private static var batteryCallback: (@Sendable (BatteryStatus) -> Void)?
+
+    private static let batteryCallbackFn: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in
+        let status = BatteryMonitor.currentStatus()
+        BatteryMonitor.batteryCallback?(status)
+    }
+
+    public static func startMonitoring(onChange: @escaping @Sendable (BatteryStatus) -> Void) {
+        stopMonitoring()
+        batteryCallback = onChange
+        if let source = IOPSNotificationCreateRunLoopSource(batteryCallbackFn, nil)?.takeRetainedValue() {
+            runLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        onChange(currentStatus())
+    }
+
+    public static func stopMonitoring() {
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            runLoopSource = nil
+        }
+        batteryCallback = nil
+    }
 }
 
 /// Reader for hardware CPU & Memory utilization using Mach host statistics
@@ -201,6 +227,53 @@ public enum VolumeMonitor {
             let script = "set volume output volume \(clamped)"
             NSAppleScript(source: script)?.executeAndReturnError(nil)
         }
+    }
+
+    nonisolated(unsafe) private static var volumeListenerBlock: AudioObjectPropertyListenerBlock?
+
+    public static func startMonitoring(onChange: @escaping @Sendable (Int) -> Void) {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            let vol = currentVolume()
+            onChange(vol)
+        }
+        volumeListenerBlock = block
+
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            DispatchQueue.main,
+            block
+        )
+
+        var defaultOutputDeviceID = AudioDeviceID(0)
+        var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        if AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &defaultOutputDeviceID
+        ) == noErr && defaultOutputDeviceID != 0 {
+            var volAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+                mScope: kAudioObjectPropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectAddPropertyListenerBlock(
+                defaultOutputDeviceID,
+                &volAddress,
+                DispatchQueue.main,
+                block
+            )
+        }
+        onChange(currentVolume())
     }
 }
 
@@ -1000,7 +1073,6 @@ public final class BarView: NSView {
         let mem = HardwareMonitor.currentMemoryLoad()
         cpuLabel.stringValue = "󰍛  \(cpu)%"
         memLabel.stringValue = "  \(mem)%"
-        updateNotificationIndicator()
     }
 
     public func updateVolume() {
@@ -1031,22 +1103,55 @@ public final class BarView: NSView {
     }
 
     public func startTimers() {
+        // Initial setup
+        updateClock()
+        updateBattery()
+        updateHardware()
+        updateVolume()
+        updateNetwork()
+        updateNotificationIndicator()
+
+        // Event-driven listeners for Battery, Volume and Notifications
+        BatteryMonitor.startMonitoring { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateBattery()
+            }
+        }
+
+        VolumeMonitor.startMonitoring { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateVolume()
+            }
+        }
+
+        NotificationCenter.default.removeObserver(self, name: NotificationCenterManager.stateDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleNotificationStateDidChange),
+            name: NotificationCenterManager.stateDidChangeNotification,
+            object: nil
+        )
+
+        // Periodic 1.0s timer only for Clock & Hardware CPU/RAM
         guard updateTimer == nil else { return }
         updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 self.updateClock()
-                self.updateBattery()
                 self.updateHardware()
-                self.updateVolume()
-                self.updateNetwork()
             }
         }
+    }
+
+    @objc private func handleNotificationStateDidChange() {
+        updateNotificationIndicator()
     }
 
     public func stopTimers() {
         updateTimer?.invalidate()
         updateTimer = nil
+        BatteryMonitor.stopMonitoring()
+        NotificationCenter.default.removeObserver(self, name: NotificationCenterManager.stateDidChangeNotification, object: nil)
     }
 
     // MARK: - Power Menu / Wlogout
