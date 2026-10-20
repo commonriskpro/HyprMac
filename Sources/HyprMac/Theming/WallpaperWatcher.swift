@@ -163,7 +163,8 @@ public final class WallpaperWatcher: @unchecked Sendable {
         process.arguments = [wallsetScript, standardizedPath]
 
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "/Users/saturno/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        let localBin = (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin")
+        env["PATH"] = "\(localBin):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         process.environment = env
 
         process.terminationHandler = { [weak self] proc in
@@ -248,18 +249,20 @@ public final class WallpaperWatcher: @unchecked Sendable {
         print("=== [WallpaperWatcher Self-Test] ===")
 
         // 1. Path canonicalization check
-        let sampleURL = URL(fileURLWithPath: "///Users/saturno/Desktop/test.png")
+        let home = NSHomeDirectory()
+        let sampleURL = URL(fileURLWithPath: "///" + (home as NSString).appendingPathComponent("Desktop/test.png"))
         let canon = canonicalizePath(from: sampleURL)
-        guard canon == "/Users/saturno/Desktop/test.png" else {
+        let expected = (home as NSString).appendingPathComponent("Desktop/test.png")
+        guard canon == expected else {
             print("  [-] Canonical path failed: \(canon)")
             return false
         }
         print("  [✓] Path canonicalization verified (leading slashes stripped)")
 
         // 2. Hash calculation on known file
-        let pkgSwift = "/Users/saturno/Developer/REA/Package.swift"
-        guard let hash = computeFileSHA256(atPath: pkgSwift), !hash.isEmpty else {
-            print("  [-] computeFileSHA256 failed on \(pkgSwift)")
+        let knownFile = FileManager.default.fileExists(atPath: "Package.swift") ? "Package.swift" : "/bin/sh"
+        guard let hash = computeFileSHA256(atPath: knownFile), !hash.isEmpty else {
+            print("  [-] computeFileSHA256 failed on \(knownFile)")
             return false
         }
         print("  [✓] File SHA256 hashing verified: \(hash.prefix(12))...")

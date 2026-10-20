@@ -276,7 +276,7 @@ public final class WlogoutLayoutLoader: Sendable {
 
         let candidatePaths: [String] = [
             NSString(string: "~/.config/wlogout/layout").expandingTildeInPath,
-            "/Users/saturno/Developer/REA/reference/mxmrn/config/wlogout/layout"
+            (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent("reference/mxmrn/config/wlogout/layout")
         ].compactMap { $0 }
 
         for path in candidatePaths {

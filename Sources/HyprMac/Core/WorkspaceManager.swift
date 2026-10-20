@@ -577,7 +577,7 @@ public final class WorkspaceManager {
             let wid: CGWindowID
             let pid: pid_t
             let targetOrigin: CGPoint
-            let targetSize: CGSize?
+            let finalFrame: CGRect
             let isHidden: Bool
         }
 
@@ -605,7 +605,7 @@ public final class WorkspaceManager {
                 wid: wid,
                 pid: pid,
                 targetOrigin: hiddenRect.origin,
-                targetSize: nil,
+                finalFrame: hiddenRect,
                 isHidden: true
             ))
         }
@@ -616,16 +616,13 @@ public final class WorkspaceManager {
             if pid > 0 { windowPIDs[wid] = pid }
 
             let targetFrame = targetFrames[wid] ?? storedFrames[wid] ?? fallbackFrame
-            let curSz = storedFrames[wid]?.size ?? targetFrame.size
-            let sizeChanged = abs(curSz.width - targetFrame.size.width) > 0.5 || abs(curSz.height - targetFrame.size.height) > 0.5
-
             storedFrames[wid] = targetFrame
 
             perApp[pid, default: []].append(WindowMoveItem(
                 wid: wid,
                 pid: pid,
                 targetOrigin: targetFrame.origin,
-                targetSize: sizeChanged ? targetFrame.size : nil,
+                finalFrame: targetFrame,
                 isHidden: false
             ))
         }
@@ -647,11 +644,7 @@ public final class WorkspaceManager {
                     if move.isHidden {
                         _ = WindowDetector.shared.setWindowPosition(windowID: move.wid, point: move.targetOrigin, pid: move.pid)
                     } else {
-                        let finalFrame = CGRect(
-                            origin: move.targetOrigin,
-                            size: move.targetSize ?? storedFrames[move.wid]?.size ?? fallbackFrame.size
-                        )
-                        _ = WindowDetector.shared.setWindowFrame(windowID: move.wid, frame: finalFrame, pid: move.pid)
+                        _ = WindowDetector.shared.setWindowFrame(windowID: move.wid, frame: move.finalFrame, pid: move.pid)
                     }
                 }
             }

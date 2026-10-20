@@ -479,12 +479,11 @@ public final class SessionManager: @unchecked Sendable {
         try? FileManager.default.removeItem(atPath: tempFile)
         UserDefaults.standard.removeObject(forKey: tempKey)
 
-        if allPassed {
-            print("[+] SessionManager.runSelfTest() PASSED successfully!")
-        } else {
+        if !allPassed {
             print("[-] SessionManager.runSelfTest() FAILED one or more checks.")
+            return false
         }
-
-        return allPassed
+        print("[+] SessionManager.runSelfTest() PASSED successfully!")
+        return true
     }
 }

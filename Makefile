@@ -5,7 +5,7 @@
 CC = clang
 AS = clang
 
-ARCH_FLAGS = -arch arm64e -target arm64e-apple-macos14.0
+ARCH_FLAGS = -arch arm64e -target arm64e-apple-macos27.0
 PAC_FLAGS = -fptrauth-calls -fptrauth-intrinsics
 CFLAGS = $(ARCH_FLAGS) $(PAC_FLAGS) -std=c11 -Wall -Wextra -Werror -O2 -fvisibility=hidden
 DYLIB_FLAGS = -dynamiclib -install_name @rpath/libhyprserver.dylib
@@ -36,7 +36,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/libhyprclient.dylib: native/client_hook/client.m | $(BUILD_DIR)
-	$(CC) -arch arm64e -target arm64e-apple-macos15.0 -fobjc-arc -O2 -dynamiclib \
+	$(CC) -arch arm64e -target arm64e-apple-macos27.0 -fobjc-arc -O2 -dynamiclib \
 		-framework AppKit -framework Foundation -framework QuartzCore \
 		-o $@ native/client_hook/client.m
 	codesign -s "-" --force $@

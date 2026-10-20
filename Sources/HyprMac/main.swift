@@ -1493,6 +1493,7 @@ func runIntegratedDaemon(configPath: String?) {
     var isMouseDownPrev: Bool = false
     var draggedWid: CGWindowID? = nil
     var dragStartFrame: CGRect? = nil
+    var dragStartMousePoint: NSPoint? = nil
     var isDragging: Bool = false
 
     Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
@@ -1646,27 +1647,26 @@ func runIntegratedDaemon(configPath: String?) {
                             let pid = workspaceManager.getPID(for: wid)
                             draggedWid = wid
                             dragStartFrame = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? f.bounds
+                            dragStartMousePoint = NSEvent.mouseLocation
                             isDragging = false
                         } else {
                             draggedWid = nil
                             dragStartFrame = nil
+                            dragStartMousePoint = nil
                             isDragging = false
                         }
                     } else {
                         draggedWid = nil
                         dragStartFrame = nil
+                        dragStartMousePoint = nil
                         isDragging = false
                     }
                 } else if isMouseDown {
-                    // Mouse Drag: While mouse is down and draggedWid is set:
-                    if let wid = draggedWid, let startFrame = dragStartFrame {
-                        let pid = workspaceManager.getPID(for: wid)
-                        if let currentBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) {
-                            let dx = currentBounds.origin.x - startFrame.origin.x
-                            let dy = currentBounds.origin.y - startFrame.origin.y
-                            if hypot(dx, dy) > 8.0 {
-                                isDragging = true
-                            }
+                    // Mouse Drag: While mouse is down and draggedWid is set, detect drag distance via cursor position (zero AX IPC roundtrips)
+                    if draggedWid != nil, let startPt = dragStartMousePoint, !isDragging {
+                        let curPt = NSEvent.mouseLocation
+                        if hypot(curPt.x - startPt.x, curPt.y - startPt.y) > 8.0 {
+                            isDragging = true
                         }
                     }
                 } else if isMouseDownPrev && !isMouseDown {
@@ -1710,6 +1710,7 @@ func runIntegratedDaemon(configPath: String?) {
                     }
                     draggedWid = nil
                     dragStartFrame = nil
+                    dragStartMousePoint = nil
                     isDragging = false
                 }
 

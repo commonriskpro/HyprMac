@@ -14,7 +14,7 @@ final class WallpaperWatcherTests: XCTestCase {
     }
 
     func testComputeFileSHA256() {
-        let pkgSwift = "/Users/saturno/Developer/REA/Package.swift"
+        let pkgSwift = FileManager.default.fileExists(atPath: "Package.swift") ? "Package.swift" : "/bin/sh"
         let hash = WallpaperWatcher.computeFileSHA256(atPath: pkgSwift)
         XCTAssertNotNil(hash)
         XCTAssertEqual(hash?.count, 64)

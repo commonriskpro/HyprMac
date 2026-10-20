@@ -106,7 +106,8 @@ final class WlogoutTests: XCTestCase {
 
     func testLoadItemsFromReferenceConfig() {
         let loader = WlogoutLayoutLoader()
-        let items = loader.loadItems(fromPath: "/Users/saturno/Developer/REA/reference/mxmrn/config/wlogout/layout")
+        let path = (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent("reference/mxmrn/config/wlogout/layout")
+        let items = loader.loadItems(fromPath: path)
         XCTAssertEqual(items.count, 6)
         XCTAssertEqual(items[0].label, "lock")
         XCTAssertEqual(items[1].label, "suspend")

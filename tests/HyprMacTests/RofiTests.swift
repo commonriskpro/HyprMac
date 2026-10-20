@@ -569,7 +569,7 @@ final class RofiTests: XCTestCase {
         let tempJSON = NSTemporaryDirectory() + "pywal16_test_colors.json"
         let jsonContent = """
         {
-            "wallpaper": "/Users/saturno/Pictures/test.png",
+            "wallpaper": "/tmp/test.png",
             "special": {
                 "background": "#111418",
                 "foreground": "#c3c4c5"
