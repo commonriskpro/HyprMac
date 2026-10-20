@@ -78,6 +78,7 @@ public final class KeybindManager: @unchecked Sendable {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     public private(set) var isRunning: Bool = false
+    private var hasLoggedTapFailure: Bool = false
 
     private var activeGalleryWindow: WallpaperGalleryWindow?
     private var activeRofiWindow: RofiWindow?
@@ -356,9 +357,14 @@ public final class KeybindManager: @unchecked Sendable {
         }
 
         guard let machPort = tap else {
-            print("[KeybindManager] Failed to create CGEvent tap. Accessibility permission required.")
+            if !hasLoggedTapFailure {
+                print("[KeybindManager] Failed to create CGEvent tap. Accessibility permission required.")
+                hasLoggedTapFailure = true
+            }
             return false
         }
+        hasLoggedTapFailure = false
+        print("[+] [KeybindManager] CGEvent tap created and active.")
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, machPort, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)

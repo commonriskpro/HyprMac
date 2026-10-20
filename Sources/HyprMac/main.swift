@@ -1506,6 +1506,10 @@ func runIntegratedDaemon(configPath: String?) {
             let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
             let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
 
+            if !keyManager.isRunning && tileCheckCounter % 60 == 0 {
+                _ = keyManager.start()
+            }
+
             if tileCheckCounter % 30 == 0 && !isSettleWindow && config.layout.lowercased() == "dwindle" {
                 let tilingBounds = computeTilingBounds()
                 let eligibleWindows = getEligibleUserWindows(in: tilingBounds, excludingPIDs: [getpid()])
