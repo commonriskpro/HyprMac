@@ -142,11 +142,18 @@ public final class WallpaperWatcher: @unchecked Sendable {
         self.lastProcessedHash = fileHash
         self.isExecuting = true
 
+        let cachePath = NSString(string: "~/.cache/current_wallpaper").expandingTildeInPath
+        try? standardizedPath.write(toFile: cachePath, atomically: true, encoding: .utf8)
+
         print("[+] [WallpaperWatcher] Wallpaper transition detected: \(standardizedPath)")
 
-        let wallsetScript = "/Users/saturno/Developer/REA/scripts/wallset.sh"
-        guard FileManager.default.fileExists(atPath: wallsetScript) else {
-            print("[-] [WallpaperWatcher] wallset.sh script not found at: \(wallsetScript)")
+        let candidates = [
+            NSString(string: "~/Developer/REA/scripts/wallset.sh").expandingTildeInPath,
+            NSString(string: "~/.local/bin/wallset").expandingTildeInPath,
+            (Bundle.main.bundlePath as NSString).appendingPathComponent("scripts/wallset.sh")
+        ]
+        guard let wallsetScript = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+            print("[-] [WallpaperWatcher] wallset.sh script not found in candidate paths")
             self.isExecuting = false
             return
         }

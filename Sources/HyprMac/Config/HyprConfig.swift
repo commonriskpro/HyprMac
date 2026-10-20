@@ -311,6 +311,8 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var inactiveOpacity: Double = 0.98
     /// Whether to dynamically strip window titlebars/decorations via SkyLight (default: true).
     public var stripDecorations: Bool = false
+    /// List of application names or bundle IDs to exclude from client decoration stripping and external opacity injection.
+    public var ignoredClientApps: [String] = ["zen", "ghostty", "kitty"]
     /// Master switch for window and shell animations (default: true).
     public var animationsEnabled: Bool = true
     /// Animation hierarchy and bezier curves configuration.
@@ -321,6 +323,10 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var bindings: [HyprBinding] = []
     /// Declarative bar module color overrides parsed from bar { ... }.
     public var barColors: HyprBarColors = HyprBarColors()
+    /// Opacity/alpha for the floating bar capsules (default: 0.65).
+    public var barOpacity: Double = 0.65
+    /// Format string for the status bar clock module (e.g. "h:mm a  EEE" for 12h, "HH:mm  EEE" for 24h).
+    public var clockFormat: String = "h:mm a  EEE"
     /// Map of user-defined and resolved configuration variables (e.g. `$mainMod: "SUPER"`).
     public var variables: [String: String] = [:]
 
@@ -373,6 +379,8 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         animationsEnabled: Bool = true,
         animationTree: HyprAnimationTree = .default,
         barColors: HyprBarColors = HyprBarColors(),
+        barOpacity: Double = 0.65,
+        clockFormat: String = "h:mm a  EEE",
         bindings: [HyprBinding] = [],
         variables: [String: String] = [:],
         sourceFiles: [String] = [],
@@ -393,6 +401,8 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         self.animationsEnabled = animationsEnabled
         self.animationTree = animationTree
         self.barColors = barColors
+        self.barOpacity = barOpacity
+        self.clockFormat = clockFormat
         self.bindings = bindings
         self.variables = variables
         self.sourceFiles = sourceFiles

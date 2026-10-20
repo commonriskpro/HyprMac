@@ -274,19 +274,21 @@ public final class ConfigParser {
             // Inline block on single line: "section_name { key = value; ... }"
             if let openIdx = line.firstIndex(of: "{"), let closeIdx = line.lastIndex(of: "}"), openIdx < closeIdx {
                 let secName = line[..<openIdx].trimmingCharacters(in: .whitespaces)
-                let inner = line[line.index(after: openIdx)..<closeIdx].trimmingCharacters(in: .whitespaces)
-                if !secName.isEmpty { sectionStack.append(secName) }
-                if !inner.isEmpty {
-                    for stmt in inner.components(separatedBy: ";") {
-                        let trimmedStmt = stmt.trimmingCharacters(in: .whitespaces)
-                        if !trimmedStmt.isEmpty {
-                            processStatement(trimmedStmt, sectionStack: sectionStack, config: &config, visited: &visited)
+                if !secName.contains("=") && !secName.isEmpty {
+                    let inner = line[line.index(after: openIdx)..<closeIdx].trimmingCharacters(in: .whitespaces)
+                    sectionStack.append(secName)
+                    if !inner.isEmpty {
+                        for stmt in inner.components(separatedBy: ";") {
+                            let trimmedStmt = stmt.trimmingCharacters(in: .whitespaces)
+                            if !trimmedStmt.isEmpty {
+                                processStatement(trimmedStmt, sectionStack: sectionStack, config: &config, visited: &visited)
+                            }
                         }
                     }
+                    if !sectionStack.isEmpty { sectionStack.removeLast() }
+                    pendingSection = nil
+                    continue
                 }
-                if !secName.isEmpty && !sectionStack.isEmpty { sectionStack.removeLast() }
-                pendingSection = nil
-                continue
             }
 
             // Possible section name without brace on this line
@@ -459,8 +461,34 @@ public final class ConfigParser {
                 config.barColors.workspacesActiveFg = cleanVal
             case "col.battery", "battery":
                 config.barColors.battery = cleanVal
-            case "col.clock", "clock", "col.time", "time":
+            case "col.clock", "col.time":
                 config.barColors.clock = cleanVal
+            case "clock", "time":
+                if cleanVal.lowercased() == "12h" || cleanVal.lowercased() == "12" || cleanVal.lowercased() == "12-hour" {
+                    config.clockFormat = "h:mm a  EEE"
+                } else if cleanVal.lowercased() == "24h" || cleanVal.lowercased() == "24" || cleanVal.lowercased() == "24-hour" {
+                    config.clockFormat = "HH:mm  EEE"
+                } else {
+                    config.barColors.clock = cleanVal
+                }
+            case "clock_format", "clockformat", "time_format", "timeformat", "format_clock", "format_time":
+                if cleanVal.lowercased() == "12h" || cleanVal.lowercased() == "12" || cleanVal.lowercased() == "12-hour" {
+                    config.clockFormat = "h:mm a  EEE"
+                } else if cleanVal.lowercased() == "24h" || cleanVal.lowercased() == "24" || cleanVal.lowercased() == "24-hour" {
+                    config.clockFormat = "HH:mm  EEE"
+                } else {
+                    var fmt = cleanVal
+                    if fmt.hasPrefix("{:") && fmt.hasSuffix("}") {
+                        fmt = String(fmt.dropFirst(2).dropLast(1)).trimmingCharacters(in: .whitespaces)
+                    }
+                    config.clockFormat = convertStrftimeToDateFormat(fmt)
+                }
+            case "clock_12h", "clock12h", "time_12h", "time12h":
+                if parseBool(cleanVal) == true {
+                    config.clockFormat = "h:mm a  EEE"
+                } else if parseBool(cleanVal) == false {
+                    config.clockFormat = "HH:mm  EEE"
+                }
             case "col.volume", "volume":
                 config.barColors.volume = cleanVal
             case "col.network", "network", "col.wifi", "wifi":
@@ -475,6 +503,8 @@ public final class ConfigParser {
                 config.barColors.power = cleanVal
             case "col.surface", "surface", "col.background", "background":
                 config.barColors.surface = cleanVal
+            case "opacity", "alpha", "capsule_alpha", "capsulealpha", "bar_opacity", "baropacity":
+                if let d = Double(cleanVal) { config.barOpacity = d }
             default:
                 break
             }
@@ -507,6 +537,9 @@ public final class ConfigParser {
             if let d = Double(rawVal) { config.inactiveOpacity = d }
         case "strip_decorations", "stripdecorations", "hide_window_decorations", "hidewindowdecorations":
             if let b = parseBool(rawVal) { config.stripDecorations = b }
+        case "ignore_client", "ignoreclient", "ignore_opacity", "ignoreopacity":
+            let items = rawVal.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            if !items.isEmpty { config.ignoredClientApps = items }
         case "rounding":
             if let d = Double(rawVal) { config.rounding = CGFloat(d) }
         case "active_border", "col.active_border":
@@ -536,6 +569,9 @@ public final class ConfigParser {
                 if let d = Double(rawVal) { config.inactiveOpacity = d }
             } else if lowerNormalized.contains("strip_decorations") || lowerNormalized.contains("hide_window_decorations") {
                 if let b = parseBool(rawVal) { config.stripDecorations = b }
+            } else if lowerNormalized.contains("ignore_client") || lowerNormalized.contains("ignore_opacity") {
+                let items = rawVal.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                if !items.isEmpty { config.ignoredClientApps = items }
             } else if rawKey.lowercased().contains("active_border") {
                 let colors = parseColors(rawVal)
                 if !colors.isEmpty { config.activeBorderGradient = colors }
@@ -741,5 +777,37 @@ public final class ConfigParser {
         }
 
         return nil
+    }
+
+    /// Converts strftime-style format specifiers to DateFormatter format specifiers.
+    public static func convertStrftimeToDateFormat(_ format: String) -> String {
+        guard format.contains("%") else { return format }
+        var result = format
+        let map: [(String, String)] = [
+            ("%Y", "yyyy"),
+            ("%y", "yy"),
+            ("%B", "MMMM"),
+            ("%b", "MMM"),
+            ("%h", "MMM"),
+            ("%m", "MM"),
+            ("%d", "dd"),
+            ("%e", "d"),
+            ("%A", "EEEE"),
+            ("%a", "EEE"),
+            ("%H", "HH"),
+            ("%I", "hh"),
+            ("%l", "h"),
+            ("%k", "H"),
+            ("%M", "mm"),
+            ("%S", "ss"),
+            ("%p", "a"),
+            ("%P", "a"),
+            ("%R", "HH:mm"),
+            ("%T", "HH:mm:ss")
+        ]
+        for (src, dst) in map {
+            result = result.replacingOccurrences(of: src, with: dst)
+        }
+        return result
     }
 }

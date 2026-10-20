@@ -20,13 +20,7 @@ if [[ ! -f "$ABS_PATH" ]]; then
     exit 1
 fi
 
-CUR_WALL="$("$HOME/.local/bin/wallpaperctl" get 2>/dev/null | python3 -c "import os, sys; print(os.path.realpath(sys.stdin.read().strip()))" 2>/dev/null || true)"
-if [[ "$CUR_WALL" != "$ABS_PATH" ]]; then
-    echo "==> Setting desktop picture to: $ABS_PATH"
-    osascript -e "tell application \"System Events\" to tell every desktop to set picture to \"$ABS_PATH\""
-else
-    echo "==> Desktop picture already set to $ABS_PATH (skipping OS desktop redraw)"
-fi
+echo "==> Processing theme extraction for wallpaper: $ABS_PATH"
 
 echo "==> Running pywal16 (wal -i \"$ABS_PATH\" -q)..."
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
@@ -40,7 +34,7 @@ if [[ -z "$WAL_BIN" ]]; then
     exit 1
 fi
 
-"$WAL_BIN" -i "$ABS_PATH" -q
+"$WAL_BIN" -i "$ABS_PATH" -n --cols16 darken --backend wal -q
 
 echo "==> Exporting pywal16 generated configs..."
 WAL_CACHE="$HOME/.cache/wal"
@@ -79,6 +73,9 @@ if [[ -f "$WAL_CACHE/colors-waybar.css" ]]; then
     pkill -USR2 waybar 2>/dev/null || true
 fi
 
+echo "==> Extracting dynamic vibrancy accent (s * v in HSV)..."
+python3 "$SCRIPT_DIR/extract_accents.py"
+
 echo "==> Ensuring terminal configurations..."
 GHOSTTY_CONFIG="$HOME/.config/ghostty/config"
 if [[ -f "$GHOSTTY_CONFIG" ]]; then
@@ -86,10 +83,7 @@ if [[ -f "$GHOSTTY_CONFIG" ]]; then
         echo "config-file = theme-wal" >> "$GHOSTTY_CONFIG"
     fi
     touch "$GHOSTTY_CONFIG"
-    if pgrep -xi "ghostty" >/dev/null 2>&1; then
-        osascript -e 'tell application "System Events" to tell process "ghostty" to click menu item "Reload Configuration" of menu "Ghostty" of menu bar 1' >/dev/null 2>&1 || true
-        echo "[+] Reloaded Ghostty live configuration"
-    fi
+    echo "[+] Updated Ghostty live configuration via touch"
 fi
 
 KITTY_CONFIG="$HOME/.config/kitty/kitty.conf"

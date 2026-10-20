@@ -288,4 +288,54 @@ final class ConfigParserTests: XCTestCase {
         XCTAssertEqual(config.barColors.power, "error")
     }
 
+    func testParseBarOpacity() {
+        let input = """
+        bar {
+            opacity = 0.65
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.barOpacity, 0.65, accuracy: 0.001)
+    }
+
+    func testParseBarClockFormat12h() {
+        let input = """
+        bar {
+            clock_format = 12h
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.clockFormat, "h:mm a  EEE")
+    }
+
+    func testParseBarClockFormat24h() {
+        let input = """
+        bar {
+            clock_format = 24h
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.clockFormat, "HH:mm  EEE")
+    }
+
+    func testParseBarClockFormatCustomStrftime() {
+        let input = """
+        bar {
+            clock_format = "{:%I:%M %p  %a}"
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.clockFormat, "hh:mm a  EEE")
+    }
+
+    func testParseBarTime12hBoolean() {
+        let input = """
+        bar {
+            time_12h = true
+        }
+        """
+        let config = ConfigParser.parse(text: input)
+        XCTAssertEqual(config.clockFormat, "h:mm a  EEE")
+    }
+
 }

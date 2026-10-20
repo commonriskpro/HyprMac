@@ -87,11 +87,16 @@ public final class HyprTheme: @unchecked Sendable {
     public static let fallbackOutlineHex = "#8e919a"
 
     public static let defaultThemePaths: [String] = [
+        NSString(string: "~/.config/hyprmac/colors.json").expandingTildeInPath,
+        NSString(string: "~/.cache/wal/colors-hyprmac.json").expandingTildeInPath,
+        NSString(string: "~/.cache/wal/colors.json").expandingTildeInPath,
+        NSString(string: "~/.cache/wal/colors-rofi-dark.rasi").expandingTildeInPath,
         NSString(string: "~/.config/waybar/colors.css").expandingTildeInPath,
         NSString(string: "~/.config/waybar/colors-waybar.css").expandingTildeInPath,
         NSString(string: "~/.cache/wal/colors-waybar.css").expandingTildeInPath,
         NSString(string: "~/.cache/colors-waybar.css").expandingTildeInPath,
-        NSString(string: "~/.config/hyprmac/colors.json").expandingTildeInPath,
+        NSString(string: "~/.config/rofi/colors/colors-matugen.rasi").expandingTildeInPath,
+        NSString(string: "~/.config/rofi/colors/colors-wallust.rasi").expandingTildeInPath,
         NSString(string: "~/.cache/colors-rofi.rasi").expandingTildeInPath
     ]
 
@@ -185,14 +190,14 @@ public final class HyprTheme: @unchecked Sendable {
             return NSColor(hexString: fallbackHex)
         }
 
-        self.primary = extractColor(keys: ["primary", "color4"], fallbackHex: Self.fallbackPrimaryHex)
-        self.surface = extractColor(keys: ["surface", "surface_dim", "background", "background_matugen", "color0"], fallbackHex: Self.fallbackSurfaceHex)
-        self.onPrimary = extractColor(keys: ["on_primary", "onprimary", "background", "color0"], fallbackHex: Self.fallbackOnPrimaryHex)
-        self.onSurface = extractColor(keys: ["on_surface", "onsurface", "on_background", "onbackground", "foreground", "color7"], fallbackHex: Self.fallbackOnSurfaceHex)
-        self.secondary = extractColor(keys: ["secondary", "color2"], fallbackHex: Self.fallbackSecondaryHex)
-        self.tertiary = extractColor(keys: ["tertiary", "accent", "color5"], fallbackHex: Self.fallbackTertiaryHex)
-        self.outline = extractColor(keys: ["outline", "outline_variant", "color8"], fallbackHex: Self.fallbackOutlineHex)
-        self.error = extractColor(keys: ["error", "color1"], fallbackHex: Self.fallbackErrorHex)
+        self.primary = extractColor(keys: ["primary", "accent", "selected_normal_background", "active_background", "color10", "color4"], fallbackHex: Self.fallbackPrimaryHex)
+        self.surface = extractColor(keys: ["surface", "surface_dim", "background", "background_matugen", "normal_background", "background_color", "color0"], fallbackHex: Self.fallbackSurfaceHex)
+        self.onPrimary = extractColor(keys: ["on_primary", "onprimary", "selected_normal_foreground", "background", "color0"], fallbackHex: Self.fallbackOnPrimaryHex)
+        self.onSurface = extractColor(keys: ["on_surface", "onsurface", "foreground", "normal_foreground", "on_background", "onbackground", "color15", "color7"], fallbackHex: Self.fallbackOnSurfaceHex)
+        self.secondary = extractColor(keys: ["secondary", "accent_secondary", "selected_active_background", "color2"], fallbackHex: Self.fallbackSecondaryHex)
+        self.tertiary = extractColor(keys: ["tertiary", "accent", "color5", "color3", "color11"], fallbackHex: Self.fallbackTertiaryHex)
+        self.outline = extractColor(keys: ["outline", "outline_variant", "border_color", "color8"], fallbackHex: Self.fallbackOutlineHex)
+        self.error = extractColor(keys: ["error", "urgent_background", "color1"], fallbackHex: Self.fallbackErrorHex)
     }
 
     private func parseJSONTheme(content: String) {
@@ -203,10 +208,17 @@ public final class HyprTheme: @unchecked Sendable {
         }
 
         let colorsDict = json["colors"] as? [String: Any]
+        let specialDict = json["special"] as? [String: Any]
 
         func extractColor(keys: [String], fallbackHex: String) -> NSColor {
             for k in keys {
                 if let str = json[k] as? String, !str.isEmpty, let c = NSColor.parseColorString(str) {
+                    return c
+                }
+                if let str = specialDict?[k] as? String, !str.isEmpty, let c = NSColor.parseColorString(str) {
+                    return c
+                }
+                if let str = colorsDict?[k] as? String, !str.isEmpty, let c = NSColor.parseColorString(str) {
                     return c
                 }
                 if let nested = colorsDict?[k] as? [String: Any] {
@@ -221,14 +233,14 @@ public final class HyprTheme: @unchecked Sendable {
             return NSColor(hexString: fallbackHex)
         }
 
-        self.primary = extractColor(keys: ["primary"], fallbackHex: Self.fallbackPrimaryHex)
-        self.surface = extractColor(keys: ["surface", "surface_dim", "background"], fallbackHex: Self.fallbackSurfaceHex)
-        self.onPrimary = extractColor(keys: ["on_primary", "onPrimary"], fallbackHex: Self.fallbackOnPrimaryHex)
-        self.onSurface = extractColor(keys: ["on_surface", "onSurface", "on_background"], fallbackHex: Self.fallbackOnSurfaceHex)
-        self.secondary = extractColor(keys: ["secondary"], fallbackHex: Self.fallbackSecondaryHex)
-        self.tertiary = extractColor(keys: ["tertiary", "accent"], fallbackHex: Self.fallbackTertiaryHex)
-        self.outline = extractColor(keys: ["outline", "outline_variant"], fallbackHex: Self.fallbackOutlineHex)
-        self.error = extractColor(keys: ["error"], fallbackHex: Self.fallbackErrorHex)
+        self.primary = extractColor(keys: ["primary", "accent", "color10", "color4"], fallbackHex: Self.fallbackPrimaryHex)
+        self.surface = extractColor(keys: ["surface", "surface_dim", "background", "color0"], fallbackHex: Self.fallbackSurfaceHex)
+        self.onPrimary = extractColor(keys: ["on_primary", "onPrimary", "background", "color0"], fallbackHex: Self.fallbackOnPrimaryHex)
+        self.onSurface = extractColor(keys: ["on_surface", "onSurface", "foreground", "on_background", "color15", "color7"], fallbackHex: Self.fallbackOnSurfaceHex)
+        self.secondary = extractColor(keys: ["secondary", "accent_secondary", "color2"], fallbackHex: Self.fallbackSecondaryHex)
+        self.tertiary = extractColor(keys: ["tertiary", "accent", "color3", "color5", "color11"], fallbackHex: Self.fallbackTertiaryHex)
+        self.outline = extractColor(keys: ["outline", "outline_variant", "color8"], fallbackHex: Self.fallbackOutlineHex)
+        self.error = extractColor(keys: ["error", "color1"], fallbackHex: Self.fallbackErrorHex)
     }
 
 
@@ -296,10 +308,14 @@ public enum HyprFont {
         return descriptors
     }
 
-    public static func barFont(ofSize size: CGFloat, weight: NSFont.Weight = .medium, monospacedDigits: Bool = false) -> NSFont {
-        let baseFont: NSFont = monospacedDigits
+    public static func barFont(ofSize size: CGFloat, weight: NSFont.Weight = .medium, italic: Bool = false, monospacedDigits: Bool = false) -> NSFont {
+        var baseFont: NSFont = monospacedDigits
             ? .monospacedDigitSystemFont(ofSize: size, weight: weight)
             : .systemFont(ofSize: size, weight: weight)
+
+        if italic {
+            baseFont = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
+        }
 
         let nerdDescriptors = nerdFontDescriptors()
         guard !nerdDescriptors.isEmpty else {
@@ -316,7 +332,7 @@ public enum HyprFont {
 
 @MainActor
 extension NSFont {
-    public static func barFont(ofSize size: CGFloat, weight: NSFont.Weight = .medium, monospacedDigits: Bool = false) -> NSFont {
-        HyprFont.barFont(ofSize: size, weight: weight, monospacedDigits: monospacedDigits)
+    public static func barFont(ofSize size: CGFloat, weight: NSFont.Weight = .medium, italic: Bool = false, monospacedDigits: Bool = false) -> NSFont {
+        HyprFont.barFont(ofSize: size, weight: weight, italic: italic, monospacedDigits: monospacedDigits)
     }
 }
