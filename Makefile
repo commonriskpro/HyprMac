@@ -26,9 +26,21 @@ endif
 
 BUILD_DIR = build
 
-.PHONY: all clean hook injector client install-daemon uninstall-daemon
+.PHONY: all clean hook injector client install-daemon uninstall-daemon app install-app
 
-all: hook injector client
+all: hook injector client app
+
+app: client
+	swift build -c release
+	@mkdir -p /Applications/HyprMac.app/Contents/MacOS
+	@cp .build/release/HyprMac /Applications/HyprMac.app/Contents/MacOS/HyprMac
+	@cp $(BUILD_DIR)/libhyprclient.dylib /Applications/HyprMac.app/Contents/MacOS/libhyprclient.dylib
+	codesign -s "$(SIGN_IDENTITY)" $(CODESIGN_FLAGS) /Applications/HyprMac.app/Contents/MacOS/libhyprclient.dylib
+	codesign -s "$(SIGN_IDENTITY)" $(CODESIGN_FLAGS) /Applications/HyprMac.app/Contents/MacOS/HyprMac
+	codesign -s "$(SIGN_IDENTITY)" $(CODESIGN_FLAGS) /Applications/HyprMac.app
+
+install-app: app
+	launchctl kickstart -k gui/$$(id -u)/com.hyprmac.daemon
 
 hook: $(BUILD_DIR)/libhyprserver.dylib
 
