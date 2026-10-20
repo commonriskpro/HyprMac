@@ -36,8 +36,8 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/libhyprclient.dylib: native/client_hook/client.m | $(BUILD_DIR)
-	$(CC) -arch arm64e -target arm64e-apple-macos15.0 -O2 -dynamiclib \
-		-framework AppKit -framework Foundation \
+	$(CC) -arch arm64e -target arm64e-apple-macos15.0 -fobjc-arc -O2 -dynamiclib \
+		-framework AppKit -framework Foundation -framework QuartzCore \
 		-o $@ native/client_hook/client.m
 	codesign -s "-" --force $@
 

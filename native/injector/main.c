@@ -1,3 +1,4 @@
+#include <ctype.h>
 /**
  * hypr-inject: Two-stage PAC-safe loader for HyprMac
  *
@@ -472,6 +473,83 @@ static int resolve_shared_cache_slide_delta(mach_port_t target_task, intptr_t *o
     return 0;
 }
 
+static int is_library_already_loaded(mach_port_t task, const char *dylib_path)
+{
+    if (task == MACH_PORT_NULL || !dylib_path) return 0;
+
+    const char *target_name = strrchr(dylib_path, '/');
+    target_name = target_name ? target_name + 1 : dylib_path;
+    if (strlen(target_name) == 0) target_name = dylib_path;
+
+    task_dyld_info_data_t dyld_info;
+    mach_msg_type_number_t count = TASK_DYLD_INFO_COUNT;
+    kern_return_t kr = task_info(task, TASK_DYLD_INFO, (task_info_t)&dyld_info, &count);
+    if (kr != KERN_SUCCESS || dyld_info.all_image_info_addr == 0) {
+        return 0;
+    }
+
+    vm_offset_t all_info_data = 0;
+    mach_msg_type_number_t all_info_size = 0;
+    kr = mach_vm_read(task,
+                      dyld_info.all_image_info_addr,
+                      sizeof(struct dyld_all_image_infos),
+                      &all_info_data,
+                      &all_info_size);
+    if (kr != KERN_SUCCESS || all_info_size < sizeof(struct dyld_all_image_infos)) {
+        if (all_info_data) mach_vm_deallocate(mach_task_self(), all_info_data, all_info_size);
+        return 0;
+    }
+
+    const struct dyld_all_image_infos *infos = (const struct dyld_all_image_infos *)all_info_data;
+    uint32_t info_count = infos->infoArrayCount;
+    mach_vm_address_t info_array_addr = (mach_vm_address_t)infos->infoArray;
+    mach_vm_deallocate(mach_task_self(), all_info_data, all_info_size);
+
+    if (info_array_addr == 0 || info_count == 0) {
+        return 0;
+    }
+
+    if (info_count > 8192) {
+        info_count = 8192;
+    }
+
+    vm_size_t array_bytes = info_count * sizeof(struct dyld_image_info);
+    vm_offset_t array_data = 0;
+    mach_msg_type_number_t array_size = 0;
+    kr = mach_vm_read(task, info_array_addr, array_bytes, &array_data, &array_size);
+    if (kr != KERN_SUCCESS || array_size < sizeof(struct dyld_image_info)) {
+        if (array_data) mach_vm_deallocate(mach_task_self(), array_data, array_size);
+        return 0;
+    }
+
+    const struct dyld_image_info *images = (const struct dyld_image_info *)array_data;
+    uint32_t num_images = (uint32_t)(array_size / sizeof(struct dyld_image_info));
+    int found = 0;
+
+    for (uint32_t i = 0; i < num_images; i++) {
+        mach_vm_address_t path_addr = (mach_vm_address_t)images[i].imageFilePath;
+        if (path_addr == 0) continue;
+
+        vm_offset_t path_data = 0;
+        mach_msg_type_number_t path_size = 0;
+        if (mach_vm_read(task, path_addr, 512, &path_data, &path_size) == KERN_SUCCESS && path_size > 0) {
+            char path_buf[513];
+            size_t copy_len = path_size < 512 ? path_size : 512;
+            memcpy(path_buf, (const void *)path_data, copy_len);
+            path_buf[copy_len] = '\0';
+            mach_vm_deallocate(mach_task_self(), path_data, path_size);
+
+            if (strstr(path_buf, target_name) != NULL) {
+                found = 1;
+                break;
+            }
+        }
+    }
+
+    mach_vm_deallocate(mach_task_self(), array_data, array_size);
+    return found;
+}
+
 /* ===========================================================================
  * load_library_into_windowserver
  *
@@ -486,22 +564,41 @@ static int resolve_shared_cache_slide_delta(mach_port_t target_task, intptr_t *o
  * 5. Poll for readiness marker in x0, then wait for hook socket
  * 6. Terminate the spinning thread
  */
-static int load_library_into_windowserver(pid_t ws_pid, const char *dylib_path)
+static int load_library_into_process(pid_t target_pid, const char *dylib_path, int is_windowserver, int suspend_threads)
 {
     kern_return_t kr;
     mach_vm_address_t remote_stack = 0;
     mach_vm_address_t remote_code = 0;
     mach_vm_address_t remote_diag = 0;
     vm_size_t stack_size = 16 * 1024;
+    thread_act_array_t suspended_threads = NULL;
+    mach_msg_type_number_t suspended_count = 0;
 
     /* 1. Acquire task port */
     mach_port_t task = MACH_PORT_NULL;
-    kr = task_for_pid(mach_task_self(), ws_pid, &task);
+    kr = task_for_pid(mach_task_self(), target_pid, &task);
     if (kr != KERN_SUCCESS) {
-        LOG_ERR("task_for_pid(%d) failed: %s", ws_pid, mach_error_string(kr));
+        LOG_ERR("task_for_pid(%d) failed: %s", target_pid, mach_error_string(kr));
         return -1;
     }
-    LOG_OK("Acquired task port for WindowServer (pid %d)", ws_pid);
+    LOG_OK("Acquired task port for target process (pid %d)", target_pid);
+
+    /* Pre-flight idempotency check: inspect loaded Mach-O images before suspending threads or allocating memory */
+    if (is_library_already_loaded(task, dylib_path)) {
+        LOG_INFO("Target PID %d already has %s loaded -- skipping attachment.", target_pid, dylib_path);
+        mach_port_deallocate(mach_task_self(), task);
+        return 0;
+    }
+
+    if (suspend_threads) {
+        kr = task_threads(task, &suspended_threads, &suspended_count);
+        if (kr == KERN_SUCCESS && suspended_count > 0) {
+            for (mach_msg_type_number_t i = 0; i < suspended_count; i++) {
+                thread_suspend(suspended_threads[i]);
+            }
+            LOG_OK("Suspended %u existing threads in PID %d (Técnica B: Zero-Flicker)", suspended_count, target_pid);
+        }
+    }
 
     /* 2. Resolve symbols from shared cache, strip PAC */
     uint64_t pcfmt_addr = (uint64_t)ptrauth_strip(
@@ -736,18 +833,47 @@ static int load_library_into_windowserver(pid_t ws_pid, const char *dylib_path)
         LOG_WARN("Stage 1 marker not detected within 200 ms.");
     }
 
-    LOG_INFO("Waiting for hook readiness...");
+    LOG_INFO("Waiting for execution readiness...");
     int hook_ready = 0;
-    for (int w = 0; w < 100; w++) {
-        usleep(100000);
-        if (access(HYPR_READY_PATH, F_OK) == 0) {
-            hook_ready = 1;
-            break;
+    if (is_windowserver) {
+        for (int w = 0; w < 100; w++) {
+            usleep(100000);
+            if (access(HYPR_READY_PATH, F_OK) == 0) {
+                hook_ready = 1;
+                break;
+            }
+        }
+    } else {
+        for (int w = 0; w < 100; w++) {
+            usleep(20000);
+            vm_offset_t data = 0;
+            mach_msg_type_number_t cnt = 0;
+            if (mach_vm_read(task, remote_diag, 64, &data, &cnt) == KERN_SUCCESS && cnt >= 32) {
+                uint32_t *d = (uint32_t *)data;
+                uint64_t dlopen_handle = *(uint64_t *)(d + 2);
+                if (d[4] == 0xDEAD0003 && dlopen_handle != 0) {
+                    hook_ready = 1;
+                    mach_vm_deallocate(mach_task_self(), data, cnt);
+                    break;
+                }
+                mach_vm_deallocate(mach_task_self(), data, cnt);
+            }
         }
     }
 
     /* 11. Terminate the spinning stage 1 thread */
     thread_terminate(thread);
+
+    if (suspend_threads && suspended_threads) {
+        for (mach_msg_type_number_t i = 0; i < suspended_count; i++) {
+            thread_resume(suspended_threads[i]);
+            mach_port_deallocate(mach_task_self(), suspended_threads[i]);
+        }
+        vm_deallocate(mach_task_self(), (vm_address_t)suspended_threads, suspended_count * sizeof(thread_act_t));
+        suspended_threads = NULL;
+        suspended_count = 0;
+        LOG_OK("Resumed original threads in PID %d", target_pid);
+    }
 
     if (hook_ready) {
         LOG_OK("Hook ready -- library loaded successfully.");
@@ -984,6 +1110,13 @@ static int load_library_into_windowserver(pid_t ws_pid, const char *dylib_path)
     return hook_ready ? 0 : -1;
 
 fail:
+    if (suspend_threads && suspended_threads) {
+        for (mach_msg_type_number_t i = 0; i < suspended_count; i++) {
+            thread_resume(suspended_threads[i]);
+            mach_port_deallocate(mach_task_self(), suspended_threads[i]);
+        }
+        vm_deallocate(mach_task_self(), (vm_address_t)suspended_threads, suspended_count * sizeof(thread_act_t));
+    }
     if (remote_code)  mach_vm_deallocate(task, remote_code, 4096);
     if (remote_stack) mach_vm_deallocate(task, remote_stack, stack_size);
     if (remote_diag)  mach_vm_deallocate(task, remote_diag, 4096);
@@ -997,17 +1130,21 @@ fail:
 int main(int argc, char *argv[])
 {
     int uninstall = 0;
+    pid_t target_pid = 0;
     const char *explicit_lib = NULL;
+    int suspend = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--uninstall") == 0) uninstall = 1;
+        else if (strcmp(argv[i], "--suspend") == 0) suspend = 1;
+        else if (isdigit((unsigned char)argv[i][0]) && target_pid == 0) target_pid = (pid_t)atoi(argv[i]);
         else if (argv[i][0] != '-') explicit_lib = argv[i];
     }
 
     if (uninstall) { handle_uninstall(); return 0; }
 
-    if (geteuid() != 0) {
-        LOG_ERR("Must run as root.");
+    if (target_pid == 0 && geteuid() != 0) {
+        LOG_ERR("Must run as root to target WindowServer.");
         return 1;
     }
 
@@ -1023,6 +1160,21 @@ int main(int argc, char *argv[])
     }
     if (arm64e == 1) LOG_OK("-arm64e_preview_abi confirmed.");
     else LOG_WARN("Could not verify boot args -- proceeding.");
+
+    if (target_pid > 0) {
+        const char *dylib_path = explicit_lib ? explicit_lib : "build/libhyprclient.dylib";
+        char abs_path[PATH_MAX];
+        if (realpath(dylib_path, abs_path)) {
+            dylib_path = abs_path;
+        }
+        LOG_INFO("Target PID: %d, dylib: %s (suspend=%d)", target_pid, dylib_path, suspend);
+        if (load_library_into_process(target_pid, dylib_path, 0, suspend) != 0) {
+            LOG_ERR("Loading into PID %d failed.", target_pid);
+            return 1;
+        }
+        LOG_OK("Successfully loaded %s into PID %d.", dylib_path, target_pid);
+        return 0;
+    }
 
     if (access(SAFEMODE_PATH, F_OK) == 0) {
         LOG_ERR("Safe-mode active. Remove %s to re-enable.", SAFEMODE_PATH);
@@ -1087,7 +1239,7 @@ int main(int argc, char *argv[])
     }
     dylib_path = STAGED_DYLIB_PATH;
 
-    if (load_library_into_windowserver(ws_pid, dylib_path) != 0) {
+    if (load_library_into_process(ws_pid, dylib_path, 1, 0) != 0) {
         LOG_ERR("Loading failed.");
         return 1;
     }
