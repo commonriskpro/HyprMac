@@ -162,6 +162,10 @@ HyprMac daemon
 ### 🪟 Fibonacci / Dwindle Tiling
 Windows automatically tile in organic binary-tree spirals according to aspect ratio. Supports directional focus (`Alt + H/J/K/L`), window swaps (`Alt + Shift + H/J/K/L`), fullscreen toggle (`Alt + F`), floating toggle (`Alt + V`), split ratio adjustments, and smooth mouse drag-and-drop.
 
+<p align="center">
+  <img src="assets/showcase/01_dwindle_tiling.png" alt="Dwindle Tiling on macOS" width="850"/>
+</p>
+
 ### 📊 HyprBar (Waybar for macOS)
 Floating translucent pill bar rendered with native AppKit and behind-window blur. Displays:
 - Workspaces 1–9 (Arabic or Kanji numerals) with active indicator
@@ -172,14 +176,30 @@ Floating translucent pill bar rendered with native AppKit and behind-window blur
 - Volume and Wi-Fi SSID
 - Notification badge
 
+<p align="center">
+  <img src="assets/hyprmac_bar_rendered.png" alt="HyprBar Waybar status bar" width="850"/>
+</p>
+
 ### 🚀 Built-in Rofi Launcher (`HyprMac launcher`)
 Modal fuzzy launcher (`Alt + Space`) scanning macOS applications, command-line binaries, math expressions (`= 24 * 1024`), system power commands, and wallpaper switcher.
+
+<p align="center">
+  <img src="assets/showcase/02_rofi_launcher.png" alt="Rofi Modal Application Launcher" width="850"/>
+</p>
 
 ### ⚡ Wlogout Power Menu (`HyprMac powermenu`)
 Modal fullscreen overlay providing Lock, Suspend, Logout, Reboot, and Shutdown actions.
 
-### 🖼️ Dynamic Wallpaper Theming
-Watches `~/Library/Application Support/com.apple.wallpaper/Store` using kernel `FSEvents` (0% CPU). On wallpaper change, it extracts dominant palette colors and regenerates live themes.
+<p align="center">
+  <img src="assets/showcase/03_wlogout_power.png" alt="Wlogout Power Menu Modal" width="850"/>
+</p>
+
+### 🖼️ Dynamic Wallpaper Theming & Gallery (`HyprMac wallpaper`)
+Watches `~/Library/Application Support/com.apple.wallpaper/Store` using kernel `FSEvents` (0% CPU). On wallpaper change, it extracts dominant palette colors and regenerates live themes. Includes a visual modal gallery to preview and switch backgrounds.
+
+<p align="center">
+  <img src="assets/showcase/04_wallpaper_gallery.png" alt="Wallpaper Gallery Selector" width="850"/>
+</p>
 
 ---
 
