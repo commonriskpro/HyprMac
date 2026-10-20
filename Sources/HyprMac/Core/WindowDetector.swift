@@ -330,8 +330,17 @@ public final class WindowDetector: @unchecked Sendable {
             var roleVal: AnyObject?
             if AXUIElementCopyAttributeValue(cached, kAXRoleAttribute as CFString, &roleVal) == .success,
                let role = roleVal as? String, role == (kAXWindowRole as String) {
-                lock.unlock()
-                return cached
+                if let cachedWid = getWindowID(for: cached) {
+                    if cachedWid == windowID {
+                        lock.unlock()
+                        return cached
+                    } else {
+                        axElementCache.removeValue(forKey: windowID)
+                    }
+                } else {
+                    lock.unlock()
+                    return cached
+                }
             } else {
                 axElementCache.removeValue(forKey: windowID)
             }
@@ -371,12 +380,15 @@ public final class WindowDetector: @unchecked Sendable {
             }
         }
 
-        // Single window fallback only if exactly one genuine AXWindow exists
+        // Single window fallback only if exactly one genuine AXWindow exists AND its window ID is unknown or matches
         if windowElements.count == 1, let singleWin = windowElements.first {
-            lock.lock()
-            axElementCache[windowID] = singleWin
-            lock.unlock()
-            return singleWin
+            let singleWid = getWindowID(for: singleWin)
+            if singleWid == nil || singleWid == windowID {
+                lock.lock()
+                axElementCache[windowID] = singleWin
+                lock.unlock()
+                return singleWin
+            }
         }
         return nil
     }

@@ -127,4 +127,13 @@ final class WindowDetectorTests: XCTestCase {
         // Clear cache
         detector.clearCache()
     }
+
+    func testMismatchedWindowIDNotMatchedViaSingleWindowFallback() {
+        let detector = WindowDetector.shared
+        // Querying an arbitrary or auxiliary window ID must never adopt a mismatched genuine window
+        let bogusWid: CGWindowID = 999988
+        let elem = detector.getWindowAXElement(windowID: bogusWid, pid: getpid())
+        XCTAssertNil(elem)
+        XCTAssertFalse(detector.isStandardWindow(windowID: bogusWid, pid: getpid()))
+    }
 }
