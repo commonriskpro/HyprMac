@@ -12,10 +12,8 @@ func printUsage() {
 
     Commands:
       probe       Inspect and print active focused window properties (app, title, windowID, bounds, SkyLight tags)
-      border [--halo|--neon] Launch the real-time Hyprland floating glass halo / gradient border daemon
       strip       Test dynamic titlebar / decoration removal on the active focused window
       tile        Detect visible user windows on current screen and arrange in Dwindle layout
-      test-border Run unit tests verifying BorderWindow, Glass Halo modes, bounds, and self-tests
       test-config Run unit tests verifying the hyprland.conf parser and variable expansion
       test-keys   Run unit tests verifying keycode resolution, modifier parsing, and event tap
       parse-config [path] Parse a hyprland.conf file and display its parsed rules and bindings
@@ -370,148 +368,6 @@ func runStrip() {
         print("[+] Updated Tags: [\(after0), \(after1)]")
     } else {
         print("[-] Failed to apply SkyLight stripTitlebar to window \(wid).")
-        exit(1)
-    }
-}
-
-@MainActor
-func runBorderDaemon(mode: BorderMode = .glassHalo) {
-    if !WindowDetector.isProcessTrusted() {
-        print("[!] Accessibility permission required for window tracking. Requesting...")
-        _ = WindowDetector.isProcessTrusted(prompt: true)
-    }
-
-    let app = NSApplication.shared
-    app.setActivationPolicy(.accessory)
-
-    let borderWindow = BorderWindow()
-    borderWindow.mode = mode
-
-    let modeDescription: String
-    switch mode {
-    case .glassHalo:
-        modeDescription = "Glass Halo: Frosted dark glass bezel (\(borderWindow.haloPadding)pt padding, \(borderWindow.cornerRadius)pt rounding, soft drop shadow, titlebar strip)"
-    case .neon:
-        modeDescription = "Neon: Cyan (#33CCFF) -> Neon Green (#00FF99) rotating gradient"
-    case .outline:
-        modeDescription = "Outline: Minimal crisp window border"
-    }
-
-    print("""
-    [HyprMac] Hyprland Window Shell Daemon Active (Mode: \(mode.rawValue))
-    [HyprMac] \(modeDescription)
-    [HyprMac] Tracking active window at 60Hz. Press Ctrl+C to terminate.
-    """
-    )
-
-    // Handle SIGINT and SIGTERM gracefully via DispatchSource
-    signal(SIGINT, SIG_IGN)
-    signal(SIGTERM, SIG_IGN)
-
-    let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-    sigintSource.setEventHandler {
-        print("\n[HyprMac] Shutting down border daemon...")
-        borderWindow.hideBorder()
-        NSApplication.shared.stop(nil)
-        exit(0)
-    }
-    sigintSource.resume()
-
-    let sigtermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-    sigtermSource.setEventHandler {
-        print("\n[HyprMac] Terminating border daemon...")
-        borderWindow.hideBorder()
-        NSApplication.shared.stop(nil)
-        exit(0)
-    }
-    sigtermSource.resume()
-
-    final class BorderDaemonController: @unchecked Sendable {
-        var lastWid: CGWindowID = 0
-        var lastFrame: NSRect = .zero
-        let borderWindow: BorderWindow
-
-        init(borderWindow: BorderWindow) {
-            self.borderWindow = borderWindow
-        }
-
-        @MainActor
-        func update() {
-            if let focused = WindowDetector.shared.getFocusedWindow() {
-                let selfWid = CGWindowID(borderWindow.windowNumber)
-                if focused.windowID != selfWid {
-                    if focused.windowID != lastWid || focused.appkitFrame != lastFrame {
-                        lastWid = focused.windowID
-                        lastFrame = focused.appkitFrame
-                        borderWindow.update(for: focused)
-                    }
-                }
-            } else {
-                if lastWid != 0 {
-                    lastWid = 0
-                    lastFrame = .zero
-                    borderWindow.hideBorder()
-                }
-            }
-        }
-    }
-
-    let controller = BorderDaemonController(borderWindow: borderWindow)
-    let axObserver = AXEventObserver()
-    axObserver.onWindowMoved = { controller.update() }
-    axObserver.onWindowResized = { controller.update() }
-    axObserver.onFocusedWindowChanged = { controller.update() }
-
-    // Initial update & attach Accessibility observer to active application
-    controller.update()
-    if let frontApp = NSWorkspace.shared.frontmostApplication {
-        axObserver.observe(pid: frontApp.processIdentifier)
-    }
-
-    // Event-driven focus updates on application activation/deactivation/hide/unhide
-    let notifCenter = NSWorkspace.shared.notificationCenter
-    _ = notifCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { notif in
-        let activatedApp = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-        let activatedPid = activatedApp?.processIdentifier ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
-        MainActor.assumeIsolated {
-            controller.update()
-            if let pid = activatedPid {
-                axObserver.observe(pid: pid)
-            }
-        }
-    }
-    _ = notifCenter.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main) { _ in
-        MainActor.assumeIsolated {
-            controller.update()
-        }
-    }
-    _ = notifCenter.addObserver(forName: NSWorkspace.didHideApplicationNotification, object: nil, queue: .main) { _ in
-        MainActor.assumeIsolated {
-            controller.update()
-        }
-    }
-    _ = notifCenter.addObserver(forName: NSWorkspace.didUnhideApplicationNotification, object: nil, queue: .main) { _ in
-        MainActor.assumeIsolated {
-            controller.update()
-        }
-    }
-
-    app.run()
-}
-
-@MainActor
-func runTestBorder() {
-    print("""
-    ==================================================
-               HyprMac Border Window Tests
-    ==================================================
-    """)
-    let ok = BorderWindow.runSelfTest()
-    let mgrOk = BorderManager.runSelfTest()
-    if ok && mgrOk {
-        print("[+] All BorderWindow and BorderManager self-tests PASSED successfully!")
-    } else {
-        print("[-] Border tests FAILED!")
         exit(1)
     }
 }
@@ -1880,23 +1736,10 @@ MainActor.assumeIsolated {
         runProbe()
     case "daemon", "start":
         runIntegratedDaemon(configPath: args.dropFirst().first)
-    case "border":
-        let subArg = args.dropFirst().first?.lowercased()
-        let mode: BorderMode
-        if subArg == "--neon" || subArg == "-neon" || subArg == "neon" {
-            mode = .neon
-        } else if subArg == "--outline" || subArg == "-outline" || subArg == "outline" {
-            mode = .outline
-        } else {
-            mode = .glassHalo
-        }
-        runBorderDaemon(mode: mode)
     case "strip":
         runStrip()
     case "tile":
         runTile()
-    case "test-border":
-        runTestBorder()
     case "test-config":
         runTestConfig()
     case "test-keys":

@@ -202,16 +202,16 @@ public final class ConfigParser {
             return false
         }
 
-        // Verify alternate key syntax (colon prefix, hide_window_decorations, neon mode)
+        // Verify alternate key syntax (colon prefix, hide_window_decorations, outline mode)
         let altSample = """
-        general:border_mode = neon
+        general:border_mode = outline
         halo_padding = 16.5
         decoration:active_opacity = 0.88
         hide_window_decorations = 0
         """
         let altConfig = parse(text: altSample)
-        guard altConfig.borderMode == .neon else {
-            print("[-] runSelfTest failed: altConfig borderMode != .neon (got \(altConfig.borderMode))")
+        guard altConfig.borderMode == .outline else {
+            print("[-] runSelfTest failed: altConfig borderMode != .outline (got \(altConfig.borderMode))")
             return false
         }
         guard altConfig.haloPadding == 16.5 else {
@@ -524,9 +524,7 @@ public final class ConfigParser {
                 config.borderMode = m
             } else if lower == "halo" || lower == "glass" || lower == "glasshalo" {
                 config.borderMode = .glassHalo
-            } else if lower == "neon" {
-                config.borderMode = .neon
-            } else if lower == "outline" {
+            } else if lower == "neon" || lower == "outline" {
                 config.borderMode = .outline
             }
         case "halo_padding", "halopadding":
@@ -556,9 +554,7 @@ public final class ConfigParser {
                     config.borderMode = m
                 } else if lower == "halo" || lower == "glass" || lower == "glasshalo" {
                     config.borderMode = .glassHalo
-                } else if lower == "neon" {
-                    config.borderMode = .neon
-                } else if lower == "outline" {
+                } else if lower == "neon" || lower == "outline" {
                     config.borderMode = .outline
                 }
             } else if lowerNormalized.contains("halo_padding") || lowerNormalized.contains("halopadding") {

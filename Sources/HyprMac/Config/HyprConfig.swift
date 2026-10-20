@@ -293,16 +293,16 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var gapsIn: CGFloat = 5.0
     /// Outer gap between windows and monitor screen edges in points (default: 10.0).
     public var gapsOut: CGFloat = 10.0
-    /// Window border thickness in points (default: 2).
-    public var borderSize: Int = 2
-    /// Gradient color palette for active window borders as RGBA UInt32 values (default: Hyprland Cyan to Neon Green).
-    public var activeBorderGradient: [UInt32] = [0x33CCFFEE, 0x00FF99EE]
+    /// Window border thickness in points (default: 0 for frameless mode).
+    public var borderSize: Int = 0
+    /// Gradient color palette for active window borders as RGBA UInt32 values.
+    public var activeBorderGradient: [UInt32] = [0x595959AA]
     /// Border color for inactive windows as an RGBA UInt32 value (default: semi-transparent grey).
     public var inactiveBorderColor: UInt32 = 0x595959AA
     /// Corner rounding radius for windows and borders in points (default: 10.0).
     public var rounding: CGFloat = 10.0
-    /// Border presentation mode for the active window shell (default: .glassHalo).
-    public var borderMode: BorderMode = .neon
+    /// Border presentation mode for the active window shell (default: .outline).
+    public var borderMode: BorderMode = .outline
     /// Padding distance in points for the floating glass halo casing (default: 12.0).
     public var haloPadding: CGFloat = 12.0
     /// Window alpha/opacity for active windows when under the compositor (default: 0.96).
@@ -367,11 +367,11 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public init(
         gapsIn: CGFloat = 5.0,
         gapsOut: CGFloat = 10.0,
-        borderSize: Int = 2,
-        activeBorderGradient: [UInt32] = [0x33CCFFEE, 0x00FF99EE],
+        borderSize: Int = 0,
+        activeBorderGradient: [UInt32] = [0x595959AA],
         inactiveBorderColor: UInt32 = 0x595959AA,
         rounding: CGFloat = 10.0,
-        borderMode: BorderMode = .neon,
+        borderMode: BorderMode = .outline,
         haloPadding: CGFloat = 12.0,
         windowOpacity: Double = 0.96,
         inactiveOpacity: Double = 0.98,

@@ -8,11 +8,10 @@ final class ConfigParserTests: XCTestCase {
         let config = HyprConfig.default
         XCTAssertEqual(config.gapsIn, 5.0)
         XCTAssertEqual(config.gapsOut, 10.0)
-        XCTAssertEqual(config.borderSize, 2)
-        XCTAssertEqual(config.activeBorderGradient, [0x33CCFFEE, 0x00FF99EE])
+        XCTAssertEqual(config.borderSize, 0)
         XCTAssertEqual(config.inactiveBorderColor, 0x595959AA)
         XCTAssertEqual(config.rounding, 10.0)
-        XCTAssertEqual(config.borderMode, .neon)
+        XCTAssertEqual(config.borderMode, .outline)
         XCTAssertEqual(config.haloPadding, 12.0)
         XCTAssertEqual(config.windowOpacity, 0.96)
         XCTAssertEqual(config.inactiveOpacity, 0.98)
@@ -26,9 +25,9 @@ final class ConfigParserTests: XCTestCase {
         let config = ConfigParser.parse(text: "")
         XCTAssertEqual(config.gapsIn, 5.0)
         XCTAssertEqual(config.gapsOut, 10.0)
-        XCTAssertEqual(config.borderSize, 2)
+        XCTAssertEqual(config.borderSize, 0)
         XCTAssertEqual(config.rounding, 10.0)
-        XCTAssertEqual(config.borderMode, .neon)
+        XCTAssertEqual(config.borderMode, .outline)
         XCTAssertTrue(config.bindings.isEmpty)
     }
 
@@ -195,9 +194,8 @@ final class ConfigParserTests: XCTestCase {
 
     func testBorderModeEnum() {
         XCTAssertEqual(BorderMode.glassHalo.rawValue, "glass_halo")
-        XCTAssertEqual(BorderMode.neon.rawValue, "neon")
         XCTAssertEqual(BorderMode.outline.rawValue, "outline")
-        XCTAssertEqual(BorderMode.allCases.count, 3)
+        XCTAssertEqual(BorderMode.allCases.count, 2)
     }
 
     func testBindingEquality() {

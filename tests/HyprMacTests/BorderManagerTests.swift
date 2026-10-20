@@ -10,14 +10,11 @@ final class BorderManagerTests: XCTestCase {
         XCTAssertTrue(success, "BorderManager.runSelfTest() must return true")
     }
 
-    func testActiveAndInactiveBorderStyles() {
+    func testFramelessModeSpawnsZeroOverlays() {
         let manager = BorderManager()
         var config = HyprConfig()
-        config.borderMode = .neon
-        config.borderSize = 4
+        config.borderSize = 0
         config.rounding = 14.0
-        config.activeBorderGradient = [0x33CCFFEE, 0x00FF99EE]
-        config.inactiveBorderColor = 0x595959AA
 
         let target1 = FocusedWindowInfo(
             windowID: 201,
@@ -34,34 +31,19 @@ final class BorderManagerTests: XCTestCase {
         ]
 
         manager.update(focused: target1, managedFrames: managedFrames, config: config)
-        XCTAssertEqual(manager.overlays.count, 2)
-
-        guard let activeOverlay = manager.overlays[201] else {
-            XCTFail("Missing active overlay for window 201")
-            return
-        }
-        XCTAssertEqual(activeOverlay.mode, .neon)
-        XCTAssertEqual(activeOverlay.borderWidth, 4.0)
-        XCTAssertEqual(activeOverlay.cornerRadius, 14.0)
-
-        guard let inactiveOverlay = manager.overlays[202] else {
-            XCTFail("Missing inactive overlay for window 202")
-            return
-        }
-        XCTAssertEqual(inactiveOverlay.mode, .outline)
-        XCTAssertEqual(inactiveOverlay.borderWidth, 4.0)
-        XCTAssertEqual(inactiveOverlay.cornerRadius, 14.0)
+        XCTAssertTrue(manager.overlays.isEmpty, "Frameless mode must never spawn window overlays")
+        XCTAssertFalse(manager.isBorderWindow(windowID: 201))
+        XCTAssertFalse(manager.isBorderWindow(windowID: 202))
+        XCTAssertEqual(manager.managedWindowIDs, Set([201, 202]))
 
         manager.hideAll()
-        XCTAssertTrue(manager.overlays.isEmpty)
+        XCTAssertTrue(manager.managedWindowIDs.isEmpty)
     }
 
-    func testFocusSwitchSwapsBorderStyles() {
+    func testFocusSwitchUpdatesManagedWindowsWithoutOverlays() {
         let manager = BorderManager()
         var config = HyprConfig()
-        config.borderMode = .glassHalo
-        config.borderSize = 2
-        config.rounding = 10.0
+        config.borderSize = 0
 
         let target1 = FocusedWindowInfo(
             windowID: 301,
@@ -85,18 +67,17 @@ final class BorderManagerTests: XCTestCase {
         ]
 
         manager.update(focused: target1, managedFrames: managedFrames, config: config)
-        XCTAssertEqual(manager.overlays[301]?.mode, .glassHalo)
-        XCTAssertEqual(manager.overlays[302]?.mode, .outline)
+        XCTAssertTrue(manager.overlays.isEmpty)
 
         // Focus switches to 302
         manager.update(focused: target2, managedFrames: managedFrames, config: config)
-        XCTAssertEqual(manager.overlays[301]?.mode, .outline)
-        XCTAssertEqual(manager.overlays[302]?.mode, .glassHalo)
+        XCTAssertTrue(manager.overlays.isEmpty)
+        XCTAssertEqual(manager.managedWindowIDs, Set([301, 302]))
 
         manager.hideAll()
     }
 
-    func testClosedWindowOverlayCleanup() {
+    func testClosedWindowCleanup() {
         let manager = BorderManager()
         let config = HyprConfig()
 
@@ -115,13 +96,13 @@ final class BorderManagerTests: XCTestCase {
         ]
 
         manager.update(focused: target, managedFrames: frames, config: config)
-        XCTAssertEqual(manager.overlays.count, 3)
+        XCTAssertEqual(manager.managedWindowIDs.count, 3)
 
         // 403 closes
         frames.removeValue(forKey: 403)
         manager.update(focused: target, managedFrames: frames, config: config)
-        XCTAssertEqual(manager.overlays.count, 2)
-        XCTAssertNil(manager.overlays[403])
+        XCTAssertEqual(manager.managedWindowIDs.count, 2)
+        XCTAssertFalse(manager.managedWindowIDs.contains(403))
 
         manager.hideAll()
     }
@@ -136,16 +117,11 @@ final class BorderManagerTests: XCTestCase {
         let initialFrames = engine.tileWindows(windowIDs: managedWindowOrder, in: bounds)
         XCTAssertEqual(initialFrames.count, 3)
 
-        // Simulate user clicking on window 103:
-        // CGWindowList returns [103, 101, 102] in Z-order
         let zOrderAfterClick: [CGWindowID] = [103, 101, 102]
         let currentSet = Set(zOrderAfterClick)
 
-        // Decoupled logic check:
-        // Because Set(zOrderAfterClick) == managedWindowSet, NO retiling or window manipulation occurs
         XCTAssertEqual(currentSet, managedWindowSet, "Window set is identical on pure focus change")
 
-        // Engine frames remain completely stationary
         let framesAfterFocus = engine.currentFrames()
         XCTAssertEqual(framesAfterFocus, initialFrames, "Windows must remain completely stationary upon focus change")
         XCTAssertEqual(framesAfterFocus[101], initialFrames[101])
@@ -175,4 +151,3 @@ final class BorderManagerTests: XCTestCase {
         XCTAssertTrue(manager.overlays.isEmpty, "Overlays must be completely empty when borderSize == 0")
     }
 }
-
