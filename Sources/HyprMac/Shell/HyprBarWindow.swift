@@ -1,3 +1,4 @@
+
 import Cocoa
 
 /// Layout presentation style for HyprBarWindow
@@ -38,8 +39,6 @@ public final class HyprBarWindow: NSPanel {
 
     public override var canBecomeKey: Bool { false }
     public override var canBecomeMain: Bool { false }
-
-
 
     public init(
         screen: NSScreen? = NSScreen.main,
@@ -130,6 +129,7 @@ public final class HyprBarWindow: NSPanel {
             orderFrontRegardless()
         }
         barView.startTimers()
+        NotificationCenterManager.shared.start()
     }
 
     /// Hides the bar and halts background timers
@@ -269,3 +269,4 @@ public final class HyprBarWindow: NSPanel {
         return true
     }
 }
+

@@ -1,9 +1,12 @@
+
 import Cocoa
 import QuartzCore
 import IOKit.ps
 import AudioToolbox
 import CoreAudio
 import Darwin
+import CoreWLAN
+import CoreLocation
 
 /// Battery status representation read from hardware power sources
 public struct BatteryStatus: Sendable, Equatable {
@@ -158,23 +161,109 @@ public enum VolumeMonitor {
 
         return Int((volume * 100.0).rounded())
     }
+
+    public static func setVolume(_ volume: Int) {
+        let clamped = max(0, min(100, volume))
+        var defaultOutputDeviceID = AudioDeviceID(0)
+        var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &propertySize,
+            &defaultOutputDeviceID
+        )
+        guard status == noErr else {
+            let script = "set volume output volume \(clamped)"
+            NSAppleScript(source: script)?.executeAndReturnError(nil)
+            return
+        }
+
+        var volFloat = Float32(clamped) / 100.0
+        propertyAddress.mSelector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
+        propertyAddress.mScope = kAudioObjectPropertyScopeOutput
+        let setStatus = AudioObjectSetPropertyData(
+            defaultOutputDeviceID,
+            &propertyAddress,
+            0,
+            nil,
+            propertySize,
+            &volFloat
+        )
+        if setStatus != noErr {
+            let script = "set volume output volume \(clamped)"
+            NSAppleScript(source: script)?.executeAndReturnError(nil)
+        }
+    }
 }
 
 /// Reader for active Wi-Fi network SSID
+final class LocationDelegate: NSObject, CLLocationManagerDelegate {
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        NetworkMonitor.resetCache()
+    }
+}
+
 public enum NetworkMonitor {
     nonisolated(unsafe) private static var cachedSSID: String = "Wi-Fi"
     nonisolated(unsafe) private static var lastCheckTime: TimeInterval = 0
+    nonisolated(unsafe) private static var locationManager: CLLocationManager?
+    nonisolated(unsafe) private static var locationDelegate: LocationDelegate?
+
+    public static func resetCache() {
+        lastCheckTime = 0
+    }
+
+    @MainActor
+    public static func requestAuthorizationIfNeeded() {
+        if locationManager == nil {
+            let lm = CLLocationManager()
+            let del = LocationDelegate()
+            lm.delegate = del
+            locationDelegate = del
+            locationManager = lm
+        }
+        if let lm = locationManager, lm.authorizationStatus == .notDetermined {
+            lm.requestWhenInUseAuthorization()
+        }
+    }
 
     public static func currentSSID() -> String {
         let now = Date().timeIntervalSince1970
-        if now - lastCheckTime < 5.0 {
+        if now - lastCheckTime < 3.0 {
             return cachedSSID
         }
         lastCheckTime = now
 
+        // Request location permission from Aqua session so macOS allows SSID reading
+        Task { @MainActor in
+            requestAuthorizationIfNeeded()
+        }
+
+        // 1. Direct CoreWLAN interface reading (requires Location authorization on macOS 14+)
+        if let wifiIface = CWWiFiClient.shared().interface() {
+            if !wifiIface.powerOn() {
+                cachedSSID = "Off"
+                return cachedSSID
+            }
+            if let ssid = wifiIface.ssid(), !ssid.isEmpty, ssid != "<redacted>" {
+                cachedSSID = ssid
+                return ssid
+            }
+        }
+
+        // 2. Fallback to ipconfig getsummary
+        let iface = CWWiFiClient.shared().interface()?.interfaceName ?? "en1"
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/networksetup")
-        task.arguments = ["-getairportnetwork", "en1"]
+        task.executableURL = URL(fileURLWithPath: "/usr/sbin/ipconfig")
+        task.arguments = ["getsummary", iface]
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = Pipe()
@@ -183,12 +272,12 @@ public enum NetworkMonitor {
             try task.run()
             task.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) {
-                if str.contains("Current Wi-Fi Network:") {
-                    let parts = str.components(separatedBy: "Current Wi-Fi Network:")
-                    if parts.count > 1 {
-                        let ssid = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !ssid.isEmpty {
+            if let str = String(data: data, encoding: .utf8) {
+                for line in str.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("SSID : ") {
+                        let ssid = trimmed.replacingOccurrences(of: "SSID : ", with: "").trimmingCharacters(in: .whitespaces)
+                        if !ssid.isEmpty && ssid != "<redacted>" {
                             cachedSSID = ssid
                             return ssid
                         }
@@ -197,6 +286,9 @@ public enum NetworkMonitor {
             }
         } catch {}
 
+        if cachedSSID == "<redacted>" {
+            cachedSSID = "Wi-Fi"
+        }
         return cachedSSID
     }
 }
@@ -328,7 +420,7 @@ public final class FloatingCapsuleView: NSView {
         }
     }
 
-    public var surfaceAlpha: CGFloat = 0.60 {
+    public var surfaceAlpha: CGFloat = 0.65 {
         didSet {
             updateTheme()
         }
@@ -338,8 +430,9 @@ public final class FloatingCapsuleView: NSView {
     private let visualEffectView = NSVisualEffectView()
     private let darkOverlay = NSView()
     public let stackView = NSStackView()
+    public var contentView: NSView { clipView }
 
-    public init(cornerRadius: CGFloat = 5.0, theme: HyprTheme = .shared, surfaceAlpha: CGFloat = 0.60) {
+    public init(cornerRadius: CGFloat = 5.0, theme: HyprTheme = .shared, surfaceAlpha: CGFloat = 0.65) {
         self.cornerRadius = cornerRadius
         self.theme = theme
         self.surfaceAlpha = surfaceAlpha
@@ -367,7 +460,7 @@ public final class FloatingCapsuleView: NSView {
 
         // Frosted glass background
         visualEffectView.translatesAutoresizingMaskIntoConstraints = false
-        visualEffectView.material = .hudWindow
+        visualEffectView.material = .fullScreenUI
         visualEffectView.blendingMode = .behindWindow
         visualEffectView.state = .active
         visualEffectView.appearance = NSAppearance(named: .darkAqua)
@@ -427,17 +520,38 @@ public final class FloatingCapsuleView: NSView {
         darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
     }
 
+    private var previousRenderedFrame: NSRect = .zero
+
     public override func layout() {
         super.layout()
+        let currentFrame = frame
         if bounds.width > 0 && bounds.height > 0 {
             layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
         }
+
+        // Invalidate vacated dirty rects in the transparent window backing store when shrinking
+        if previousRenderedFrame != .zero && previousRenderedFrame != currentFrame {
+            if currentFrame.width < previousRenderedFrame.width || currentFrame.height < previousRenderedFrame.height || currentFrame.origin != previousRenderedFrame.origin {
+                let shadowPadding: CGFloat = 16.0
+                let dirtyRect = previousRenderedFrame.insetBy(dx: -shadowPadding, dy: -shadowPadding)
+                superview?.setNeedsDisplay(dirtyRect)
+                window?.viewsNeedDisplay = true
+            }
+        }
+        previousRenderedFrame = currentFrame
     }
 }
 
 /// Native Waybar-style status bar with 3 independent floating capsules (mxmrn rice)
 @MainActor
 public final class BarView: NSView {
+    public override var isOpaque: Bool { false }
+
+    public override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        NSGraphicsContext.current?.cgContext.clear(dirtyRect)
+    }
+
     public var cornerRadius: CGFloat = 5.0 {
         didSet {
             leftCapsule.cornerRadius = cornerRadius
@@ -458,7 +572,7 @@ public final class BarView: NSView {
         }
     }
 
-    public var capsuleAlpha: CGFloat = 0.60 {
+    public var capsuleAlpha: CGFloat = 0.65 {
         didSet {
             leftCapsule.surfaceAlpha = capsuleAlpha
             centerCapsule.surfaceAlpha = capsuleAlpha
@@ -499,18 +613,27 @@ public final class BarView: NSView {
 
     public let powerContainer = ClickablePill()
     public let powerLabel = NSTextField(labelWithString: "󰐥")
+    private var currentWlogoutWindow: WlogoutWindow?
 
     // Periodic update timer
     nonisolated(unsafe) private var updateTimer: Timer?
+    public var clockFormat: String = "h:mm a  EEE" {
+        didSet {
+            dateFormatter.dateFormat = clockFormat
+            updateClock()
+        }
+    }
     private let dateFormatter: DateFormatter = {
         let df = DateFormatter()
-        df.dateFormat = "HH:mm  EEE"
+        df.dateFormat = "h:mm a  EEE"
         return df
     }()
 
-    public init(frame frameRect: NSRect = .zero, workspaceCount: Int = 6, theme: HyprTheme = .shared) {
+    public init(frame frameRect: NSRect = .zero, workspaceCount: Int = 6, theme: HyprTheme = .shared, clockFormat: String = "h:mm a  EEE") {
         self.theme = theme
+        self.clockFormat = clockFormat
         super.init(frame: frameRect)
+        dateFormatter.dateFormat = clockFormat
         setupViews(workspaceCount: workspaceCount)
         startTimers()
     }
@@ -528,6 +651,7 @@ public final class BarView: NSView {
 
     private func setupViews(workspaceCount: Int) {
         wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         layer?.backgroundColor = NSColor.clear.cgColor
 
         leftCapsule.translatesAutoresizingMaskIntoConstraints = false
@@ -642,6 +766,7 @@ public final class BarView: NSView {
         notificationContainer.translatesAutoresizingMaskIntoConstraints = false
         notificationContainer.wantsLayer = true
         notificationContainer.onClick = { [weak self] in
+            NotificationCenterManager.shared.toggleDrawer()
             self?.onNotificationClicked?()
         }
 
@@ -650,8 +775,13 @@ public final class BarView: NSView {
         notificationLabel.isSelectable = false
         notificationLabel.font = .barFont(ofSize: 12, weight: .medium)
         notificationLabel.alignment = .center
-        notificationLabel.stringValue = "󱅫"
+        notificationLabel.stringValue = "󰂚"
         notificationContainer.addSubview(notificationLabel)
+
+        NotificationCenterManager.shared.onStateChange = { [weak self] in
+            self?.updateNotificationIndicator()
+        }
+        updateNotificationIndicator()
 
         NSLayoutConstraint.activate([
             notificationLabel.centerXAnchor.constraint(equalTo: notificationContainer.centerXAnchor),
@@ -696,7 +826,12 @@ public final class BarView: NSView {
         powerContainer.translatesAutoresizingMaskIntoConstraints = false
         powerContainer.wantsLayer = true
         powerContainer.onClick = { [weak self] in
-            self?.onPowerClicked?()
+            guard let self = self else { return }
+            if let custom = self.onPowerClicked {
+                custom()
+            } else {
+                self.presentWlogout()
+            }
         }
 
         powerLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -782,17 +917,32 @@ public final class BarView: NSView {
     // MARK: - Active Window Module
 
     public func updateActiveWindow(title: String, app: String) {
+        let oldLeftFrame = leftCapsule.frame
         currentAppName = app.trimmingCharacters(in: .whitespacesAndNewlines)
         currentWindowTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let newString: String
         if currentAppName.isEmpty && currentWindowTitle.isEmpty {
-            windowTitleLabel.stringValue = "~"
+            newString = "~"
         } else if !currentAppName.isEmpty && currentWindowTitle.isEmpty {
-            windowTitleLabel.stringValue = currentAppName
+            newString = currentAppName
         } else if currentAppName.isEmpty && !currentWindowTitle.isEmpty {
-            windowTitleLabel.stringValue = currentWindowTitle
+            newString = currentWindowTitle
         } else {
-            windowTitleLabel.stringValue = "\(currentAppName): \(currentWindowTitle)"
+            newString = "\(currentAppName): \(currentWindowTitle)"
+        }
+
+        if windowTitleLabel.stringValue != newString {
+            windowTitleLabel.stringValue = newString
+            leftCapsule.needsLayout = true
+            layoutSubtreeIfNeeded()
+            let newLeftFrame = leftCapsule.frame
+            if newLeftFrame.width < oldLeftFrame.width || newLeftFrame.origin != oldLeftFrame.origin {
+                let shadowPadding: CGFloat = 16.0
+                let dirtyRect = oldLeftFrame.insetBy(dx: -shadowPadding, dy: -shadowPadding)
+                setNeedsDisplay(dirtyRect)
+                window?.viewsNeedDisplay = true
+            }
         }
     }
 
@@ -813,6 +963,7 @@ public final class BarView: NSView {
         let mem = HardwareMonitor.currentMemoryLoad()
         cpuLabel.stringValue = "󰍛  \(cpu)%"
         memLabel.stringValue = "  \(mem)%"
+        updateNotificationIndicator()
     }
 
     public func updateVolume() {
@@ -820,9 +971,26 @@ public final class BarView: NSView {
         volumeLabel.stringValue = "  \(vol)%"
     }
 
+    public func updateNotificationIndicator() {
+        let manager = NotificationCenterManager.shared
+        if manager.isDoNotDisturb {
+            notificationLabel.stringValue = "󰂛"
+        } else if !manager.history.isEmpty {
+            notificationLabel.stringValue = "󰂚 \(manager.history.count)"
+        } else {
+            notificationLabel.stringValue = "󰂚"
+        }
+    }
+
     public func updateNetwork() {
         let ssid = NetworkMonitor.currentSSID()
-        networkLabel.stringValue = "  \(ssid)"
+        if ssid == "Off" {
+            networkLabel.stringValue = "󰤭  Off"
+        } else if ssid == "Disconnected" {
+            networkLabel.stringValue = "󰤩  Disconnected"
+        } else {
+            networkLabel.stringValue = "  \(ssid)"
+        }
     }
 
     public func startTimers() {
@@ -843,4 +1011,25 @@ public final class BarView: NSView {
         updateTimer?.invalidate()
         updateTimer = nil
     }
+
+    // MARK: - Power Menu / Wlogout
+
+    @MainActor
+    public func presentWlogout() {
+        if let existing = currentWlogoutWindow {
+            existing.dismiss()
+            currentWlogoutWindow = nil
+            return
+        }
+        let wlogout = WlogoutWindow(screen: window?.screen ?? NSScreen.main)
+        wlogout.onDismiss = { [weak self] in
+            self?.currentWlogoutWindow = nil
+        }
+        wlogout.onActionExecuted = { [weak self] _ in
+            self?.currentWlogoutWindow = nil
+        }
+        currentWlogoutWindow = wlogout
+        wlogout.present()
+    }
 }
+

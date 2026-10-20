@@ -65,6 +65,27 @@ final class HyprBarTests: XCTestCase {
         XCTAssertEqual(barView.currentWindowTitle, "README.md")
     }
 
+    func testBarViewDirtyRectInvalidationOnTitleShrink() {
+        let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1904, height: 32), workspaceCount: 6)
+        defer { barView.stopTimers() }
+
+        // 1. Expand with a long title
+        barView.updateActiveWindow(title: "Hermano, podes revisar el repo de github de los temas que uso", app: "ChatGPT")
+        barView.layoutSubtreeIfNeeded()
+        let longWidth = barView.leftCapsule.frame.width
+        XCTAssertGreaterThan(longWidth, 200.0)
+
+        // 2. Contract with a short title
+        barView.updateActiveWindow(title: "~", app: "")
+        barView.layoutSubtreeIfNeeded()
+        let shortWidth = barView.leftCapsule.frame.width
+        XCTAssertLessThan(shortWidth, longWidth)
+
+        // 3. Verify transparent layer clearing invariants
+        XCTAssertFalse(barView.isOpaque)
+        XCTAssertEqual(barView.layerContentsRedrawPolicy, .onSetNeedsDisplay)
+    }
+
     func testBarViewCornerRadius() {
         let barView = BarView(frame: .zero, workspaceCount: 5)
         defer { barView.stopTimers() }
@@ -199,8 +220,8 @@ final class HyprBarTests: XCTestCase {
 
     func testCapsuleTransparencyAndBehindWindowBlur() {
         let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1200, height: 32))
-        XCTAssertEqual(barView.capsuleAlpha, 0.60, accuracy: 0.01)
-        XCTAssertEqual(barView.leftCapsule.surfaceAlpha, 0.60, accuracy: 0.01)
+        XCTAssertEqual(barView.capsuleAlpha, 0.65, accuracy: 0.01)
+        XCTAssertEqual(barView.leftCapsule.surfaceAlpha, 0.65, accuracy: 0.01)
 
         barView.capsuleAlpha = 0.45
         XCTAssertEqual(barView.leftCapsule.surfaceAlpha, 0.45, accuracy: 0.01)
@@ -238,4 +259,34 @@ final class HyprBarTests: XCTestCase {
         XCTAssertEqual(resolvedRgbaHex.hexString.lowercased(), "#e4a136")
     }
 
+    func testHyprBarWindowFloatingPillLayout() {
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let window = HyprBarWindow(
+            screen: screen,
+            height: 32.0,
+            style: .floatingPill(horizontalMargin: 8.0, topMargin: 5.0),
+            workspaceCount: 6
+        )
+        defer {
+            window.hideBar()
+            window.close()
+        }
+
+        window.reposition()
+        let screenFrame = screen.frame
+        XCTAssertEqual(window.frame.width, screenFrame.width - 16.0)
+        XCTAssertEqual(window.frame.origin.x, screenFrame.origin.x + 8.0)
+        XCTAssertEqual(window.frame.origin.y, screenFrame.origin.y + screenFrame.height - 32.0 - 5.0)
+        XCTAssertEqual(window.frame.height, 32.0)
+        XCTAssertEqual(window.barBottomY, 37.0)
+    }
+
+    func testBarViewClockFormat12h() {
+        let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1440, height: 32), workspaceCount: 6)
+        barView.clockFormat = "h:mm a  EEE"
+        barView.updateClock()
+        let text = barView.clockLabel.stringValue
+        XCTAssertFalse(text.isEmpty)
+        XCTAssertTrue(text.contains("AM") || text.contains("PM") || text.contains("am") || text.contains("pm") || text.contains("m."), "Clock string '\(text)' must contain 12-hour AM/PM period indicator")
+    }
 }

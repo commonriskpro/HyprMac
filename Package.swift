@@ -21,7 +21,9 @@ let package = Package(
                 .linkedFramework("ApplicationServices"),
                 .linkedFramework("CoreVideo"),
                 .linkedFramework("CoreGraphics"),
-                .linkedFramework("QuartzCore")
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("CoreWLAN"),
+                .linkedFramework("CoreLocation")
             ]
         ),
         .testTarget(

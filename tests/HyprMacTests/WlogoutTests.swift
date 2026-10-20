@@ -188,6 +188,17 @@ final class WlogoutTests: XCTestCase {
         XCTAssertTrue(window.canBecomeMain)
     }
 
+    func testWlogoutWindowShowMenuAndCurrent() {
+        let window = WlogoutWindow(items: WlogoutItem.defaultItems)
+        defer {
+            window.dismiss()
+            window.close()
+        }
+        XCTAssertNotNil(WlogoutWindow.current)
+        window.showMenu()
+        XCTAssertTrue(window.isVisible)
+    }
+
     func testWindowExecuteAndDismissCallbacks() {
         var executedItem: WlogoutItem? = nil
         var dismissed = false

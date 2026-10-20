@@ -6,6 +6,9 @@ public enum RofiSearchResult: @unchecked Sendable, Identifiable, Equatable {
     case calculator(result: String, expression: String)
     case systemCommand(id: String, title: String, subtitle: String, icon: String, action: @Sendable () -> Void)
     case runBinary(name: String, path: String)
+    case wallpaper(path: String, name: String, category: String)
+    case window(windowID: CGWindowID, title: String, appName: String, workspace: Int, icon: NSImage)
+    case clipboard(text: String, date: Date)
 
     public var id: String {
         switch self {
@@ -17,6 +20,12 @@ public enum RofiSearchResult: @unchecked Sendable, Identifiable, Equatable {
             return "sys:\(id)"
         case .runBinary(let name, let path):
             return "bin:\(path):\(name)"
+        case .wallpaper(let path, _, _):
+            return "wall:" + path
+        case .window(let wid, _, _, _, _):
+            return "win:\(wid)"
+        case .clipboard(let text, let date):
+            return "clip:\(date.timeIntervalSince1970):\(text.prefix(32))"
         }
     }
 
@@ -30,6 +39,13 @@ public enum RofiSearchResult: @unchecked Sendable, Identifiable, Equatable {
             return title
         case .runBinary(let name, _):
             return name
+        case .wallpaper(_, let name, _):
+            return name
+        case .window(_, let title, let appName, _, _):
+            return title.isEmpty ? appName : title
+        case .clipboard(let text, _):
+            let s = text.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            return s.isEmpty ? "[Empty Clipboard]" : s
         }
     }
 
@@ -43,6 +59,15 @@ public enum RofiSearchResult: @unchecked Sendable, Identifiable, Equatable {
             return subtitle
         case .runBinary(_, let path):
             return path
+        case .wallpaper(let path, _, let category):
+            return category.isEmpty ? path : "\(category) • \(path)"
+        case .window(_, _, let appName, let ws, _):
+            return "Workspace \(ws) • \(appName)"
+        case .clipboard(let text, let date):
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .short
+            let timeAgo = formatter.localizedString(for: date, relativeTo: Date())
+            return "Clipboard • \(text.count) chars • \(timeAgo)"
         }
     }
 
@@ -68,14 +93,28 @@ public enum RofiSearchResult: @unchecked Sendable, Identifiable, Equatable {
                 return img.withSymbolConfiguration(config) ?? img
             }
             return NSImage()
+        case .wallpaper:
+            if let img = NSImage(systemSymbolName: "photo.fill", accessibilityDescription: "Wallpaper") {
+                let config = NSImage.SymbolConfiguration(pointSize: 20, weight: .medium)
+                return img.withSymbolConfiguration(config) ?? img
+            }
+            return NSImage()
+        case .window(_, _, _, _, let winIcon):
+            return winIcon
+        case .clipboard:
+            if let img = NSImage(systemSymbolName: "doc.on.clipboard.fill", accessibilityDescription: "Clipboard") {
+                let config = NSImage.SymbolConfiguration(pointSize: 20, weight: .medium)
+                return img.withSymbolConfiguration(config) ?? img
+            }
+            return NSImage()
         }
     }
 
     public var isSystemOrUtility: Bool {
         switch self {
-        case .app:
+        case .app, .window:
             return false
-        case .calculator, .systemCommand, .runBinary:
+        case .calculator, .systemCommand, .runBinary, .wallpaper, .clipboard:
             return true
         }
     }
@@ -313,6 +352,47 @@ public enum SystemCommandProvider {
             action: {
                 _ = SessionManager.shared.switchTo(mode: .aqua)
             }
+        ),
+        SystemCommandDef(
+            id: "reload_config",
+            title: "Reload HyprMac Config",
+            subtitle: "Hot-reload Hyprland configuration, bar styles, and keybindings",
+            icon: "arrow.triangle.2.circlepath",
+            keywords: ["reload", "recargar", "config", "hypr", "rice"],
+            action: {
+                KeybindManager.shared.reloadConfig()
+            }
+        ),
+        SystemCommandDef(
+            id: "toggle_floating",
+            title: "Toggle Window Floating",
+            subtitle: "Switch focused window between tiled and floating",
+            icon: "macwindow.on.rectangle",
+            keywords: ["float", "flotar", "flotante", "floating", "tile"],
+            action: {
+                KeybindManager.shared.togglefloating()
+            }
+        ),
+        SystemCommandDef(
+            id: "toggle_split",
+            title: "Toggle Dwindle Split",
+            subtitle: "Toggle split orientation (horizontal / vertical)",
+            icon: "square.split.2x1",
+            keywords: ["split", "togglesplit", "division"],
+            action: {
+                KeybindManager.shared.togglesplit()
+            }
+        ),
+        SystemCommandDef(
+            id: "clear_clipboard",
+            title: "Clear Clipboard History",
+            subtitle: "Empty stored clipboard items and system pasteboard",
+            icon: "trash.circle.fill",
+            keywords: ["clear", "clipboard", "portapapeles", "limpiar", "borrar"],
+            action: {
+                ClipboardTracker.shared.clearHistory()
+                NSPasteboard.general.clearContents()
+            }
         )
     ]
 
@@ -425,5 +505,361 @@ public final class PathBinaryScanner: @unchecked Sendable {
         cachedBinaries.removeAll()
         lastScanTime = 0
         lock.unlock()
+    }
+}
+
+/// Item representation of a discovered desktop wallpaper
+public struct WallpaperItem: @unchecked Sendable, Identifiable, Equatable {
+    public var id: String { path }
+    public let name: String
+    public let category: String
+    public let path: String
+
+    public init(name: String, category: String, path: String) {
+        self.name = name
+        self.category = category
+        self.path = path
+    }
+}
+
+/// Discovers, caches, and indexes wallpapers across system and rice repositories
+public final class WallpaperScanner: @unchecked Sendable {
+    public static let shared = WallpaperScanner()
+
+    private let lock = NSLock()
+    private var cachedWallpapers: [WallpaperItem] = []
+    private var lastScanTime: TimeInterval = 0
+
+    public init() {}
+
+    public func scan(forceRefresh: Bool = false) -> [WallpaperItem] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if !forceRefresh && !cachedWallpapers.isEmpty && (now - lastScanTime < 60.0) {
+            return cachedWallpapers
+        }
+
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let directories: [String] = [
+            (home as NSString).appendingPathComponent("Pictures/Wallpapers"),
+            (home as NSString).appendingPathComponent("Downloads/mxmrn-dotfiles-wallpapers"),
+            (home as NSString).appendingPathComponent(".config/hypr/wallpapers"),
+            (home as NSString).appendingPathComponent("Developer/REA/assets"),
+            (home as NSString).appendingPathComponent("Developer/REA/assets/rices"),
+            (home as NSString).appendingPathComponent("Developer/REA/reference/mxmrn/wallpapers"),
+            (home as NSString).appendingPathComponent("Developer/REA/reference/noro18/wallpapers"),
+            (home as NSString).appendingPathComponent("Pictures")
+        ]
+
+        let allowedExtensions: Set<String> = ["jpg", "jpeg", "png", "webp", "heic"]
+        var items: [WallpaperItem] = []
+        var seenPaths = Set<String>()
+
+        func scanDir(_ dirPath: String, rootName: String, maxDepth: Int) {
+            guard maxDepth > 0, fm.fileExists(atPath: dirPath) else { return }
+            if dirPath.hasSuffix(".photoslibrary") || dirPath.hasSuffix(".app") || dirPath.hasSuffix(".framework") { return }
+            guard let contents = try? fm.contentsOfDirectory(atPath: dirPath) else { return }
+
+            for file in contents {
+                if file.hasPrefix(".") { continue }
+                let fullPath = (dirPath as NSString).appendingPathComponent(file)
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: fullPath, isDirectory: &isDir) {
+                    if isDir.boolValue {
+                        let subCategory = rootName.isEmpty ? file : "\(rootName)/\(file)"
+                        scanDir(fullPath, rootName: subCategory, maxDepth: maxDepth - 1)
+                    } else {
+                        let ext = (file as NSString).pathExtension.lowercased()
+                        if allowedExtensions.contains(ext) {
+                            let realPath = URL(fileURLWithPath: fullPath).resolvingSymlinksInPath().path
+                            if !seenPaths.contains(realPath) {
+                                seenPaths.insert(realPath)
+                                let baseName = (file as NSString).deletingPathExtension
+                                let displayName = formatWallpaperName(baseName)
+                                items.append(WallpaperItem(name: displayName, category: rootName, path: realPath))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for baseDir in directories {
+            let catName = (baseDir as NSString).lastPathComponent
+            let depth = (catName == "Pictures") ? 1 : 4
+            scanDir(baseDir, rootName: catName, maxDepth: depth)
+        }
+
+        items.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        cachedWallpapers = items
+        lastScanTime = now
+        return items
+    }
+
+    private func formatWallpaperName(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "_", with: " ")
+           .replacingOccurrences(of: "-", with: " ")
+           .trimmingCharacters(in: .whitespaces)
+    }
+
+    public func clearCache() {
+        lock.lock()
+        cachedWallpapers.removeAll()
+        lastScanTime = 0
+        lock.unlock()
+    }
+}
+
+/// Provides searchable wallpaper items for Rofi
+public enum WallpaperProvider {
+    public static func match(query: String) -> [RofiSearchResult] {
+        let wallpapers = WallpaperScanner.shared.scan()
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else {
+            return wallpapers.prefix(50).map {
+                .wallpaper(path: $0.path, name: $0.name, category: $0.category)
+            }
+        }
+
+        var scoredItems: [(item: WallpaperItem, score: Int)] = []
+        for wall in wallpapers {
+            var bestScore: Int? = nil
+            if let nameScore = FuzzyMatcher.score(query: q, target: wall.name) {
+                bestScore = nameScore
+            }
+            if let catScore = FuzzyMatcher.score(query: q, target: wall.category) {
+                bestScore = max(bestScore ?? 0, catScore - 5_000)
+            }
+            if let s = bestScore {
+                scoredItems.append((wall, s))
+            }
+        }
+        scoredItems.sort { $0.score > $1.score }
+        return scoredItems.map {
+            .wallpaper(path: $0.item.path, name: $0.item.name, category: $0.item.category)
+        }
+    }
+}
+
+/// Provides open application windows across workspaces for Rofi
+@MainActor
+public enum WindowProvider {
+    private static var cachedWindows: [RofiSearchResult] = []
+    private static var lastFetchTime: TimeInterval = 0
+
+    public static func match(query: String) -> [RofiSearchResult] {
+        let now = ProcessInfo.processInfo.systemUptime
+        let rawItems: [RofiSearchResult]
+
+        if !cachedWindows.isEmpty && (now - lastFetchTime < 2.0) {
+            rawItems = cachedWindows
+        } else {
+            let windows = WindowDetector.shared.getEligibleWindows()
+            var items: [(wid: CGWindowID, title: String, appName: String, workspace: Int, icon: NSImage)] = []
+
+            for win in windows {
+                let wid = win.windowID
+                let title = win.title
+                let appName = win.appName
+                let ws = WorkspaceManager.shared.workspace(for: wid) ?? WorkspaceManager.shared.activeWorkspace
+                let icon: NSImage
+                if let runningApp = NSRunningApplication(processIdentifier: win.processID),
+                   let appIcon = runningApp.icon {
+                    icon = appIcon
+                } else {
+                    icon = NSImage(systemSymbolName: "macwindow", accessibilityDescription: "Window") ?? NSImage()
+                }
+                items.append((wid, title, appName, ws, icon))
+            }
+
+            rawItems = items.map {
+                .window(windowID: $0.wid, title: $0.title, appName: $0.appName, workspace: $0.workspace, icon: $0.icon)
+            }
+            cachedWindows = rawItems
+            lastFetchTime = now
+        }
+
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else {
+            return rawItems
+        }
+
+        var scoredItems: [(item: RofiSearchResult, score: Int)] = []
+        for winItem in rawItems {
+            if case .window(_, let title, let appName, _, _) = winItem {
+                var bestScore: Int? = nil
+                if let s = FuzzyMatcher.score(query: q, target: appName) {
+                    bestScore = s + 10_000
+                }
+                if !title.isEmpty, let s = FuzzyMatcher.score(query: q, target: title) {
+                    bestScore = max(bestScore ?? 0, s)
+                }
+                if let score = bestScore {
+                    scoredItems.append((winItem, score))
+                }
+            }
+        }
+        scoredItems.sort { $0.score > $1.score }
+        return scoredItems.map { $0.item }
+    }
+
+    public static func clearCache() {
+        cachedWindows.removeAll()
+        lastFetchTime = 0
+    }
+}
+
+/// Tracks recent text copied to the macOS clipboard
+public final class ClipboardTracker: @unchecked Sendable {
+    public static let shared = ClipboardTracker()
+
+    private let lock = NSLock()
+    private var history: [(text: String, date: Date)] = []
+    private var lastChangeCount: Int = -1
+
+    public init() {
+        checkPasteboard()
+    }
+
+    public func checkPasteboard() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let pb = NSPasteboard.general
+        let count = pb.changeCount
+        guard count != lastChangeCount else { return }
+        lastChangeCount = count
+
+        guard let str = pb.string(forType: .string), !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        if let first = history.first, first.text == str {
+            return
+        }
+
+        history.removeAll { $0.text == str }
+        history.insert((text: str, date: Date()), at: 0)
+
+        if history.count > 50 {
+            history.removeLast()
+        }
+    }
+
+    public func getHistory() -> [(text: String, date: Date)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return history
+    }
+
+    public func clearHistory() {
+        lock.lock()
+        history.removeAll()
+        lastChangeCount = -1
+        lock.unlock()
+    }
+
+    public func addEntry(text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        history.removeAll { $0.text == trimmed }
+        history.insert((text: trimmed, date: Date()), at: 0)
+        if history.count > 50 {
+            history.removeLast()
+        }
+    }
+}
+
+/// Provides searchable clipboard history items for Rofi
+public enum ClipboardProvider {
+    public static func match(query: String) -> [RofiSearchResult] {
+        ClipboardTracker.shared.checkPasteboard()
+        let history = ClipboardTracker.shared.getHistory()
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if q.isEmpty {
+            return history.map { .clipboard(text: $0.text, date: $0.date) }
+        }
+
+        var results: [(item: (text: String, date: Date), score: Int)] = []
+        for entry in history {
+            if let s = FuzzyMatcher.score(query: q, target: entry.text) {
+                results.append((entry, s))
+            } else if entry.text.localizedCaseInsensitiveContains(q) {
+                results.append((entry, 25_000))
+            }
+        }
+        results.sort { $0.score > $1.score }
+        return results.map { .clipboard(text: $0.item.text, date: $0.item.date) }
+    }
+}
+
+/// Asynchronously loads and caches wallpaper preview images for 60fps UI navigation
+@MainActor
+public final class WallpaperPreviewLoader {
+    public static let shared = WallpaperPreviewLoader()
+
+    private let cache = NSCache<NSString, NSImage>()
+    private var currentTaskID: UUID = UUID()
+
+    public init() {
+        cache.countLimit = 100
+    }
+
+    public func load(path: String, completion: @escaping @MainActor (NSImage?) -> Void) {
+        if let cached = cache.object(forKey: path as NSString) {
+            completion(cached)
+            return
+        }
+
+        let taskID = UUID()
+        currentTaskID = taskID
+
+        Task.detached(priority: .userInitiated) {
+            guard FileManager.default.fileExists(atPath: path) else {
+                await MainActor.run {
+                    guard Self.shared.currentTaskID == taskID else { return }
+                    completion(nil)
+                }
+                return
+            }
+
+            let fileURL = URL(fileURLWithPath: path)
+            var loadedImage: NSImage? = nil
+
+            if let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil) {
+                let options: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceShouldCacheImmediately: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 1000
+                ]
+                if let cgThumb = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) {
+                    loadedImage = NSImage(cgImage: cgThumb, size: NSSize(width: 410, height: 416))
+                }
+            }
+
+            if loadedImage == nil {
+                loadedImage = NSImage(contentsOfFile: path)
+            }
+
+            let finalImage = loadedImage
+            await MainActor.run {
+                if let img = finalImage {
+                    Self.shared.cache.setObject(img, forKey: path as NSString)
+                }
+                guard Self.shared.currentTaskID == taskID else { return }
+                completion(finalImage)
+            }
+        }
+    }
+
+    public func clearCache() {
+        cache.removeAllObjects()
     }
 }

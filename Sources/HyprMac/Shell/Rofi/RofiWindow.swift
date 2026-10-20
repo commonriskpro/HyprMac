@@ -72,15 +72,16 @@ public final class RofiModeButton: NSView {
     }
 
     private func updateAppearance() {
+        let theme = HyprTheme.shared
         if isActive {
-            // Active state: solid white background (#FFFFFF), bold dark text (#121212)
-            layer?.backgroundColor = NSColor.white.cgColor
-            titleLabel.textColor = NSColor(hexString: "#121212")
+            // Active state: primary accent from pywal16
+            layer?.backgroundColor = theme.primary.cgColor
+            titleLabel.textColor = theme.onPrimary
             titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .bold)
         } else {
-            // Inactive state: dark translucent background (rgba(25, 25, 25, 0.75)), white text (#E0E0E0)
-            layer?.backgroundColor = NSColor(red: 25.0 / 255.0, green: 25.0 / 255.0, blue: 25.0 / 255.0, alpha: 0.75).cgColor
-            titleLabel.textColor = NSColor(hexString: "#E0E0E0")
+            // Inactive state: dark translucent background, onSurface text
+            layer?.backgroundColor = theme.surface.withAlphaComponent(0.6).cgColor
+            titleLabel.textColor = theme.onSurface.withAlphaComponent(0.7)
             titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
         }
     }
@@ -105,14 +106,15 @@ public final class RofiInputBarView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 21.0
         layer?.masksToBounds = true
-        layer?.backgroundColor = NSColor(red: 20.0 / 255.0, green: 20.0 / 255.0, blue: 20.0 / 255.0, alpha: 0.75).cgColor
+        let theme = HyprTheme.shared
+        layer?.backgroundColor = theme.surface.withAlphaComponent(0.75).cgColor
         layer?.borderWidth = 1.0
-        layer?.borderColor = NSColor(white: 1.0, alpha: 0.1).cgColor
+        layer?.borderColor = theme.outline.withAlphaComponent(0.25).cgColor
 
         if let sfImg = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Search") {
             let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
             searchIconImageView.image = sfImg.withSymbolConfiguration(config)
-            searchIconImageView.contentTintColor = NSColor.white.withAlphaComponent(0.6)
+            searchIconImageView.contentTintColor = theme.onSurface.withAlphaComponent(0.6)
         }
         searchIconImageView.imageScaling = .scaleProportionallyUpOrDown
         addSubview(searchIconImageView)
@@ -121,11 +123,11 @@ public final class RofiInputBarView: NSView {
         searchField.drawsBackground = false
         searchField.focusRingType = .none
         searchField.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        searchField.textColor = .white
+        searchField.textColor = theme.onSurface
         searchField.placeholderAttributedString = NSAttributedString(
             string: "Search",
             attributes: [
-                .foregroundColor: NSColor.white.withAlphaComponent(0.5),
+                .foregroundColor: theme.onSurface.withAlphaComponent(0.4),
                 .font: NSFont.systemFont(ofSize: 14, weight: .regular)
             ]
         )
@@ -171,7 +173,7 @@ public final class RofiImageBoxView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 14.0
         layer?.masksToBounds = true
-        layer?.backgroundColor = NSColor(hexString: "#191614").withAlphaComponent(0.85).cgColor
+        layer?.backgroundColor = HyprTheme.shared.surface.withAlphaComponent(0.85).cgColor
 
         wallpaperImageView.wantsLayer = true
         wallpaperImageView.imageScaling = .scaleAxesIndependently
@@ -247,8 +249,8 @@ public final class RofiImageBoxView: NSView {
 /// Item Row View for application launcher listbox
 @MainActor
 public final class RofiItemRowView: NSView {
-    public let rowIndex: Int
-    public let result: RofiSearchResult
+    public private(set) var rowIndex: Int
+    public private(set) var result: RofiSearchResult
 
     public var appItem: AppItem? {
         if case .app(let item) = result {
@@ -319,6 +321,32 @@ public final class RofiItemRowView: NSView {
         updateAppearance()
     }
 
+    public func configure(rowIndex: Int, result: RofiSearchResult, isSelected: Bool) {
+        self.rowIndex = rowIndex
+        self.result = result
+
+        if iconView.image !== result.icon {
+            iconView.image = result.icon
+        }
+
+        if nameLabel.stringValue != result.title {
+            nameLabel.stringValue = result.title
+        }
+
+        if let sub = result.subtitle, !sub.isEmpty {
+            if subtitleLabel.stringValue != sub {
+                subtitleLabel.stringValue = sub
+            }
+            subtitleLabel.isHidden = false
+        } else {
+            subtitleLabel.isHidden = true
+        }
+
+        self.isSelected = isSelected
+        updateAppearance()
+        needsLayout = true
+    }
+
     public override func layout() {
         super.layout()
         let iconSize: CGFloat = 30.0
@@ -367,25 +395,26 @@ public final class RofiItemRowView: NSView {
     }
 
     private func updateAppearance() {
+        let theme = HyprTheme.shared
         if isSelected {
-            // Selected state: Solid off-white / light cream pill (#E6EBF2), Dark charcoal text (#181825), Semibold
-            layer?.backgroundColor = NSColor(hexString: "#E6EBF2").cgColor
-            nameLabel.textColor = NSColor(hexString: "#181825")
+            // Selected state: Solid pywal16 primary accent, dark onPrimary text
+            layer?.backgroundColor = theme.primary.cgColor
+            nameLabel.textColor = theme.onPrimary
             nameLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-            subtitleLabel.textColor = NSColor(hexString: "#484848")
+            subtitleLabel.textColor = theme.onPrimary.withAlphaComponent(0.75)
             if result.isSystemOrUtility {
-                iconView.contentTintColor = NSColor(hexString: "#181825")
+                iconView.contentTintColor = theme.onPrimary
             } else {
                 iconView.contentTintColor = nil
             }
         } else {
-            // Unselected state: Dark subtle translucent pill (rgba(255, 255, 255, 0.05)), Light gray text (#D9E0EE), Regular
+            // Unselected state: Dark subtle translucent pill, onSurface text
             layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
-            nameLabel.textColor = NSColor(hexString: "#D9E0EE")
+            nameLabel.textColor = theme.onSurface
             nameLabel.font = NSFont.systemFont(ofSize: 14, weight: .regular)
-            subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.45)
+            subtitleLabel.textColor = theme.onSurface.withAlphaComponent(0.5)
             if result.isSystemOrUtility {
-                iconView.contentTintColor = HyprTheme.shared.primary
+                iconView.contentTintColor = theme.primary
             } else {
                 iconView.contentTintColor = nil
             }
@@ -398,6 +427,7 @@ public final class RofiItemRowView: NSView {
 public final class RofiListBoxView: NSView {
     public let emptyLabel = NSTextField(labelWithString: "No matching applications")
     public private(set) var rowViews: [RofiItemRowView] = []
+    private var pool: [RofiItemRowView] = []
 
     public var onSelectionChanged: ((Int) -> Void)?
     public var onItemChosen: ((Int) -> Void)?
@@ -414,7 +444,7 @@ public final class RofiListBoxView: NSView {
     private func setup() {
         wantsLayer = true
         emptyLabel.font = NSFont.systemFont(ofSize: 14, weight: .regular)
-        emptyLabel.textColor = NSColor.white.withAlphaComponent(0.5)
+        emptyLabel.textColor = HyprTheme.shared.onSurface.withAlphaComponent(0.5)
         emptyLabel.alignment = .center
         emptyLabel.isBezeled = false
         emptyLabel.isEditable = false
@@ -422,19 +452,32 @@ public final class RofiListBoxView: NSView {
         emptyLabel.drawsBackground = false
         emptyLabel.isHidden = true
         addSubview(emptyLabel)
+
+        let dummy = RofiSearchResult.runBinary(name: "", path: "")
+        for i in 0..<8 {
+            let row = RofiItemRowView(rowIndex: i, result: dummy)
+            row.isHidden = true
+            row.onHover = { [weak self] idx in
+                self?.onSelectionChanged?(idx)
+            }
+            row.onClick = { [weak self] idx in
+                self?.onItemChosen?(idx)
+            }
+            addSubview(row)
+            pool.append(row)
+        }
     }
 
     public func updateRows(results: [RofiSearchResult], selectedIndex: Int) {
-        for row in rowViews {
-            row.removeFromSuperview()
-        }
-        rowViews.removeAll()
-
         let count = min(results.count, 8)
         let hasItems = count > 0
         emptyLabel.isHidden = hasItems
 
         if !hasItems {
+            for row in pool {
+                row.isHidden = true
+            }
+            rowViews.removeAll()
             emptyLabel.frame = bounds
             return
         }
@@ -443,22 +486,21 @@ public final class RofiListBoxView: NSView {
         let rowHeight: CGFloat = 44.0
         let rowSpacing: CGFloat = 5.0
 
-        for i in 0..<count {
-            let item = results[i]
-            let row = RofiItemRowView(rowIndex: i, result: item)
-            row.isSelected = (i == selectedIndex)
-            row.onHover = { [weak self] idx in
-                self?.onSelectionChanged?(idx)
+        var activeRows: [RofiItemRowView] = []
+        for i in 0..<8 {
+            let row = pool[i]
+            if i < count {
+                let item = results[i]
+                row.isHidden = false
+                row.configure(rowIndex: i, result: item, isSelected: (i == selectedIndex))
+                let y = bounds.height - topPadding - CGFloat(i + 1) * rowHeight - CGFloat(i) * rowSpacing
+                row.frame = NSRect(x: 0, y: y, width: bounds.width, height: rowHeight)
+                activeRows.append(row)
+            } else {
+                row.isHidden = true
             }
-            row.onClick = { [weak self] idx in
-                self?.onItemChosen?(idx)
-            }
-
-            let y = bounds.height - topPadding - CGFloat(i + 1) * rowHeight - CGFloat(i) * rowSpacing
-            row.frame = NSRect(x: 0, y: y, width: bounds.width, height: rowHeight)
-            addSubview(row)
-            rowViews.append(row)
         }
+        rowViews = activeRows
     }
 
     public func updateRows(apps: [AppItem], selectedIndex: Int) {
@@ -497,6 +539,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
     public private(set) var selectedIndex: Int = 0
     public private(set) var currentMode: RofiMode = .apps
+    private var cachedBaseWallpaper: NSImage?
 
     public let effectView = NSVisualEffectView()
     public let darkOverlayView = NSView()
@@ -526,6 +569,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         isMovableByWindowBackground = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
 
+        HyprTheme.shared.reload()
         setupHierarchy()
 
         allApps = AppScanner.shared.scan()
@@ -533,7 +577,8 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         searchField.stringValue = query
         searchField.delegate = self
 
-        refreshWallpaper()
+        cachedBaseWallpaper = loadWallpaperImage()
+        imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
         applyFilter(query: query)
         centerOnActiveScreen()
 
@@ -570,7 +615,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         darkOverlayView.wantsLayer = true
         darkOverlayView.layer?.cornerRadius = 16.0
         darkOverlayView.layer?.masksToBounds = true
-        darkOverlayView.layer?.backgroundColor = NSColor(hexString: "#121212").withAlphaComponent(0.85).cgColor
+        darkOverlayView.layer?.backgroundColor = HyprTheme.shared.surface.withAlphaComponent(0.85).cgColor
         darkOverlayView.frame = effectView.bounds
         effectView.addSubview(darkOverlayView)
 
@@ -607,8 +652,8 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
 
     public func refreshWallpaper() {
-        let img = loadWallpaperImage()
-        imageBoxView.updateWallpaper(image: img)
+        cachedBaseWallpaper = loadWallpaperImage()
+        imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
     }
 
     public func loadWallpaperImage() -> NSImage? {
@@ -617,9 +662,13 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         if FileManager.default.fileExists(atPath: cachePath),
            let raw = try? String(contentsOfFile: cachePath, encoding: .utf8) {
             let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !path.isEmpty && FileManager.default.fileExists(atPath: path),
-               let img = NSImage(contentsOfFile: path) {
-                return img
+            if !path.isEmpty && FileManager.default.fileExists(atPath: path) {
+                if let thumb = createDownsampledImage(atPath: path, maxPixelSize: 1000) {
+                    return thumb
+                }
+                if let img = NSImage(contentsOfFile: path) {
+                    return img
+                }
             }
         }
 
@@ -627,13 +676,34 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens.first
         if let scr = targetScreen,
            let url = NSWorkspace.shared.desktopImageURL(for: scr),
-           FileManager.default.fileExists(atPath: url.path),
-           let img = NSImage(contentsOf: url) {
-            return img
+           FileManager.default.fileExists(atPath: url.path) {
+            if let thumb = createDownsampledImage(atPath: url.path, maxPixelSize: 1000) {
+                return thumb
+            }
+            if let img = NSImage(contentsOf: url) {
+                return img
+            }
         }
 
         // 3. Fallback: return nil (clean dark translucent gradient/surface with NO image)
         return nil
+    }
+
+    private func createDownsampledImage(atPath path: String, maxPixelSize: Int) -> NSImage? {
+        let fileURL = URL(fileURLWithPath: path)
+        guard let imageSource = CGImageSourceCreateWithURL(fileURL as CFURL, nil) else {
+            return nil
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let cgThumb = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cgThumb, size: NSSize(width: Self.defaultImageBoxWidth, height: Self.defaultHeight - (Self.defaultOuterPadding * 2.0)))
     }
 
     private func centerOnActiveScreen() {
@@ -648,7 +718,10 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
 
     public func showLauncher() {
-        refreshWallpaper()
+        ClipboardTracker.shared.checkPasteboard()
+        if cachedBaseWallpaper == nil {
+            refreshWallpaper()
+        }
         centerOnActiveScreen()
         makeKeyAndOrderFront(nil)
         makeFirstResponder(searchField)
@@ -671,49 +744,82 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         applyFilter(query: searchField.stringValue)
     }
 
+    private func extractSubquery(from query: String) -> String {
+        if let firstSpace = query.firstIndex(of: " ") {
+            return String(query[query.index(after: firstSpace)...]).trimmingCharacters(in: .whitespaces)
+        }
+        return ""
+    }
+
     private func applyFilter(query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch currentMode {
         case .apps:
             var results: [RofiSearchResult] = []
+            let lower = trimmed.lowercased()
 
-            // 1. Calculator Provider
-            if let calcResult = MathEvaluator.evaluate(trimmed) {
-                results.append(.calculator(result: calcResult, expression: trimmed))
-            }
-
-            if trimmed.isEmpty {
-                results.append(contentsOf: allApps.map { .app($0) })
+            // 1. Prefix Routing: wall, win, clip, sys
+            if lower.hasPrefix("wall ") || lower == "wall" || lower.hasPrefix("wallpaper ") || lower == "wallpaper" || lower.hasPrefix("img ") {
+                let sub = extractSubquery(from: trimmed)
+                results = WallpaperProvider.match(query: sub)
+            } else if lower.hasPrefix("win ") || lower == "win" || lower.hasPrefix("window ") || lower == "window" || lower.hasPrefix("w ") {
+                let sub = extractSubquery(from: trimmed)
+                results = WindowProvider.match(query: sub)
+            } else if lower.hasPrefix("clip ") || lower == "clip" || lower.hasPrefix("cb ") || lower.hasPrefix("clipboard ") || lower == "clipboard" {
+                let sub = extractSubquery(from: trimmed)
+                results = ClipboardProvider.match(query: sub)
+            } else if lower.hasPrefix("sys ") || lower == "sys" || lower.hasPrefix("system ") || lower.hasPrefix("rice ") {
+                let sub = extractSubquery(from: trimmed)
+                results = SystemCommandProvider.match(query: sub)
             } else {
-                // 2. System Commands Provider
-                let sysCmds = SystemCommandProvider.match(query: trimmed)
+                // Universal Search Mode
+                // 1. Calculator Provider
+                if let calcResult = MathEvaluator.evaluate(trimmed) {
+                    results.append(.calculator(result: calcResult, expression: trimmed))
+                }
 
-                // 3. Apps Provider
-                let matchedApps = FuzzyMatcher.match(query: trimmed, candidates: allApps, extractTarget: { $0.name })
+                if trimmed.isEmpty {
+                    results.append(contentsOf: allApps.map { .app($0) })
+                } else {
+                    let openWindows = WindowProvider.match(query: trimmed)
+                    let sysCmds = SystemCommandProvider.match(query: trimmed)
+                    let matchedApps = FuzzyMatcher.match(query: trimmed, candidates: allApps, extractTarget: { $0.name })
+                    let matchedWalls = trimmed.count >= 2 ? WallpaperProvider.match(query: trimmed) : []
 
-                var scoredItems: [(item: RofiSearchResult, score: Int)] = []
-                for cmd in sysCmds {
-                    var s = FuzzyMatcher.score(query: trimmed, target: cmd.title) ?? 30_000
-                    let cmdId = cmd.id.hasPrefix("sys:") ? String(cmd.id.dropFirst(4)) : cmd.id
-                    for sc in SystemCommandProvider.commands where sc.id == cmdId {
-                        for kw in sc.keywords {
-                            if kw.lowercased() == trimmed.lowercased() {
-                                s = max(s, 95_000)
-                            } else if kw.lowercased().hasPrefix(trimmed.lowercased()) {
-                                s = max(s, 48_000)
+                    var scoredItems: [(item: RofiSearchResult, score: Int)] = []
+
+                    for win in openWindows {
+                        scoredItems.append((win, 92_000))
+                    }
+
+                    for cmd in sysCmds {
+                        var s = FuzzyMatcher.score(query: trimmed, target: cmd.title) ?? 30_000
+                        let cmdId = cmd.id.hasPrefix("sys:") ? String(cmd.id.dropFirst(4)) : cmd.id
+                        for sc in SystemCommandProvider.commands where sc.id == cmdId {
+                            for kw in sc.keywords {
+                                if kw.lowercased() == trimmed.lowercased() {
+                                    s = max(s, 95_000)
+                                } else if kw.lowercased().hasPrefix(trimmed.lowercased()) {
+                                    s = max(s, 48_000)
+                                }
                             }
                         }
+                        scoredItems.append((cmd, s))
                     }
-                    scoredItems.append((cmd, s))
-                }
-                for app in matchedApps {
-                    let s = FuzzyMatcher.score(query: trimmed, target: app.name) ?? 0
-                    scoredItems.append((.app(app), s))
-                }
-                scoredItems.sort { $0.score > $1.score }
 
-                results.append(contentsOf: scoredItems.map { $0.item })
+                    for app in matchedApps {
+                        let s = FuzzyMatcher.score(query: trimmed, target: app.name) ?? 0
+                        scoredItems.append((.app(app), s))
+                    }
+
+                    for wall in matchedWalls.prefix(4) {
+                        scoredItems.append((wall, 20_000))
+                    }
+
+                    scoredItems.sort { $0.score > $1.score }
+                    results.append(contentsOf: scoredItems.map { $0.item })
+                }
             }
 
             filteredResults = results
@@ -730,6 +836,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
 
         selectedIndex = 0
         rebuildList()
+        updateCardPreviewForCurrentSelection()
     }
 
     private func rebuildList() {
@@ -749,6 +856,30 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
 
         selectedIndex = next
         listBoxView.setSelectedRowIndex(selectedIndex)
+        updateCardPreviewForCurrentSelection()
+    }
+
+    private func updateCardPreviewForCurrentSelection() {
+        guard selectedIndex >= 0 && selectedIndex < filteredResults.count else {
+            if imageBoxView.wallpaperImageView.image !== cachedBaseWallpaper {
+                imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
+            }
+            return
+        }
+
+        let item = filteredResults[selectedIndex]
+        if case .wallpaper(let path, _, _) = item {
+            WallpaperPreviewLoader.shared.load(path: path) { [weak self] image in
+                guard let self = self, self.selectedIndex < self.filteredResults.count else { return }
+                if case .wallpaper(let curPath, _, _) = self.filteredResults[self.selectedIndex], curPath == path {
+                    self.imageBoxView.updateWallpaper(image: image)
+                }
+            }
+        } else {
+            if imageBoxView.wallpaperImageView.image !== cachedBaseWallpaper {
+                imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
+            }
+        }
     }
 
     public func launchItem(at index: Int) {
@@ -768,6 +899,34 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         case .runBinary(_, let path):
             launchBinary(path: path)
             dismiss()
+        case .wallpaper(let path, _, _):
+            applyWallpaper(path: path)
+            dismiss()
+        case .window(let wid, _, _, let ws, _):
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if ws != WorkspaceManager.shared.activeWorkspace {
+                    WorkspaceManager.shared.switchToWorkspace(ws)
+                }
+                WorkspaceManager.shared.focusWindow(wid: wid)
+            }
+        case .clipboard(let text, _):
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            dismiss()
+        }
+    }
+
+    private func applyWallpaper(path: String) {
+        let cachePath = NSString(string: "~/.cache/current_wallpaper").expandingTildeInPath
+        try? path.write(toFile: cachePath, atomically: true, encoding: .utf8)
+
+        let fileURL = URL(fileURLWithPath: path)
+        if let screens = NSScreen.screens as [NSScreen]? {
+            for screen in screens {
+                try? NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: [:])
+            }
         }
     }
 

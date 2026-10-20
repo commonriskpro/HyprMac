@@ -309,6 +309,8 @@ final class WlogoutOverlayView: NSView {
 
 @MainActor
 public final class WlogoutWindow: NSWindow {
+    public static weak var current: WlogoutWindow?
+
     public let items: [WlogoutItem]
     public let actionDispatcher: WlogoutActionDispatcherProtocol
     public var onDismiss: (@MainActor () -> Void)?
@@ -331,6 +333,7 @@ public final class WlogoutWindow: NSWindow {
             backing: .buffered,
             defer: false
         )
+        Self.current = self
 
         self.level = .screenSaver
         self.isOpaque = false
@@ -358,6 +361,10 @@ public final class WlogoutWindow: NSWindow {
     public func present() {
         makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    public func showMenu() {
+        present()
     }
 
     public func dismiss() {
