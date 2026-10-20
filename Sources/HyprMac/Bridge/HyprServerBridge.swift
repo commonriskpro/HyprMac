@@ -654,7 +654,8 @@ public final class HyprServerBridge: @unchecked Sendable {
             throw HyprBridgeError.payloadTooLarge(msgLen)
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
+        let startUptime = ProcessInfo.processInfo.systemUptime
+        var backoffUs: useconds_t = 50
 
         while true {
             let w = atomicLoad(wPtr)
@@ -708,10 +709,11 @@ public final class HyprServerBridge: @unchecked Sendable {
                 }
             }
 
-            if Date() >= deadline {
+            if (ProcessInfo.processInfo.systemUptime - startUptime) >= timeout {
                 throw HyprBridgeError.timeout
             }
-            usleep(100) // 100μs poll interval
+            usleep(backoffUs)
+            if backoffUs < 1000 { backoffUs &*= 2 }
         }
     }
 
@@ -720,8 +722,9 @@ public final class HyprServerBridge: @unchecked Sendable {
             throw HyprBridgeError.notConnected
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
+        let startUptime = ProcessInfo.processInfo.systemUptime
         let ringSize = HyprProtocol.rspRingSize
+        var backoffUs: useconds_t = 50
 
         while true {
             let w = atomicLoad(wPtr)
@@ -798,10 +801,11 @@ public final class HyprServerBridge: @unchecked Sendable {
                 return (header: header, payload: payload)
             }
 
-            if Date() >= deadline {
+            if (ProcessInfo.processInfo.systemUptime - startUptime) >= timeout {
                 throw HyprBridgeError.timeout
             }
-            usleep(100) // 100μs poll interval
+            usleep(backoffUs)
+            if backoffUs < 1000 { backoffUs &*= 2 }
         }
     }
 

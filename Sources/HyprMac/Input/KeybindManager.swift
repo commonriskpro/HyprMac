@@ -93,8 +93,14 @@ public final class KeybindManager: @unchecked Sendable {
         }
         set {
             lock.lock()
+            let changed = (_isMenuBarSuppressed != newValue)
             _isMenuBarSuppressed = newValue
+            let running = isRunning
             lock.unlock()
+
+            if changed && running && !HyprServerBridge.shared.isAvailable {
+                restartTap()
+            }
         }
     }
 
@@ -330,10 +336,10 @@ public final class KeybindManager: @unchecked Sendable {
         }
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let eventsOfInterest = CGEventMask(1 << CGEventType.keyDown.rawValue)
-            | CGEventMask(1 << CGEventType.mouseMoved.rawValue)
-            | CGEventMask(1 << CGEventType.leftMouseDragged.rawValue)
-            | CGEventMask(1 << CGEventType.rightMouseDragged.rawValue)
+        var eventsOfInterest = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        if _isMenuBarSuppressed && !HyprServerBridge.shared.isAvailable {
+            eventsOfInterest |= CGEventMask(1 << CGEventType.mouseMoved.rawValue)
+        }
 
         // Try kCGSessionEventTap first, then kCGHIDEventTap
         var tap = CGEvent.tapCreate(
@@ -394,6 +400,13 @@ public final class KeybindManager: @unchecked Sendable {
         self.eventTap = nil
         self.runLoopSource = nil
         self.isRunning = false
+    }
+
+    /// Restarts the event tap with updated events of interest.
+    @discardableResult
+    public func restartTap() -> Bool {
+        stop()
+        return start()
     }
 
     // MARK: - Event Dispatching & Handling

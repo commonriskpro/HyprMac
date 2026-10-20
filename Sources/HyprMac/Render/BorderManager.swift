@@ -8,6 +8,8 @@ public final class BorderManager {
 
     public private(set) var overlays: [CGWindowID: BorderWindow] = [:]
     public private(set) var managedWindowIDs: Set<CGWindowID> = []
+    private var appliedAlpha: [CGWindowID: Float] = [:]
+    private var appliedBlur: [CGWindowID: UInt32] = [:]
 
     public init() {}
 
@@ -46,22 +48,33 @@ public final class BorderManager {
         // 1. Compositor-level Window Opacity and Blur Application
         // Invariant: Windows must receive their focus opacity and backdrop blur
         // regardless of whether borderSize > 0 or borderSize == 0 (frameless mode).
+        // Only dispatch CGS calls when alpha or blur delta changes to minimize IPC overhead.
         for wid in validWids {
             let isFocused = (wid == activeWid)
             let alpha = Float(isFocused ? config.windowOpacity : config.inactiveOpacity)
-            SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: alpha)
-            if config.blurEnabled {
-                SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: config.blurRadius)
-            } else {
-                SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
+            if appliedAlpha[wid] != alpha {
+                SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: alpha)
+                appliedAlpha[wid] = alpha
+            }
+
+            let targetBlur: UInt32 = config.blurEnabled ? config.blurRadius : 0
+            if appliedBlur[wid] != targetBlur {
+                SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: targetBlur)
+                appliedBlur[wid] = targetBlur
             }
         }
 
         // Clean up windows that are no longer managed: restore alpha to 1.0 and blur to 0
         let unmanagedWids = managedWindowIDs.subtracting(validWids)
         for wid in unmanagedWids {
-            SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: 1.0)
-            SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
+            if appliedAlpha[wid] != 1.0 {
+                SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: 1.0)
+            }
+            if appliedBlur[wid] != 0 {
+                SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
+            }
+            appliedAlpha.removeValue(forKey: wid)
+            appliedBlur.removeValue(forKey: wid)
         }
         managedWindowIDs = validWids
 
@@ -140,6 +153,8 @@ public final class BorderManager {
             SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: 0)
         }
         managedWindowIDs.removeAll()
+        appliedAlpha.removeAll()
+        appliedBlur.removeAll()
 
         for overlay in overlays.values {
             overlay.hideBorder()
@@ -153,6 +168,8 @@ public final class BorderManager {
         SkyLightBridge.shared.setWindowAlpha(windowID: windowID, alpha: 1.0)
         SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: windowID, radius: 0)
         managedWindowIDs.remove(windowID)
+        appliedAlpha.removeValue(forKey: windowID)
+        appliedBlur.removeValue(forKey: windowID)
         if let overlay = overlays.removeValue(forKey: windowID) {
             overlay.hideBorder()
             overlay.close()

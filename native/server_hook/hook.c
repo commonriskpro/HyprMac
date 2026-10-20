@@ -2927,6 +2927,7 @@ static void shm_poll_loop(void *shm_base) {
 
     static uint8_t msg_buf[sizeof(HyprMessageHeader) + HYPR_MAX_PAYLOAD_SIZE];
     uint32_t msg_len = 0;
+    uint32_t idle_ticks = 0;
 
     diag_log("DIAG: shm_poll_loop started, polling cmd ring");
     hypr_log("HyprServer entering SHM poll loop");
@@ -2990,9 +2991,20 @@ static void shm_poll_loop(void *shm_base) {
             }
         }
 
-        // Avoid busy-spinning if idle
-        if (!work_done) {
-            usleep(500); // 0.5ms sleep
+        // Avoid busy-spinning if idle with adaptive backoff to conserve CPU & battery
+        if (work_done) {
+            idle_ticks = 0;
+        } else {
+            idle_ticks++;
+            useconds_t sleep_us = 500; // 0.5ms initial response
+            if (idle_ticks > 100) {
+                sleep_us = 20000; // 20ms sleep (~50Hz poll when deeply idle)
+            } else if (idle_ticks > 20) {
+                sleep_us = 5000;  // 5ms sleep when idle
+            } else if (idle_ticks > 5) {
+                sleep_us = 2000;  // 2ms sleep
+            }
+            usleep(sleep_us);
         }
     }
 }

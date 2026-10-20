@@ -1595,7 +1595,7 @@ func runIntegratedDaemon(configPath: String?) {
             }
 
             let barWid = CGWindowID(bar.windowNumber)
-            let rawFocused = (tileCheckCounter % 10 == 0) ? WindowDetector.shared.getFocusedWindow() : WindowDetector.shared.fastFocusedWindow()
+            let rawFocused = (tileCheckCounter % 30 == 0) ? WindowDetector.shared.getFocusedWindow() : WindowDetector.shared.fastFocusedWindow()
             let isBarOrBorder = rawFocused != nil && (rawFocused!.windowID == barWid || borderManager.isBorderWindow(windowID: rawFocused!.windowID))
             let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
             let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused
@@ -1719,9 +1719,9 @@ func runIntegratedDaemon(configPath: String?) {
                     isDragging = false
                 }
 
-                // Idle Frame Reconciliation (every 15 ticks / ~250ms when idle)
+                // Idle Frame Reconciliation (every 30 ticks / ~500ms when idle)
                 // Skip during 350ms settle window following a workspace switch
-                if !isMouseDown && !isDragging && !isSettleWindow && tileCheckCounter % 15 == 0 {
+                if !isMouseDown && !isDragging && !isSettleWindow && tileCheckCounter % 30 == 0 {
                     let snapped = dwindleEngine.reconcileFrames(
                         threshold: 2.0,
                         isFloating: { keyManager.isFloating(windowID: $0) || keyManager.isFullscreen(windowID: $0) },

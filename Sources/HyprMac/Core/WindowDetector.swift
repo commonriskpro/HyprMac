@@ -54,6 +54,17 @@ public final class WindowDetector: @unchecked Sendable {
                 self.invalidateApplication(pid: app.processIdentifier)
             }
         }
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.lock.lock()
+            self._cachedFocusedWindow = nil
+            self.lock.unlock()
+        }
     }
 
     /// Verifies if the current process has Accessibility privileges

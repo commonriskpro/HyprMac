@@ -305,6 +305,8 @@ public enum NetworkMonitor {
     nonisolated(unsafe) private static var wifiObserver: WiFiEventObserver?
     nonisolated(unsafe) private static var locationManager: CLLocationManager?
     nonisolated(unsafe) private static var locationDelegate: LocationDelegate?
+    nonisolated(unsafe) private static var isIpconfigRunning: Bool = false
+    nonisolated(unsafe) private static var lastIpconfigTime: TimeInterval = 0
 
     public static func resetCache() {
         refreshAsync()
@@ -359,8 +361,14 @@ public enum NetworkMonitor {
             }
         }
 
-        // 2. Asynchronous background fallback to ipconfig (never blocks the main thread)
+        // 2. Asynchronous background fallback to ipconfig (never blocks the main thread, single-flight & debounced to 10s)
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !isIpconfigRunning && (now - lastIpconfigTime >= 10.0) else { return }
+        isIpconfigRunning = true
+        lastIpconfigTime = now
+
         DispatchQueue.global(qos: .utility).async {
+            defer { isIpconfigRunning = false }
             let iface = CWWiFiClient.shared().interface()?.interfaceName ?? "en0"
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/sbin/ipconfig")
