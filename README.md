@@ -160,21 +160,17 @@ HyprMac daemon
 ## Key Features
 
 ### 🪟 Fibonacci / Dwindle Tiling
-Windows automatically tile in organic binary-tree spirals according to aspect ratio. Supports directional focus (`Alt + H/J/K/L`), window swaps (`Alt + Shift + H/J/K/L`), fullscreen toggle (`Alt + F`), floating toggle (`Alt + V`), split ratio adjustments, and smooth mouse drag-and-drop.
+Windows automatically tile in organic binary-tree spirals according to aspect ratio, born 100% frameless, square, and shadowless directly from `WindowServer`. Supports directional focus (`Alt + H/J/K/L`), window swaps (`Alt + Shift + H/J/K/L`), fullscreen toggle (`Alt + F`), floating toggle (`Alt + V`), split ratio adjustments, and smooth mouse drag-and-drop.
 
 <p align="center">
   <img src="assets/showcase/01_dwindle_tiling.png" alt="Dwindle Tiling on macOS" width="850"/>
 </p>
 
 ### 📊 HyprBar (Waybar for macOS)
-Floating translucent pill bar rendered with native AppKit and behind-window blur. Displays:
-- Workspaces 1–9 (Arabic or Kanji numerals) with active indicator
-- Active application icon and window title
-- Battery status & charging indicator
-- Clock (12h or 24h custom strftime)
-- Live CPU & RAM hardware load
-- Volume and Wi-Fi SSID
-- Notification badge
+Three independent floating translucent glass capsules rendered with native AppKit and behind-window blur:
+- **Left Island**: Japanese Kanji workspaces (`一` to `六`) with active indicator pill and compact active window title/icon.
+- **Center Island**: Battery telemetry & charging indicator, live clock & day, and system volume level.
+- **Right Island**: Notification center badge, Wi-Fi SSID, live hardware telemetry (CPU & RAM load), and Wlogout power menu launcher.
 
 <p align="center">
   <img src="assets/hyprmac_bar_rendered.png" alt="HyprBar Waybar status bar" width="850"/>
