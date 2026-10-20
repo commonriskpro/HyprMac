@@ -426,12 +426,17 @@ func runBorderDaemon(mode: BorderMode = .glassHalo) {
     }
     sigtermSource.resume()
 
-    var lastWid: CGWindowID = 0
-    var lastFrame: NSRect = .zero
+    final class BorderDaemonController: @unchecked Sendable {
+        var lastWid: CGWindowID = 0
+        var lastFrame: NSRect = .zero
+        let borderWindow: BorderWindow
 
-    Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-        
-        MainActor.assumeIsolated {
+        init(borderWindow: BorderWindow) {
+            self.borderWindow = borderWindow
+        }
+
+        @MainActor
+        func update() {
             if let focused = WindowDetector.shared.getFocusedWindow() {
                 let selfWid = CGWindowID(borderWindow.windowNumber)
                 if focused.windowID != selfWid {
@@ -448,6 +453,41 @@ func runBorderDaemon(mode: BorderMode = .glassHalo) {
                     borderWindow.hideBorder()
                 }
             }
+        }
+    }
+
+    let controller = BorderDaemonController(borderWindow: borderWindow)
+
+    // Initial update
+    controller.update()
+
+    // Event-driven focus updates on application activation/deactivation/hide/unhide
+    let notifCenter = NSWorkspace.shared.notificationCenter
+    _ = notifCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
+        }
+    }
+    _ = notifCenter.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
+        }
+    }
+    _ = notifCenter.addObserver(forName: NSWorkspace.didHideApplicationNotification, object: nil, queue: .main) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
+        }
+    }
+    _ = notifCenter.addObserver(forName: NSWorkspace.didUnhideApplicationNotification, object: nil, queue: .main) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
+        }
+    }
+
+    // Relaxed 500ms safety timer for internal in-app window moves without active AXObserver
+    Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
         }
     }
 
@@ -904,11 +944,17 @@ func runBarDaemon() {
     }
     sigintSource.resume()
 
-    var lastWid: CGWindowID = 0
-    var lastTitle = ""
+    final class BarDaemonController: @unchecked Sendable {
+        var lastWid: CGWindowID = 0
+        var lastTitle: String = ""
+        let bar: HyprBarWindow
 
-    Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-        MainActor.assumeIsolated {
+        init(bar: HyprBarWindow) {
+            self.bar = bar
+        }
+
+        @MainActor
+        func update() {
             if let focused = WindowDetector.shared.getFocusedWindow() {
                 if focused.windowID != lastWid || focused.title != lastTitle {
                     lastWid = focused.windowID
@@ -916,6 +962,29 @@ func runBarDaemon() {
                     bar.updateActiveWindow(title: focused.title, app: focused.appName)
                 }
             }
+        }
+    }
+
+    let controller = BarDaemonController(bar: bar)
+
+    // Initial update
+    controller.update()
+
+    // Event-driven active window updates on application activation
+    _ = NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.didActivateApplicationNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
+        }
+    }
+
+    // Relaxed 1.0s safety timer for in-app tab/title updates
+    Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        MainActor.assumeIsolated {
+            controller.update()
         }
     }
 
@@ -1447,6 +1516,13 @@ func runIntegratedDaemon(configPath: String?) {
     signal(SIGINT, SIG_IGN)
     signal(SIGTERM, SIG_IGN)
 
+    final class MouseStateHolder: @unchecked Sendable {
+        var isMouseDown: Bool = false
+        var global: Any?
+        var local: Any?
+    }
+    let mouseState = MouseStateHolder()
+
     let cleanupAndExit: @Sendable () -> Void = {
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
@@ -1456,6 +1532,14 @@ func runIntegratedDaemon(configPath: String?) {
                 NotificationCenterManager.shared.stop()
                 if let token = activationObserverHolder.token {
                     NSWorkspace.shared.notificationCenter.removeObserver(token)
+                }
+                if let m = mouseState.global {
+                    NSEvent.removeMonitor(m)
+                    mouseState.global = nil
+                }
+                if let m = mouseState.local {
+                    NSEvent.removeMonitor(m)
+                    mouseState.local = nil
                 }
                 bar.hideBar()
                 borderManager.hideAll()
@@ -1490,12 +1574,24 @@ func runIntegratedDaemon(configPath: String?) {
     var lastTitle: String = ""
     var tileCheckCounter: Int = 0
 
-    // Mouse drag tracking & snap-back state
+    // Mouse drag tracking & snap-back state via event monitoring (zero 60Hz HID polling)
     var isMouseDownPrev: Bool = false
     var draggedWid: CGWindowID? = nil
     var dragStartFrame: CGRect? = nil
     var dragStartMousePoint: NSPoint? = nil
     var isDragging: Bool = false
+
+    mouseState.global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+        MainActor.assumeIsolated {
+            mouseState.isMouseDown = (event.type == .leftMouseDown)
+        }
+    }
+    mouseState.local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+        MainActor.assumeIsolated {
+            mouseState.isMouseDown = (event.type == .leftMouseDown)
+        }
+        return event
+    }
 
     Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
         MainActor.assumeIsolated {
@@ -1641,8 +1737,7 @@ func runIntegratedDaemon(configPath: String?) {
 
             // Mouse drag tracking & snap-back for tiled windows
             if config.layout.lowercased() == "dwindle" {
-                let isMouseDown = CGEventSource.buttonState(.hidSystemState, button: .left) ||
-                                  CGEventSource.buttonState(.combinedSessionState, button: .left)
+                let isMouseDown = mouseState.isMouseDown
 
                 if !isMouseDownPrev && isMouseDown {
                     // Mouse Down: If mouse transitions from up to down, and the active/focused window is managed by Dwindle and NOT floating:

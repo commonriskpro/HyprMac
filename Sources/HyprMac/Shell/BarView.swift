@@ -1140,6 +1140,28 @@ public final class BarView: NSView {
             object: nil
         )
 
+        // Event-driven power saving: pause periodic hardware timer when screens sleep, resume on wake
+        NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.screensDidSleepNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateTimer?.invalidate()
+            self?.updateTimer = nil
+        }
+
+        NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.screensDidWakeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.startTimers()
+            }
+        }
+
         // Periodic 1.0s timer only for Clock & Hardware CPU/RAM
         guard updateTimer == nil else { return }
         updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -1160,6 +1182,8 @@ public final class BarView: NSView {
         updateTimer = nil
         BatteryMonitor.stopMonitoring()
         NotificationCenter.default.removeObserver(self, name: NotificationCenterManager.stateDidChangeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.screensDidSleepNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.screensDidWakeNotification, object: nil)
     }
 
     // MARK: - Power Menu / Wlogout
