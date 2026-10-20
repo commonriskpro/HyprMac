@@ -408,6 +408,75 @@ static NSView *hypr_wrapper_hitTest(id self, SEL _cmd, NSPoint pt) {
     return nil;
 }
 
+static CGFloat hypr_find_accessory_height(NSView *view) {
+    if (!view) return 0.0;
+    NSView *v = view;
+    while (v) {
+        for (NSView *sub in v.subviews) {
+            if ([NSStringFromClass([sub class]) containsString:@"AccessoryViewWrapper"]) {
+                if (!sub.isHidden && sub.frame.size.height > 0.0) {
+                    return sub.frame.size.height;
+                }
+            }
+        }
+        v = v.superview;
+    }
+    return 0.0;
+}
+
+static void configure_accessory_wrappers(NSView *view) {
+    if (!view) return;
+    if ([NSStringFromClass([view class]) containsString:@"AccessoryViewWrapper"]) {
+        view.wantsLayer = YES;
+        if (view.layer) {
+            view.layer.backgroundColor = [NSColor colorWithCalibratedRed:37.0/255.0 green:37.0/255.0 blue:37.0/255.0 alpha:1.0].CGColor;
+            view.layer.masksToBounds = YES;
+            view.layer.opaque = YES;
+        }
+    }
+    for (NSView *sub in view.subviews) {
+        configure_accessory_wrappers(sub);
+    }
+}
+
+static void (*s_orig_accessory_layout)(id, SEL) = NULL;
+static void hypr_accessory_layout(id self, SEL _cmd) {
+    if (s_orig_accessory_layout) {
+        s_orig_accessory_layout(self, _cmd);
+    }
+    NSView *v = (NSView *)self;
+    v.wantsLayer = YES;
+    if (v.layer) {
+        v.layer.backgroundColor = [NSColor colorWithCalibratedRed:37.0/255.0 green:37.0/255.0 blue:37.0/255.0 alpha:1.0].CGColor;
+        v.layer.masksToBounds = YES;
+        v.layer.opaque = YES;
+    }
+
+    CGFloat h = v.isHidden ? 0.0 : v.frame.size.height;
+    NSView *parent = v.superview;
+    if (parent) {
+        void (^update_scroll)(NSView *, void (^)(NSView *, id)) = ^(NSView *child, void (^selfBlock)(NSView *, id)) {
+            if ([child isKindOfClass:[NSScrollView class]]) {
+                NSScrollView *sv = (NSScrollView *)child;
+                NSEdgeInsets insets = sv.contentInsets;
+                if (insets.bottom != h) {
+                    insets.bottom = h;
+                    sv.contentInsets = insets;
+                }
+                return;
+            }
+            for (NSView *sub in child.subviews) {
+                selfBlock(sub, selfBlock);
+            }
+        };
+        for (NSView *sib in parent.subviews) {
+            if (sib != v) {
+                update_scroll(sib, update_scroll);
+            }
+        }
+    }
+}
+
 static void strip_window_decorations(NSWindow *window) {
     if (!window || !is_standard_window(window)) {
         return;
@@ -571,6 +640,9 @@ static void strip_window_decorations(NSWindow *window) {
                 }
             }
 
+            // Style accessory wrappers (Path Bar and Status Bar) with solid opaque backing
+            configure_accessory_wrappers(contentView);
+
             // Adjust scroll view insets for edge-to-edge layout & keep scrollbars visible
             if (!alreadyStripped) {
                 void (^configure_scroll_views)(NSView *, void (^)(NSView *, id)) = ^(NSView *view, void (^selfBlock)(NSView *, id)) {
@@ -586,7 +658,10 @@ static void strip_window_decorations(NSWindow *window) {
                             sv.hasVerticalScroller = YES;
                             sv.autohidesScrollers = NO;
                         }
-                        // insets.bottom is preserved so the bottom ribbon stays clean and unclipped!
+                            CGFloat accH = hypr_find_accessory_height(view);
+                            if (accH > 0.0) {
+                                insets.bottom = accH;
+                            }
                         sv.contentInsets = insets;
                     }
                     for (NSView *sub in view.subviews) {
@@ -878,6 +953,10 @@ static void strip_window_decorations(NSWindow *window) {
     if (![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
         insets.left = 0.0;
         insets.top = 12.0;
+        CGFloat accH = hypr_find_accessory_height(self);
+        if (accH > 0.0) {
+            insets.bottom = accH;
+        }
     }
     [self hypr_setContentInsets:insets];
 }
@@ -887,6 +966,10 @@ static void strip_window_decorations(NSWindow *window) {
     if (![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
         insets.left = 0.0;
         insets.top = 12.0;
+        CGFloat accH = hypr_find_accessory_height(self);
+        if (accH > 0.0) {
+            insets.bottom = accH;
+        }
     }
     return insets;
 }
@@ -1091,6 +1174,20 @@ static void hypr_client_entry(void) {
                     // Added cleanly
                 } else {
                     method_setImplementation(mHit, (IMP)hypr_wrapper_hitTest);
+                }
+            }
+        }
+
+        // Swizzle _NSSplitViewItemAccessoryViewWrapper layout to maintain opaque background & inset sync
+        Class accWrapperClass = objc_getClass("_NSSplitViewItemAccessoryViewWrapper");
+        if (accWrapperClass) {
+            Method mLayout = class_getInstanceMethod(accWrapperClass, @selector(layout));
+            if (mLayout) {
+                s_orig_accessory_layout = (void (*)(id, SEL))method_getImplementation(mLayout);
+                if (class_addMethod(accWrapperClass, @selector(layout), (IMP)hypr_accessory_layout, method_getTypeEncoding(mLayout))) {
+                    // Added cleanly
+                } else {
+                    method_setImplementation(mLayout, (IMP)hypr_accessory_layout);
                 }
             }
         }

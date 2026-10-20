@@ -87,8 +87,38 @@ public enum RofiSearchResult: @unchecked Sendable, Identifiable, Equatable {
                 return img.withSymbolConfiguration(config) ?? img
             }
             return NSImage()
-        case .runBinary:
-            if let img = NSImage(systemSymbolName: "terminal.fill", accessibilityDescription: "Terminal") {
+        case .runBinary(let name, _):
+            let lower = name.lowercased()
+            let sfSymbol: String
+            switch lower {
+            case "git", "gh":
+                sfSymbol = "arrow.triangle.branch"
+            case "nvim", "vim", "vi", "nano", "emacs", "hx", "helix":
+                sfSymbol = "character.cursor.ibeam"
+            case "python", "python3", "ipython", "py":
+                sfSymbol = "curlybraces"
+            case "cargo", "rustc", "rustup":
+                sfSymbol = "shippingbox.fill"
+            case "docker", "podman", "docker-compose":
+                sfSymbol = "shippingbox.circle.fill"
+            case "node", "npm", "yarn", "pnpm", "bun", "deno":
+                sfSymbol = "cube.transparent.fill"
+            case "brew":
+                sfSymbol = "mug.fill"
+            case "ssh", "curl", "wget", "ping", "netstat":
+                sfSymbol = "network"
+            case "htop", "btop", "top", "glances":
+                sfSymbol = "chart.bar.xaxis"
+            case "tmux", "zellij", "screen":
+                sfSymbol = "square.split.2x2.fill"
+            case "zsh", "bash", "fish", "sh":
+                sfSymbol = "chevron.left.forwardslash.chevron.right"
+            case "make", "cmake", "ninja", "clang", "gcc", "swift", "swiftc":
+                sfSymbol = "hammer.fill"
+            default:
+                sfSymbol = "terminal.fill"
+            }
+            if let img = NSImage(systemSymbolName: sfSymbol, accessibilityDescription: name) {
                 let config = NSImage.SymbolConfiguration(pointSize: 20, weight: .medium)
                 return img.withSymbolConfiguration(config) ?? img
             }
@@ -453,6 +483,7 @@ public final class PathBinaryScanner: @unchecked Sendable {
     private let lock = NSLock()
     private var cachedBinaries: [BinaryItem] = []
     private var lastScanTime: TimeInterval = 0
+    private var dirMtimeCache: [String: (mtime: time_t, items: [BinaryItem])] = [:]
 
     public init() {}
 
@@ -479,18 +510,41 @@ public final class PathBinaryScanner: @unchecked Sendable {
         var seenNames = Set<String>()
 
         for dir in directoriesToScan {
+            var statBuf = stat()
+            let statRes = stat(dir, &statBuf)
+            if !forceRefresh && statRes == 0 {
+                let mtime = statBuf.st_mtimespec.tv_sec
+                if let cached = dirMtimeCache[dir], cached.mtime == mtime {
+                    for item in cached.items {
+                        if !seenNames.contains(item.name) {
+                            seenNames.insert(item.name)
+                            items.append(item)
+                        }
+                    }
+                    continue
+                }
+            }
+
             guard fm.fileExists(atPath: dir),
                   let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
 
+            var dirItems: [BinaryItem] = []
             for filename in contents {
                 if filename.hasPrefix(".") { continue }
-                if seenNames.contains(filename) { continue }
 
                 let fullPath = (dir as NSString).appendingPathComponent(filename)
-                if fm.isExecutableFile(atPath: fullPath) {
-                    seenNames.insert(filename)
-                    items.append(BinaryItem(name: filename, path: fullPath))
+                if access(fullPath, X_OK) == 0 {
+                    let item = BinaryItem(name: filename, path: fullPath)
+                    dirItems.append(item)
+                    if !seenNames.contains(filename) {
+                        seenNames.insert(filename)
+                        items.append(item)
+                    }
                 }
+            }
+
+            if statRes == 0 {
+                dirMtimeCache[dir] = (mtime: statBuf.st_mtimespec.tv_sec, items: dirItems)
             }
         }
 
@@ -503,6 +557,7 @@ public final class PathBinaryScanner: @unchecked Sendable {
     public func clearCache() {
         lock.lock()
         cachedBinaries.removeAll()
+        dirMtimeCache.removeAll()
         lastScanTime = 0
         lock.unlock()
     }
@@ -712,16 +767,40 @@ public enum WindowProvider {
     }
 }
 
-/// Tracks recent text copied to the macOS clipboard
+/// Tracks recent text copied to the macOS clipboard with persistent disk caching
 public final class ClipboardTracker: @unchecked Sendable {
     public static let shared = ClipboardTracker()
 
     private let lock = NSLock()
     private var history: [(text: String, date: Date)] = []
     private var lastChangeCount: Int = -1
+    private let cacheFile: String
 
-    public init() {
+    public init(cachePath: String? = nil) {
+        let path = cachePath ?? NSString(string: "~/.cache/hyprmac/clipboard.json").expandingTildeInPath
+        self.cacheFile = path
+        loadFromDisk()
         checkPasteboard()
+    }
+
+    private func loadFromDisk() {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: cacheFile)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+        var loaded: [(text: String, date: Date)] = []
+        for item in json {
+            if let text = item["text"] as? String, let ts = item["timestamp"] as? TimeInterval {
+                loaded.append((text: text, date: Date(timeIntervalSince1970: ts)))
+            }
+        }
+        self.history = loaded
+    }
+
+    private func saveToDisk() {
+        let items = history.map { ["text": $0.text, "timestamp": $0.date.timeIntervalSince1970] }
+        guard let data = try? JSONSerialization.data(withJSONObject: items, options: []) else { return }
+        let dir = (cacheFile as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? data.write(to: URL(fileURLWithPath: cacheFile), options: .atomic)
     }
 
     public func checkPasteboard() {
@@ -747,6 +826,7 @@ public final class ClipboardTracker: @unchecked Sendable {
         if history.count > 50 {
             history.removeLast()
         }
+        saveToDisk()
     }
 
     public func getHistory() -> [(text: String, date: Date)] {
@@ -759,6 +839,7 @@ public final class ClipboardTracker: @unchecked Sendable {
         lock.lock()
         history.removeAll()
         lastChangeCount = -1
+        try? FileManager.default.removeItem(atPath: cacheFile)
         lock.unlock()
     }
 
@@ -772,6 +853,7 @@ public final class ClipboardTracker: @unchecked Sendable {
         if history.count > 50 {
             history.removeLast()
         }
+        saveToDisk()
     }
 }
 

@@ -111,7 +111,7 @@ public final class WallpaperCardView: NSView {
     private let categoryBadge = NSTextField(labelWithString: "")
     private var trackingArea: NSTrackingArea?
     private var thumbnailToken: ThumbnailCancellationToken?
-    private var isThumbnailLoaded: Bool = false
+    public private(set) var isThumbnailLoaded: Bool = false
 
     public init(item: WallpaperItem, index: Int) {
         self.item = item
@@ -327,10 +327,13 @@ public final class WallpaperGridView: NSView {
     public func updateVisibleThumbnails() {
         let visibleRect = enclosingScrollView?.documentVisibleRect ?? bounds
         let bufferRect = visibleRect.insetBy(dx: 0, dy: -250)
+        let unloadBufferRect = visibleRect.insetBy(dx: 0, dy: -600)
 
         for card in cardViews {
             if card.frame.intersects(bufferRect) {
                 card.loadThumbnailIfNeeded()
+            } else if !card.frame.intersects(unloadBufferRect) {
+                card.unloadThumbnail()
             } else {
                 card.cancelPendingThumbnail()
             }
@@ -347,6 +350,7 @@ public final class WallpaperGridView: NSView {
         setupScrollObservation()
 
         for card in cardViews {
+            card.unloadThumbnail()
             card.cleanup()
             card.removeFromSuperview()
         }
@@ -774,6 +778,11 @@ public final class WallpaperGalleryWindow: NSPanel, NSTextFieldDelegate {
         guard index >= 0 && index < filteredWallpapers.count else { return }
         let item = filteredWallpapers[index]
         applyWallpaper(path: item.path)
+        NotificationCenterManager.shared.postNotification(
+            title: "Fondo de Pantalla",
+            body: "\(item.name) aplicado con éxito",
+            appName: "HyprMac"
+        )
         dismiss()
     }
 

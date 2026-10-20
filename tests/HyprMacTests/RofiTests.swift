@@ -672,4 +672,50 @@ final class RofiTests: XCTestCase {
         XCTAssertLessThanOrEqual(tCached, max(tFirst, 0.005), "Cached window lookup must complete sub-millisecond")
         WindowProvider.clearCache()
     }
+
+    func testCLIBinaryIconResolution() {
+        let gitItem = RofiSearchResult.runBinary(name: "git", path: "/usr/bin/git")
+        let nvimItem = RofiSearchResult.runBinary(name: "nvim", path: "/usr/local/bin/nvim")
+        let brewItem = RofiSearchResult.runBinary(name: "brew", path: "/opt/homebrew/bin/brew")
+        let genericItem = RofiSearchResult.runBinary(name: "unknown_cli_xyz", path: "/bin/unknown_cli_xyz")
+
+        XCTAssertFalse(gitItem.icon.size.equalTo(.zero))
+        XCTAssertFalse(nvimItem.icon.size.equalTo(.zero))
+        XCTAssertFalse(brewItem.icon.size.equalTo(.zero))
+        XCTAssertFalse(genericItem.icon.size.equalTo(.zero))
+    }
+
+    func testPathBinaryScannerMtimeCaching() {
+        let scanner = PathBinaryScanner.shared
+        scanner.clearCache()
+
+        let first = scanner.scan()
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let second = scanner.scan()
+        let elapsed = CFAbsoluteTimeGetCurrent() - t0
+
+        XCTAssertEqual(first.count, second.count)
+        XCTAssertLessThan(elapsed, 0.01, "mtime-cached directory scan should be practically instantaneous")
+    }
+
+    func testWallpaperGridUnloadsDistantThumbnails() {
+        let window = WallpaperGalleryWindow()
+        defer {
+            window.dismiss()
+            window.close()
+        }
+
+        let grid = window.gridView
+        guard grid.cardViews.count > 1 else { return }
+
+        // Artificially move a card far below the scroll view
+        let farCard = grid.cardViews.last!
+        farCard.loadThumbnailIfNeeded()
+
+        // Move its frame to y = 5000 (way past viewport)
+        farCard.frame.origin.y = 5000
+
+        grid.updateVisibleThumbnails()
+        XCTAssertFalse(farCard.isThumbnailLoaded, "Distant card must unload thumbnail to save GPU memory")
+    }
 }
