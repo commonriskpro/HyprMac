@@ -198,7 +198,7 @@ final class WlogoutButtonView: NSView {
         let badgeStyle = NSMutableParagraphStyle()
         badgeStyle.alignment = .center
         let badgeAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .medium),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium),
             .foregroundColor: badgeColor,
             .paragraphStyle: badgeStyle
         ]

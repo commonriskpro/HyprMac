@@ -208,6 +208,10 @@ final class WlogoutTests: XCTestCase {
             logoutHandler: { }
         )
         let window = WlogoutWindow(items: WlogoutItem.defaultItems, actionDispatcher: dispatcher)
+        defer {
+            window.dismiss()
+            window.close()
+        }
         window.onActionExecuted = { item in executedItem = item }
         window.onDismiss = { dismissed = true }
 
@@ -228,6 +232,10 @@ final class WlogoutTests: XCTestCase {
             logoutHandler: { }
         )
         let window = WlogoutWindow(items: WlogoutItem.defaultItems, actionDispatcher: dispatcher)
+        defer {
+            window.dismiss()
+            window.close()
+        }
         window.onActionExecuted = { item in executedItem = item }
         window.onDismiss = { dismissed = true }
 
