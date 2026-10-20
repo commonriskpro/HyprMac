@@ -74,7 +74,7 @@ Dual lock-free ring buffers over a 64KB mmap'd file (`/tmp/hyprmac-ipc.shm`) wit
 
 #### 4. User-Space Swift Manager
 
-Complete client suite: Fibonacci/Dwindle binary-tree tiling, `hyprland.conf` parser, `CGEventTap` global hotkeys, Waybar-style AppKit status bar, Aqua ↔ HyprMac session persistence, and fallback border overlays (Glass Halo / Neon / Outline) with automatic hook coordination.
+Complete client suite: Fibonacci/Dwindle binary-tree tiling, `hyprland.conf` parser, `CGEventTap` global hotkeys, Waybar-style AppKit status bar, Aqua ↔ HyprMac session persistence, and compositor effects (focus opacity & backdrop blur) with automatic hook coordination.
 
 ---
 
@@ -126,9 +126,6 @@ swift run HyprMac square <window_id>
 # Strip shadows
 swift run HyprMac strip-shadow <window_id>
 
-# Apply borders (Glass Halo / Neon / Outline)
-swift run HyprMac border <mode>
-
 # Probe visible windows
 swift run HyprMac probe
 ```
@@ -175,7 +172,6 @@ sudo make uninstall-daemon
 swift test
 
 # Embedded CLI test suites
-swift run HyprMac test-border     # 15 assertions — Glass Halo, Neon, Outline
 swift run HyprMac test-config     # hyprland.conf parser
 swift run HyprMac test-keys       # 35 assertions — modifier masks, keycodes
 swift run HyprMac test-bar        # HyprBar status bar
@@ -201,7 +197,7 @@ Sources/HyprMac/
 ├── Shell/                      # Waybar-style AppKit status bar
 ├── Bridge/                     # SHM ring buffer IPC + SkyLight C bridge
 ├── Layout/                     # Fibonacci / Dwindle binary-tree tiling
-├── Render/                     # Fallback AppKit border overlays
+├── Render/                     # Compositor effects & window styling
 └── Session/                    # Aqua ↔ HyprMac mode persistence
 
 native/
