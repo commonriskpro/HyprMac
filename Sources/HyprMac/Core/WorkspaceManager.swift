@@ -509,6 +509,10 @@ public final class WorkspaceManager {
                     if let pv = posVal {
                         AXUIElementSetAttributeValue(winElem, kAXPositionAttribute as CFString, pv)
                     }
+                    // Two-pass safeguard: re-apply size after position in case offscreen clamping occurred
+                    if let sv = newSizeVal {
+                        AXUIElementSetAttributeValue(winElem, kAXSizeAttribute as CFString, sv)
+                    }
                 }
             }
 

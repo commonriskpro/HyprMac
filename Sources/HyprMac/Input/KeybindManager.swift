@@ -79,6 +79,10 @@ public final class KeybindManager: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     public private(set) var isRunning: Bool = false
 
+    private var activeGalleryWindow: WallpaperGalleryWindow?
+    private var activeRofiWindow: RofiWindow?
+    private var activeWlogoutWindow: WlogoutWindow?
+
     /// When true, top-edge mouse motion is clamped to y >= 12.0 to shield WindowServer's menu bar reveal.
     public var isMenuBarSuppressed: Bool {
         get {
@@ -188,7 +192,8 @@ public final class KeybindManager: @unchecked Sendable {
             case "exec":
                 self.exec(command: binding.args)
             case "killactive", "close_window":
-                self.killactive()
+                let isQ = binding.key.uppercased() == "Q"
+                self.killactive(requestedKey: isQ ? "q" : "w")
             case "minimize", "minimizeactive":
                 self.minimizeactive()
             case "workspace":
@@ -414,6 +419,7 @@ public final class KeybindManager: @unchecked Sendable {
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let relevantFlags = event.flags.intersection(Self.standardModifierMask)
         let isAutorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        print("[KeyTap] keyDown keyCode: \(keyCode) flags: \(relevantFlags.rawValue)")
 
         var matched: KeyBinding? = nil
         lock.lock()
@@ -426,6 +432,7 @@ public final class KeybindManager: @unchecked Sendable {
         lock.unlock()
 
         if let binding = matched {
+            print("[KeyTap] MATCHED binding: \(binding.description), action: killactive/other")
             // Drop autorepeat for navigation, workspace, and window action keys so holding Alt + 1 does not bounce or spam transitions
             if isAutorepeat && !binding.allowAutorepeat {
                 if binding.isExclusive {
@@ -450,58 +457,153 @@ public final class KeybindManager: @unchecked Sendable {
 
     /// Closes the active focused window using Accessibility APIs or SkyLight fallback,
     /// synchronized with windowsOut animation.
-    public func killactive() {
-        // Strategy 1: Use WindowDetector to locate active window and press AXCloseButton
+    public func killactive(requestedKey: String = "w") {
+        // Strategy 1: Use WindowDetector to locate the exact active focused window
         if let info = WindowDetector.shared.getFocusedWindow() {
             let wid = info.windowID
+            let pid = info.processID
+            let appName = info.appName.lowercased()
+            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier?.lowercased() ?? ""
+            let isFinder = appName.contains("finder") || bundleID == "com.apple.finder"
+
+            let isQuit = requestedKey.lowercased() == "q"
+
             let closeAction: @MainActor () -> Void = {
-                let appElement = AXUIElementCreateApplication(info.processID)
+                if isFinder {
+                    // Direct targeted osascript closing the exact focused Finder window ID
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    p.arguments = ["-e", "tell application \"Finder\" to close (first window whose id is \(wid))"]
+                    try? p.run()
+                    return
+                }
+
+                // If user pressed Q (Alt+Q / Cmd+Q -> Quit / Terminate active app):
+                if isQuit {
+                    if let app = NSRunningApplication(processIdentifier: pid) {
+                        let terminated = app.terminate()
+                        if terminated { return }
+                    }
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    p.arguments = ["-e", "tell application \"System Events\" to keystroke \"q\" using command down"]
+                    try? p.run()
+                    return
+                }
+
+                // For window close (Alt+W / Cmd+W):
+                let appElement = AXUIElementCreateApplication(pid)
+                var closed = false
+
+                func isButtonActionable(_ btn: AXUIElement) -> Bool {
+                    var enabledVal: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(btn, kAXEnabledAttribute as CFString, &enabledVal) == .success,
+                       let enabled = enabledVal as? Bool {
+                        return enabled
+                    }
+                    return false
+                }
+
+                // 1. Try focused window's AXCloseButton if enabled
                 var winVal: AnyObject?
                 if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winVal) == .success,
                    let win = winVal {
                     var closeBtnVal: AnyObject?
                     if AXUIElementCopyAttributeValue(win as! AXUIElement, kAXCloseButtonAttribute as CFString, &closeBtnVal) == .success,
-                       let closeBtn = closeBtnVal {
+                       let closeBtn = closeBtnVal,
+                       isButtonActionable(closeBtn as! AXUIElement) {
                         let err = AXUIElementPerformAction(closeBtn as! AXUIElement, kAXPressAction as CFString)
                         if err == .success {
-                            return
+                            closed = true
                         }
                     }
                 }
-                // Fallback: Order window out via SkyLight bridge
-                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderOut)
-            }
 
-            runOnMainActor { [weak self] in
-                let performCloseAndNotify = {
-                    closeAction()
-                    self?.onWindowClose?(wid)
-                    MainActor.assumeIsolated {
-                        WorkspaceManager.shared.removeWindow(wid: wid)
+                // 2. Search application windows for the element matching wid
+                if !closed {
+                    var winListVal: AnyObject?
+                    if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &winListVal) == .success,
+                       let wins = winListVal as? [AXUIElement] {
+                        for w in wins {
+                            if WindowDetector.shared.getWindowID(for: w) == wid {
+                                var closeBtnVal: AnyObject?
+                                if AXUIElementCopyAttributeValue(w, kAXCloseButtonAttribute as CFString, &closeBtnVal) == .success,
+                                   let closeBtn = closeBtnVal,
+                                   isButtonActionable(closeBtn as! AXUIElement) {
+                                    let err = AXUIElementPerformAction(closeBtn as! AXUIElement, kAXPressAction as CFString)
+                                    if err == .success {
+                                        closed = true
+                                        break
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
+                // 3. Fallback: Trigger standard macOS menu items ("Close Window" / "Close") or Cmd+W
+                if !closed {
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    let script = """
+                    tell application "System Events"
+                        set procList to (every application process whose unix id is \(pid))
+                        if (count of procList) > 0 then
+                            set targetProc to item 1 of procList
+                            try
+                                click menu item "Close Window" of menu "File" of menu bar 1 of targetProc
+                                return
+                            end try
+                            try
+                                click menu item "Close" of menu "File" of menu bar 1 of targetProc
+                                return
+                            end try
+                            try
+                                click menu item "Close Window" of menu "Window" of menu bar 1 of targetProc
+                                return
+                            end try
+                            try
+                                click menu item "Close" of menu "Window" of menu bar 1 of targetProc
+                                return
+                            end try
+                        end if
+                        keystroke "w" using command down
+                    end tell
+                    """
+                    p.arguments = ["-e", script]
+                    try? p.run()
+                }
+            }
+
+
+            runOnMainActor { [weak self] in
+                // Shield internal HyprMac utility windows (border overlays, status bar)
+                if BorderManager.shared.isBorderWindow(windowID: wid) {
+                    return
+                }
+
+                // 1. Immediately trigger the close action on the target application
+                closeAction()
+
+                // 2. Notify layout to retile remaining sibling windows
+                self?.onWindowClose?(wid)
+                MainActor.assumeIsolated {
+                    WorkspaceManager.shared.removeWindow(wid: wid)
+                }
+
+                // 3. Play visual windowsOut animation concurrently if enabled
                 if AnimationEngine.shared.config.animationsEnabled {
                     let curBounds = AnimationEngine.shared.currentVisualFrame(windowID: wid)
                         ?? WindowDetector.shared.getWindowBounds(windowID: wid)
                         ?? info.bounds
                     let borderWid = BorderManager.shared.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
 
-                    // Notify layout to adjust sibling windows concurrently with windowsOut animation
-                    self?.onWindowClose?(wid)
-
                     AnimationEngine.shared.animateOut(
                         windowID: wid,
                         startFrame: curBounds,
-                        borderWindowID: borderWid
-                    ) { _ in
-                        closeAction()
-                        MainActor.assumeIsolated {
-                            WorkspaceManager.shared.removeWindow(wid: wid)
-                        }
-                    }
-                } else {
-                    performCloseAndNotify()
+                        borderWindowID: borderWid,
+                        onComplete: nil
+                    )
                 }
             }
             return
@@ -509,16 +611,17 @@ public final class KeybindManager: @unchecked Sendable {
 
         // Strategy 2: Fallback to NSWorkspace frontmost application
         if let frontApp = NSWorkspace.shared.frontmostApplication {
-            let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
-            var winVal: AnyObject?
-            if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winVal) == .success,
-               let win = winVal {
-                var closeBtnVal: AnyObject?
-                if AXUIElementCopyAttributeValue(win as! AXUIElement, kAXCloseButtonAttribute as CFString, &closeBtnVal) == .success,
-                   let closeBtn = closeBtnVal {
-                    _ = AXUIElementPerformAction(closeBtn as! AXUIElement, kAXPressAction as CFString)
-                }
+            let isFinder = frontApp.bundleIdentifier?.lowercased() == "com.apple.finder" || frontApp.localizedName?.lowercased() == "finder"
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            if isFinder {
+                p.arguments = ["-e", "tell application \"Finder\" to close front window"]
+            } else {
+                let key = requestedKey.lowercased() == "q" ? "q" : "w"
+                p.arguments = ["-e", "tell application \"System Events\" to keystroke \"\(key)\" using command down"]
             }
+            try? p.run()
+            return
         }
     }
 
@@ -700,7 +803,48 @@ public final class KeybindManager: @unchecked Sendable {
             return
         }
 
-        // 4. Launch shell command via Process in user login shell
+        // 4. In-daemon fast dispatch for internal desktop components
+        let lower = trimmed.lowercased()
+        if lower == "hyprmac wallpaper" || lower == "hyprmac gallery" || lower.hasSuffix("/hyprmac wallpaper") || lower.hasSuffix("/hyprmac gallery") {
+            runOnMainActor {
+                if WallpaperGalleryWindow.current != nil {
+                    WallpaperGalleryWindow.current?.showGallery()
+                } else {
+                    let win = WallpaperGalleryWindow(initialQuery: nil, synchronousLoad: false)
+                    self.activeGalleryWindow = win
+                    win.showGallery()
+                }
+            }
+            return
+        }
+
+        if lower == "hyprmac launcher" || lower == "hyprmac rofi" || lower.hasSuffix("/hyprmac launcher") || lower.hasSuffix("/hyprmac rofi") {
+            runOnMainActor {
+                if RofiWindow.current != nil {
+                    RofiWindow.current?.showLauncher()
+                } else {
+                    let win = RofiWindow()
+                    self.activeRofiWindow = win
+                    win.showLauncher()
+                }
+            }
+            return
+        }
+
+        if lower == "hyprmac powermenu" || lower == "hyprmac wlogout" || lower.hasSuffix("/hyprmac powermenu") || lower.hasSuffix("/hyprmac wlogout") {
+            runOnMainActor {
+                if WlogoutWindow.current != nil {
+                    WlogoutWindow.current?.showMenu()
+                } else {
+                    let win = WlogoutWindow()
+                    self.activeWlogoutWindow = win
+                    win.showMenu()
+                }
+            }
+            return
+        }
+
+        // 5. Launch shell command via Process in user login shell
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         process.arguments = ["-l", "-c", trimmed]

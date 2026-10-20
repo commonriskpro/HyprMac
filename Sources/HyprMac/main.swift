@@ -33,6 +33,7 @@ func printUsage() {
       menubar [suppress|restore] Completely suppress or restore native macOS menu bar reveal
       launcher [query] Launch the native Rofi application launcher (alias: rofi)
       powermenu        Launch the native Wlogout fullscreen power menu (alias: wlogout)
+      wallpaper [query] Launch the native Wallpaper Gallery & selector (alias: gallery)
       help        Show this help message
     """
     print(help)
@@ -884,6 +885,7 @@ func runBarDaemon() {
         bar.barView.barColors = cfg.barColors
         bar.barView.applyTheme()
     }
+    NotificationCenterManager.shared.start()
     bar.showBar()
     print("""
     [HyprMac] Native Waybar / HyprBar Active on Top Screen
@@ -954,6 +956,21 @@ func runSessionCommand(subcmd: String?) {
 
 @MainActor
 func runIntegratedDaemon(configPath: String?) {
+    // Ensure single instance daemon execution via exclusive file lock
+    let lockPath = "/tmp/hyprmac.lock"
+    let lockFd = open(lockPath, O_CREAT | O_RDWR, 0o644)
+    if lockFd < 0 || flock(lockFd, LOCK_EX | LOCK_NB) != 0 {
+        var existingPID: pid_t = 0
+        if let pidStr = try? String(contentsOfFile: "/tmp/hyprmac.pid", encoding: .utf8),
+           let p = pid_t(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            existingPID = p
+        }
+        print("[HyprMac] Another instance of hyprmac daemon is already running (PID \(existingPID)). Exiting cleanly.")
+        exit(0)
+    }
+    let currentPID = getpid()
+    try? "\(currentPID)\n".write(toFile: "/tmp/hyprmac.pid", atomically: true, encoding: .utf8)
+
     if !WindowDetector.isProcessTrusted() {
         print("[!] Warning: Accessibility permissions required. Requesting...")
         _ = WindowDetector.isProcessTrusted(prompt: true)
@@ -1002,10 +1019,28 @@ func runIntegratedDaemon(configPath: String?) {
     KeybindManager.shared.isMenuBarSuppressed = true
     _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true)
 
+    if config.stripDecorations || config.rounding == 0 {
+        let policy = HyprGlobalPolicy(
+            autoSquareCorners: config.rounding == 0,
+            autoStripShadow: true,
+            autoStripTitlebar: config.stripDecorations,
+            autoSetBorder: false,
+            borderWidth: Float(config.borderSize),
+            borderColorActive: 0,
+            borderColorInactive: 0
+        )
+        _ = HyprServerBridge.shared.setGlobalPolicy(policy)
+    }
+
+    // 1b. Start unattended client decoration stripper (Técnica B: zero-flicker process attachment)
+    ClientDecorationLoader.shared.ignoredApps = config.ignoredClientApps
+    ClientDecorationLoader.shared.start(stripDecorations: config.stripDecorations)
+
     // 2. Launch native Waybar-style status bar
     let bar = HyprBarWindow()
     HyprBarWindow.shared = bar
     bar.barView.barColors = config.barColors
+    NotificationCenterManager.shared.start()
     bar.showBar()
     _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true, exemptWid: UInt32(bar.windowNumber))
 
@@ -1059,6 +1094,26 @@ func runIntegratedDaemon(configPath: String?) {
         keyManager?.isFullscreen(windowID: wid) ?? false
     }
 
+    var strippedWindows: Set<CGWindowID> = []
+
+    let applyDecorationsToWindow: @MainActor (CGWindowID) -> Void = { wid in
+        guard wid > 0 else { return }
+        guard !strippedWindows.contains(wid) else { return }
+        strippedWindows.insert(wid)
+        if config.stripDecorations {
+            _ = SkyLightBridge.shared.stripTitlebar(windowID: wid)
+            if let pid = workspaceManager.getPID(for: wid) {
+                ClientDecorationLoader.shared.attachIfNeeded(pid: pid)
+            }
+        }
+        if config.rounding == 0 {
+            _ = SkyLightBridge.shared.setCornerRadius(windowID: wid, radius: 0.0)
+        }
+        if config.blurEnabled {
+            _ = SkyLightBridge.shared.setWindowBackgroundBlurRadius(windowID: wid, radius: config.blurRadius)
+        }
+    }
+
     let handleUnminimize: @MainActor (CGWindowID, pid_t?) -> Void = { wid, pid in
         guard wid > 0 else { return }
         let tilingBounds = computeTilingBounds()
@@ -1066,6 +1121,9 @@ func runIntegratedDaemon(configPath: String?) {
         workspaceManager.setWindowMinimized(wid, minimized: false)
         if !keyManager.isFloating(windowID: wid) && config.layout.lowercased() == "dwindle" {
             dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
+            if !strippedWindows.contains(wid) {
+                applyDecorationsToWindow(wid)
+            }
             dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
         }
         workspaceManager.focusWindow(wid: wid)
@@ -1171,6 +1229,9 @@ func runIntegratedDaemon(configPath: String?) {
         if !currentIDs.isEmpty {
             for w in eligibleWindows {
                 workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
+                if !strippedWindows.contains(w.windowID) {
+                    applyDecorationsToWindow(w.windowID)
+                }
             }
             let activeIDs = workspaceManager.activeWindowIDs()
             let activeTiledIDs = activeIDs.filter { !keyManager.isFloating(windowID: $0) }
@@ -1389,7 +1450,9 @@ func runIntegratedDaemon(configPath: String?) {
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 print("\n[HyprMac] Gracefully shutting down...")
+                ClientDecorationLoader.shared.stop()
                 WallpaperWatcher.shared.stop()
+                NotificationCenterManager.shared.stop()
                 if let token = activationObserverHolder.token {
                     NSWorkspace.shared.notificationCenter.removeObserver(token)
                 }
@@ -1398,6 +1461,9 @@ func runIntegratedDaemon(configPath: String?) {
                 animationEngine.cancelAll()
                 keyManager.stop()
                 KeybindManager.shared.isMenuBarSuppressed = false
+                unlink("/tmp/hyprmac.pid")
+                unlink("/tmp/hyprmac.lock")
+                close(lockFd)
                 print("[HyprMac] Restoring stock macOS Aqua desktop...")
                 _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: false)
                 _ = SessionManager.shared.switchTo(mode: .aqua)
@@ -1446,6 +1512,9 @@ func runIntegratedDaemon(configPath: String?) {
                 // Auto-assign any newly discovered window to active workspace with PID
                 for w in eligibleWindows {
                     workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
+                    if !strippedWindows.contains(w.windowID) {
+                        applyDecorationsToWindow(w.windowID)
+                    }
                 }
 
                 // Check minimization status for each managed window in workspaceManager
@@ -1482,6 +1551,7 @@ func runIntegratedDaemon(configPath: String?) {
                         WindowDetector.shared.invalidateWindow(windowID: wid)
                     }
                 }
+                strippedWindows.formIntersection(allAliveWindowIDs)
 
                 // Filter eligible windows using WorkspaceManager so only windows
                 // belonging to the active workspace are tiled by DwindleEngine
@@ -1500,12 +1570,16 @@ func runIntegratedDaemon(configPath: String?) {
                         AnimationEngine.shared.cancelAnimation(for: wid)
                         if !allAliveWindowIDs.contains(wid) {
                             workspaceManager.removeWindow(wid: wid)
+                            strippedWindows.remove(wid)
                         }
                     }
 
                     let openedInOrder = activeCurrentIDs.filter { openedWindows.contains($0) }
                     for wid in openedInOrder {
                         dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
+                        if !strippedWindows.contains(wid) {
+                            applyDecorationsToWindow(wid)
+                        }
                     }
 
                     let frames = dwindleEngine.currentFrames()
@@ -1745,6 +1819,8 @@ MainActor.assumeIsolated {
         runRofiLauncher(args: Array(args.dropFirst()))
     case "powermenu", "wlogout":
         runWlogoutMenu(args: Array(args.dropFirst()))
+    case "wallpaper", "gallery":
+        runWallpaperGallery(args: Array(args.dropFirst()))
     case "test-watcher":
         let ok = WallpaperWatcher.runSelfTest()
         exit(ok ? 0 : 1)

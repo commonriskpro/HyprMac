@@ -327,8 +327,14 @@ public final class WindowDetector: @unchecked Sendable {
     public func getWindowAXElement(windowID: CGWindowID, pid: pid_t? = nil) -> AXUIElement? {
         lock.lock()
         if let cached = axElementCache[windowID] {
-            lock.unlock()
-            return cached
+            var roleVal: AnyObject?
+            if AXUIElementCopyAttributeValue(cached, kAXRoleAttribute as CFString, &roleVal) == .success,
+               let role = roleVal as? String, role == (kAXWindowRole as String) {
+                lock.unlock()
+                return cached
+            } else {
+                axElementCache.removeValue(forKey: windowID)
+            }
         }
         lock.unlock()
 
@@ -345,14 +351,32 @@ public final class WindowDetector: @unchecked Sendable {
             return nil
         }
 
-        for winElem in axWindows {
-            let wid = getWindowID(for: winElem)
-            if wid == windowID || (axWindows.count == 1 && wid == nil) {
+        // Filter elements to strictly valid AXWindows (excluding non-window elements like Finder Desktop AXScrollArea)
+        var windowElements: [AXUIElement] = []
+        for elem in axWindows {
+            var roleVal: AnyObject?
+            if AXUIElementCopyAttributeValue(elem, kAXRoleAttribute as CFString, &roleVal) == .success,
+               let role = roleVal as? String, role == (kAXWindowRole as String) {
+                windowElements.append(elem)
+            }
+        }
+
+        // Match exact window ID
+        for winElem in windowElements {
+            if let wid = getWindowID(for: winElem), wid == windowID {
                 lock.lock()
                 axElementCache[windowID] = winElem
                 lock.unlock()
                 return winElem
             }
+        }
+
+        // Single window fallback only if exactly one genuine AXWindow exists
+        if windowElements.count == 1, let singleWin = windowElements.first {
+            lock.lock()
+            axElementCache[windowID] = singleWin
+            lock.unlock()
+            return singleWin
         }
         return nil
     }
@@ -469,6 +493,10 @@ public final class WindowDetector: @unchecked Sendable {
                 }
                 if let pv = posVal {
                     AXUIElementSetAttributeValue(winElem, kAXPositionAttribute as CFString, pv)
+                }
+                // Two-pass safeguard: re-apply size after position in case offscreen clamping occurred
+                if let sv = newSizeVal {
+                    AXUIElementSetAttributeValue(winElem, kAXSizeAttribute as CFString, sv)
                 }
             }
         }

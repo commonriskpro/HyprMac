@@ -364,4 +364,15 @@ final class KeybindManagerTests: XCTestCase {
             XCTAssertEqual(normalEvent.location.y, 5.0, "Unsuppressed hover must not be clamped")
         }
     }
+
+    func testInDaemonFastDispatchForInternalComponents() {
+        let manager = KeybindManager()
+        // Fast dispatch checks internal command names and invokes MainActor window handlers
+        manager.exec(command: "hyprmac wallpaper")
+        manager.exec(command: "hyprmac gallery")
+        manager.exec(command: "hyprmac launcher")
+        manager.exec(command: "hyprmac rofi")
+        manager.exec(command: "hyprmac powermenu")
+        manager.exec(command: "hyprmac wlogout")
+    }
 }
