@@ -109,50 +109,84 @@ On Linux, a Hyprland rice gives you total control: square corners, zero shadows,
 ## Prerequisites
 
 - **macOS 27+ (tested on macOS 27.0.1)** on Apple Silicon (arm64e)
-- **SIP disabled** (`csrutil disable` from Recovery Mode — required for `WindowServer` task port access)
-- **Xcode Command Line Tools**
+- **SIP disabled** (`csrutil disable` from Recovery Mode — required for root `WindowServer` task port access)
+- *Note: Xcode Command Line Tools is only required if compiling from source.*
 
 ---
 
-## Installation & Build
+## Quick Install (Automated)
+
+Run the automated installer to set up binaries and background services:
 
 ```bash
-# 1. Clone repository
 git clone https://github.com/commonriskpro/HyprMac.git
 cd HyprMac
-
-# 2. Build native ARM64e injector, compositor hook, and Swift application
-make all
+./install.sh
 ```
 
-This compiles:
-- `build/hypr-inject`: Two-stage PAC-signed remote thread loader.
-- `build/libhyprserver.dylib`: In-situ WindowServer compositor interposer.
-- `build/libhyprclient.dylib`: AppKit titlebar & Zen drawer interposer.
-- `/Applications/HyprMac.app`: Release Swift package with Developer ID signature.
+Or extract and install from a pre-built release package:
+```bash
+tar -xzf HyprMac-arm64e.tar.gz
+./install.sh
+```
+
+### What `install.sh` does:
+1. **Verifies Code Signature**: Ensures binaries are signed with an Apple Developer ID Application certificate. *(Ad-hoc signatures are never used, ensuring macOS Accessibility / TCC permissions persist across reboots).*
+2. **Deploys Binaries & App**: Installs `hypr-inject` and `libhyprserver.dylib` to `/usr/local/`, places `HyprMac.app` in `/Applications/`, and symlinks the global `hyprmac` CLI.
+3. **Installs System LaunchDaemon** (`/Library/LaunchDaemons/com.hyprmac.inject.plist`): Injects the compositor hook into `WindowServer` on system boot with root privileges.
+4. **Installs User LaunchAgent** (`~/Library/LaunchAgents/com.hyprmac.daemon.plist`): Automatically launches the desktop daemon (HyprBar, hotkeys, Dwindle tiling) upon user login.
+
+To uninstall completely at any time:
+```bash
+./uninstall.sh
+```
 
 ---
 
-## Quickstart
+## Usage
 
-### 1. Load the Compositor Hook
+### Daily Driver (Zero-Maintenance)
+Once installed via `install.sh`, **no manual terminal commands are needed**:
+- When your Mac boots, the LaunchDaemon silently hooks `WindowServer`.
+- When you log into your user account, the LaunchAgent starts HyprBar and the tiling engine.
+
+### CLI Commands & Controls
 
 ```bash
-# Clean any stale IPC state
-sudo rm -f /tmp/hyprmac-ipc.shm /tmp/hyprserver.ready
+# Check WindowServer hook IPC status
+hyprmac server-status
 
-# Attach in-situ hook into WindowServer (requires root)
-sudo ./build/hypr-inject
+# Open modal fuzzy launcher (Alt + Space)
+hyprmac launcher
 
-# Verify status
-HyprMac server-status
+# Open fullscreen power menu modal
+hyprmac powermenu
+
+# Open wallpaper theme selector
+hyprmac wallpaper
+
+# Check active window bounds & tags
+hyprmac probe
+
+# Force-retile visible windows
+hyprmac tile
 ```
 
-### 2. Start the Desktop Session
+---
+
+## Building from Source (Developers)
+
+If you are developing HyprMac or modifying native C hooks:
 
 ```bash
-# Start Dwindle tiling engine + HyprBar + global hotkeys
-HyprMac daemon
+# 1. Build injector, compositor hook, client decoration, and Swift 6 daemon
+make all
+
+# 2. Install both LaunchDaemon and LaunchAgent
+sudo make install
+
+# 3. Create distributable release package
+make package
 ```
 
 ---

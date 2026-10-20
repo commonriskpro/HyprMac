@@ -26,7 +26,35 @@ endif
 
 BUILD_DIR = build
 
-.PHONY: all clean hook injector client install-daemon uninstall-daemon app install-app
+.PHONY: all clean hook injector client install install-daemon uninstall-daemon app install-app install-agent uninstall package
+
+install: install-daemon install-agent
+
+install-agent: app
+	@mkdir -p $(HOME)/Library/LaunchAgents
+	cp -f native/daemon/com.hyprmac.daemon.plist $(HOME)/Library/LaunchAgents/com.hyprmac.daemon.plist
+	launchctl bootout gui/$$(id -u)/com.hyprmac.daemon 2>/dev/null || true
+	launchctl bootstrap gui/$$(id -u) $(HOME)/Library/LaunchAgents/com.hyprmac.daemon.plist 2>/dev/null || \
+	launchctl load -w $(HOME)/Library/LaunchAgents/com.hyprmac.daemon.plist
+	@sudo ln -sf /Applications/HyprMac.app/Contents/MacOS/HyprMac /usr/local/bin/hyprmac
+	@sudo ln -sf /Applications/HyprMac.app/Contents/MacOS/HyprMac /usr/local/bin/HyprMac
+
+uninstall:
+	@./uninstall.sh
+
+package: all
+	@mkdir -p dist/package/build dist/package/native/injector dist/package/native/daemon
+	@cp -R /Applications/HyprMac.app dist/package/build/HyprMac.app
+	@cp $(BUILD_DIR)/hypr-inject dist/package/build/hypr-inject
+	@cp $(BUILD_DIR)/libhyprserver.dylib dist/package/build/libhyprserver.dylib
+	@cp $(BUILD_DIR)/libhyprclient.dylib dist/package/build/libhyprclient.dylib
+	@cp native/injector/com.hyprmac.inject.plist dist/package/native/injector/
+	@cp native/daemon/com.hyprmac.daemon.plist dist/package/native/daemon/
+	@cp install.sh dist/package/
+	@cp uninstall.sh dist/package/
+	@tar -czf dist/HyprMac-arm64e.tar.gz -C dist/package .
+	@rm -rf dist/package
+	@echo "✓ Distribution bundle packaged at dist/HyprMac-arm64e.tar.gz"
 
 all: hook injector client app
 
