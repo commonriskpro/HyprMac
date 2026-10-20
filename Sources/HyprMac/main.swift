@@ -457,15 +457,27 @@ func runBorderDaemon(mode: BorderMode = .glassHalo) {
     }
 
     let controller = BorderDaemonController(borderWindow: borderWindow)
+    let axObserver = AXEventObserver()
+    axObserver.onWindowMoved = { controller.update() }
+    axObserver.onWindowResized = { controller.update() }
+    axObserver.onFocusedWindowChanged = { controller.update() }
 
-    // Initial update
+    // Initial update & attach Accessibility observer to active application
     controller.update()
+    if let frontApp = NSWorkspace.shared.frontmostApplication {
+        axObserver.observe(pid: frontApp.processIdentifier)
+    }
 
     // Event-driven focus updates on application activation/deactivation/hide/unhide
     let notifCenter = NSWorkspace.shared.notificationCenter
-    _ = notifCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+    _ = notifCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { notif in
+        let activatedApp = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        let activatedPid = activatedApp?.processIdentifier ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         MainActor.assumeIsolated {
             controller.update()
+            if let pid = activatedPid {
+                axObserver.observe(pid: pid)
+            }
         }
     }
     _ = notifCenter.addObserver(forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main) { _ in
@@ -479,13 +491,6 @@ func runBorderDaemon(mode: BorderMode = .glassHalo) {
         }
     }
     _ = notifCenter.addObserver(forName: NSWorkspace.didUnhideApplicationNotification, object: nil, queue: .main) { _ in
-        MainActor.assumeIsolated {
-            controller.update()
-        }
-    }
-
-    // Relaxed 500ms safety timer for internal in-app window moves without active AXObserver
-    Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
         MainActor.assumeIsolated {
             controller.update()
         }
@@ -966,25 +971,29 @@ func runBarDaemon() {
     }
 
     let controller = BarDaemonController(bar: bar)
+    let axObserver = AXEventObserver()
+    axObserver.onTitleChanged = { controller.update() }
+    axObserver.onFocusedWindowChanged = { controller.update() }
 
-    // Initial update
+    // Initial update & attach Accessibility observer to active application
     controller.update()
+    if let frontApp = NSWorkspace.shared.frontmostApplication {
+        axObserver.observe(pid: frontApp.processIdentifier)
+    }
 
     // Event-driven active window updates on application activation
     _ = NSWorkspace.shared.notificationCenter.addObserver(
         forName: NSWorkspace.didActivateApplicationNotification,
         object: nil,
         queue: .main
-    ) { _ in
+    ) { notif in
+        let activatedApp = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        let activatedPid = activatedApp?.processIdentifier ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
         MainActor.assumeIsolated {
             controller.update()
-        }
-    }
-
-    // Relaxed 1.0s safety timer for in-app tab/title updates
-    Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-        MainActor.assumeIsolated {
-            controller.update()
+            if let pid = activatedPid {
+                axObserver.observe(pid: pid)
+            }
         }
     }
 
