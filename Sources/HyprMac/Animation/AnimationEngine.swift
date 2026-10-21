@@ -503,6 +503,19 @@ public final class AnimationEngine {
         }
 
         if !initialEntries.isEmpty {
+            if let txRef = skyLight.transactionCreate() {
+                for entry in initialEntries {
+                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: entry.windowID, transform: entry.transform)
+                }
+                skyLight.transactionCommit(transaction: txRef, sync: false)
+            } else {
+                for entry in initialEntries {
+                    skyLight.setWindowTransform(windowID: entry.windowID, transform: entry.transform)
+                }
+            }
+            for entry in initialEntries {
+                skyLight.setWindowAlpha(windowID: entry.windowID, alpha: entry.alpha)
+            }
             HyprServerBridge.shared.setWorkspaceTransform(entries: initialEntries)
         }
 
@@ -526,13 +539,48 @@ public final class AnimationEngine {
     /// Cancels active workspace transition and resets transforms to identity.
     public func cancelWorkspaceAnimation() {
         guard let wsAnim = activeWorkspaceAnimation else { return }
-        if !wsAnim.incomingWindowIDs.isEmpty {
-            HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: wsAnim.incomingWindowIDs)
+        let allIDs = wsAnim.incomingWindowIDs + wsAnim.outgoingWindowIDs
+        let targetOpacity = Float(config.windowOpacity)
+        if let txRef = skyLight.transactionCreate() {
+            for wid in allIDs {
+                skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
+            }
+            skyLight.transactionCommit(transaction: txRef, sync: true)
+        } else {
+            for wid in allIDs {
+                skyLight.setWindowTransform(windowID: wid, transform: .identity)
+            }
+        }
+        for wid in allIDs {
+            skyLight.setWindowAlpha(windowID: wid, alpha: targetOpacity)
+        }
+        if HyprServerBridge.shared.isAvailable && !allIDs.isEmpty {
+            HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allIDs)
         }
         activeWorkspaceAnimation = nil
         if activeAnimations.isEmpty && !isSimulated {
             displayLink.stop()
         }
+    }
+
+    /// Convenience alias matching animateWorkspaceTransition for workspace switches.
+    @discardableResult
+    public func animateWorkspaceSwitch(
+        oldWorkspace: Int,
+        newWorkspace: Int,
+        outgoingWindowIDs: [CGWindowID],
+        incomingWindowIDs: [CGWindowID],
+        screenWidth: CGFloat,
+        onComplete: (@MainActor () -> Void)? = nil
+    ) -> Bool {
+        return animateWorkspaceTransition(
+            oldWorkspace: oldWorkspace,
+            newWorkspace: newWorkspace,
+            outgoingWindowIDs: outgoingWindowIDs,
+            incomingWindowIDs: incomingWindowIDs,
+            screenWidth: screenWidth,
+            onComplete: onComplete
+        )
     }
 
     /// Cancels animation for a specific window, resetting transforms to identity.
@@ -620,8 +668,23 @@ public final class AnimationEngine {
 
             if finished {
                 wsAnim.isFinished = true
-                if !wsAnim.incomingWindowIDs.isEmpty {
-                    HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: wsAnim.incomingWindowIDs)
+                let allResetIDs = wsAnim.incomingWindowIDs + wsAnim.outgoingWindowIDs
+                let targetOpacity = Float(config.windowOpacity)
+                if let txRef = skyLight.transactionCreate() {
+                    for wid in allResetIDs {
+                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
+                    }
+                    skyLight.transactionCommit(transaction: txRef, sync: true)
+                } else {
+                    for wid in allResetIDs {
+                        skyLight.setWindowTransform(windowID: wid, transform: .identity)
+                    }
+                }
+                for wid in allResetIDs {
+                    skyLight.setWindowAlpha(windowID: wid, alpha: targetOpacity)
+                }
+                if HyprServerBridge.shared.isAvailable && !allResetIDs.isEmpty {
+                    HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allResetIDs)
                 }
                 let cb = wsAnim.onComplete
                 self.activeWorkspaceAnimation = nil
@@ -666,6 +729,20 @@ public final class AnimationEngine {
                 }
 
                 if !entries.isEmpty {
+                    if let txRef = skyLight.transactionCreate() {
+                        for entry in entries {
+                            skyLight.transactionSetWindowTransform(transaction: txRef, windowID: entry.windowID, transform: entry.transform)
+                        }
+                        skyLight.transactionCommit(transaction: txRef, sync: false)
+                    } else {
+                        for entry in entries {
+                            skyLight.setWindowTransform(windowID: entry.windowID, transform: entry.transform)
+                        }
+                    }
+                    for entry in entries {
+                        skyLight.setWindowAlpha(windowID: entry.windowID, alpha: entry.alpha)
+                    }
+
                     HyprServerBridge.shared.setWorkspaceTransform(entries: entries)
                 }
             }
@@ -739,24 +816,25 @@ public final class AnimationEngine {
                 let ty = curY - baseFrame.origin.y
                 let transform = CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: tx, ty: ty)
 
+                // Always apply transform via SkyLight
+                if let txRef = skyLight.transactionCreate() {
+                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: transform)
+                    if let bWid = anim.borderWindowID {
+                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: transform)
+                    }
+                    skyLight.transactionCommit(transaction: txRef, sync: false)
+                } else {
+                    skyLight.setWindowTransform(windowID: wid, transform: transform)
+                    if let bWid = anim.borderWindowID {
+                        skyLight.setWindowTransform(windowID: bWid, transform: transform)
+                    }
+                }
+
+                // Also forward to HyprServerBridge if available
                 if HyprServerBridge.shared.isAvailable {
                     windowTransformEntries.append((windowID: wid, transform: transform, alpha: anim.currentAlpha))
                     if let bWid = anim.borderWindowID {
                         windowTransformEntries.append((windowID: bWid, transform: transform, alpha: anim.currentAlpha))
-                    }
-                } else {
-                    // Apply transform atomically via SkyLight transaction
-                    if let txRef = skyLight.transactionCreate() {
-                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: transform)
-                        if let bWid = anim.borderWindowID {
-                            skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: transform)
-                        }
-                        skyLight.transactionCommit(transaction: txRef, sync: false)
-                    } else {
-                        skyLight.setWindowTransform(windowID: wid, transform: transform)
-                        if let bWid = anim.borderWindowID {
-                            skyLight.setWindowTransform(windowID: bWid, transform: transform)
-                        }
                     }
                 }
             }
@@ -777,25 +855,25 @@ public final class AnimationEngine {
                 resetIDs.append(bWid)
             }
 
-            if HyprServerBridge.shared.isAvailable {
-                HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: resetIDs)
+            if let txRef = skyLight.transactionCreate() {
+                skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
+                if let bWid = anim.borderWindowID {
+                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: .identity)
+                }
+                skyLight.transactionCommit(transaction: txRef, sync: true)
             } else {
-                if let txRef = skyLight.transactionCreate() {
-                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
-                    if let bWid = anim.borderWindowID {
-                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: .identity)
-                    }
-                    skyLight.transactionCommit(transaction: txRef, sync: true)
-                } else {
-                    skyLight.setWindowTransform(windowID: wid, transform: .identity)
-                    if let bWid = anim.borderWindowID {
-                        skyLight.setWindowTransform(windowID: bWid, transform: .identity)
-                    }
+                skyLight.setWindowTransform(windowID: wid, transform: .identity)
+                if let bWid = anim.borderWindowID {
+                    skyLight.setWindowTransform(windowID: bWid, transform: .identity)
                 }
             }
             skyLight.setWindowAlpha(windowID: wid, alpha: finalAlpha)
             if let bWid = anim.borderWindowID {
                 skyLight.setWindowAlpha(windowID: bWid, alpha: finalAlpha)
+            }
+
+            if HyprServerBridge.shared.isAvailable {
+                HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: resetIDs)
             }
 
             // 2. Apply final physical frame atomically via Accessibility
@@ -825,7 +903,8 @@ public final class AnimationEngine {
             }
             guard shouldStep else { return }
 
-            Task { @MainActor in
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
                 defer {
                     self.isSteppingLock.withLock { isStepping in
                         isStepping = false

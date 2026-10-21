@@ -558,18 +558,21 @@ public final class ConfigParser {
             return .pin
         }
         if lower.hasPrefix("workspace") {
-            let rest = lower.dropFirst(9).trimmingCharacters(in: .whitespaces)
-            let silent = rest.contains("silent")
-            let tokens = rest.components(separatedBy: .whitespaces).filter { !$0.isEmpty && $0 != "silent" }
-            let num: Int
-            if let first = tokens.first, let n = Int(first) {
-                num = n
-            } else if tokens.first == "unset" {
-                num = 0
-            } else {
-                num = 0
+            let rawRest = trimmed.dropFirst(9).trimmingCharacters(in: .whitespaces)
+            let lowerRest = lower.dropFirst(9).trimmingCharacters(in: .whitespaces)
+            let silent = lowerRest.contains("silent")
+            let rawTokens = rawRest.components(separatedBy: .whitespaces).filter { !$0.isEmpty && $0.lowercased() != "silent" }
+            if let first = rawTokens.first {
+                let lowerFirst = first.lowercased()
+                if lowerFirst == "special" || lowerFirst.hasPrefix("special:") {
+                    let specialName = WorkspaceManager.normalizeSpecialName(first)
+                    return .specialWorkspace(name: specialName, silent: silent)
+                }
+                if let n = Int(first) {
+                    return .workspace(number: n, silent: silent)
+                }
             }
-            return .workspace(number: num, silent: silent)
+            return .workspace(number: 0, silent: silent)
         }
         if lower.hasPrefix("size") {
             let rest = trimmed.dropFirst(4).trimmingCharacters(in: .whitespaces)

@@ -40,6 +40,29 @@ public final class SkyLightBridge: @unchecked Sendable {
 
     public typealias SLSTransactionRef = UnsafeMutableRawPointer
 
+    private let trackingLock = NSLock()
+    public private(set) var lastAppliedTransforms: [CGWindowID: CGAffineTransform] = [:]
+    public private(set) var lastAppliedAlphas: [CGWindowID: Float] = [:]
+
+    public func getTrackedTransform(windowID: CGWindowID) -> CGAffineTransform? {
+        trackingLock.lock()
+        defer { trackingLock.unlock() }
+        return lastAppliedTransforms[windowID]
+    }
+
+    public func getTrackedAlpha(windowID: CGWindowID) -> Float? {
+        trackingLock.lock()
+        defer { trackingLock.unlock() }
+        return lastAppliedAlphas[windowID]
+    }
+
+    public func clearTracking() {
+        trackingLock.lock()
+        defer { trackingLock.unlock() }
+        lastAppliedTransforms.removeAll()
+        lastAppliedAlphas.removeAll()
+    }
+
     private typealias SLSMainConnectionIDFunc = @convention(c) () -> CGSConnectionID
     private typealias SLSSetWindowTagsFunc = @convention(c) (CGSConnectionID, CGWindowID, UnsafePointer<UInt32>, Int) -> CGError
     private typealias SLSClearWindowTagsFunc = @convention(c) (CGSConnectionID, CGWindowID, UnsafePointer<UInt32>, Int) -> CGError
@@ -254,6 +277,9 @@ public final class SkyLightBridge: @unchecked Sendable {
 
     @discardableResult
     public func setWindowAlpha(windowID: CGWindowID, alpha: Float) -> Bool {
+        trackingLock.lock()
+        lastAppliedAlphas[windowID] = alpha
+        trackingLock.unlock()
         guard let fn = _setWindowAlpha else { return false }
         let err = fn(mainConnectionID, windowID, alpha)
         return err == 0
@@ -278,6 +304,9 @@ public final class SkyLightBridge: @unchecked Sendable {
 
     @discardableResult
     public func setWindowTransform(windowID: CGWindowID, transform: CGAffineTransform) -> Bool {
+        trackingLock.lock()
+        lastAppliedTransforms[windowID] = transform
+        trackingLock.unlock()
         guard let fn = _setWindowTransform else { return false }
         let err = fn(mainConnectionID, windowID, transform)
         return err == 0
@@ -294,6 +323,9 @@ public final class SkyLightBridge: @unchecked Sendable {
         windowID: CGWindowID,
         transform: CGAffineTransform
     ) -> Bool {
+        trackingLock.lock()
+        lastAppliedTransforms[windowID] = transform
+        trackingLock.unlock()
         guard let fn = _transactionSetWindowTransform else { return false }
         var xf = transform
         fn(transaction, windowID, 0, 0, &xf)

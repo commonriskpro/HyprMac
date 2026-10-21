@@ -248,6 +248,194 @@ public final class WorkspaceManager {
         stateStore.setPinned(wid, pinned: false)
     }
 
+    // MARK: - Special Workspaces / Scratchpads
+
+    /// Special workspaces / scratchpads (Name -> Set of window IDs).
+    public private(set) var specialWorkspaces: [String: Set<CGWindowID>] = [:]
+
+    /// Active/visible special workspaces (e.g. ["scratchpad"]).
+    public private(set) var activeSpecialWorkspaces: Set<String> = []
+
+    /// Preserved window geometry frames when special/scratchpad windows are parked or displayed.
+    public var savedSpecialFrames: [CGWindowID: CGRect] = [:]
+
+    /// Normalizes special workspace name (e.g. "special:scratchpad" -> "scratchpad", "" -> "scratchpad").
+    public nonisolated static func normalizeSpecialName(_ raw: String) -> String {
+        var str = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if str.lowercased().hasPrefix("special:") {
+            str = String(str.dropFirst(8)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if str.lowercased() == "special" {
+            str = ""
+        }
+        return str.isEmpty ? "scratchpad" : str
+    }
+
+    /// Checks if a window belongs to any special workspace.
+    public func isInSpecialWorkspace(_ windowID: CGWindowID) -> Bool {
+        for (_, wids) in specialWorkspaces {
+            if wids.contains(windowID) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Returns the special workspace name a window belongs to, if any.
+    public func specialWorkspaceName(for windowID: CGWindowID) -> String? {
+        for (name, wids) in specialWorkspaces {
+            if wids.contains(windowID) {
+                return name
+            }
+        }
+        return nil
+    }
+
+    /// Returns all window IDs assigned to the given special workspace in insertion order.
+    public func specialWindows(for name: String) -> [CGWindowID] {
+        let normName = Self.normalizeSpecialName(name)
+        guard let wids = specialWorkspaces[normName] else { return [] }
+        return windowOrder.filter { wids.contains($0) }
+    }
+
+    /// Moves a window to a special workspace / scratchpad.
+    public func moveWindowToSpecialWorkspace(
+        _ windowID: CGWindowID,
+        name: String = "scratchpad",
+        silent: Bool = false,
+        screenBounds: CGRect = .zero,
+        otherScreens: [CGRect] = [],
+        getFrame: (CGWindowID) -> CGRect? = { WindowDetector.shared.getWindowBounds(windowID: $0) },
+        setFrame: (CGWindowID, CGRect) -> Void = { WindowDetector.shared.setWindowFrame(windowID: $0, frame: $1) }
+    ) {
+        guard windowID > 0 else { return }
+        let normName = Self.normalizeSpecialName(name)
+
+        // 1. Remove from numbered workspaces 1...9
+        windowWorkspaces.removeValue(forKey: windowID)
+
+        // 2. Remove from any other special workspace
+        for (k, _) in specialWorkspaces {
+            specialWorkspaces[k]?.remove(windowID)
+            if specialWorkspaces[k]?.isEmpty == true {
+                specialWorkspaces.removeValue(forKey: k)
+            }
+        }
+
+        // 3. Add to target special workspace
+        specialWorkspaces[normName, default: []].insert(windowID)
+        if !windowOrder.contains(windowID) {
+            windowOrder.append(windowID)
+        }
+
+        // Mark as floating
+        stateStore.setFloating(windowID, floating: true)
+
+        let allScreens = otherScreens.isEmpty ? HiddenWindowPlacement.allCGScreens() : otherScreens
+        let effectiveScreen: CGRect
+        if screenBounds != .zero {
+            effectiveScreen = screenBounds
+        } else if let provider = boundsProvider, provider() != .zero {
+            effectiveScreen = provider()
+        } else {
+            effectiveScreen = NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        }
+
+        let w = effectiveScreen.width * 0.75
+        let h = effectiveScreen.height * 0.75
+        let cx = effectiveScreen.origin.x + (effectiveScreen.width - w) / 2.0
+        let cy = effectiveScreen.origin.y + (effectiveScreen.height - h) / 2.0
+        let defaultCenteredFrame = CGRect(x: cx, y: cy, width: w, height: h)
+
+        let cur = getFrame(windowID) ?? storedFrames[windowID] ?? savedSpecialFrames[windowID]
+        if let current = cur, !HiddenWindowPlacement.isParkedOrHidden(current, screens: [effectiveScreen] + allScreens) {
+            savedSpecialFrames[windowID] = current
+        } else if savedSpecialFrames[windowID] == nil {
+            savedSpecialFrames[windowID] = defaultCenteredFrame
+        }
+
+        let isOpen = activeSpecialWorkspaces.contains(normName)
+        let baseFrame = savedSpecialFrames[windowID] ?? defaultCenteredFrame
+
+        if silent || !isOpen {
+            let hiddenRect = HiddenWindowPlacement.calculate(
+                screen: effectiveScreen,
+                windowSize: baseFrame.size,
+                preferredCorner: .bottomRight,
+                otherScreens: allScreens.filter { $0 != effectiveScreen }
+            )
+            setFrame(windowID, hiddenRect)
+            SkyLightBridge.shared.orderWindow(windowID: windowID, op: .orderBelow, relativeTo: 0)
+        } else {
+            setFrame(windowID, baseFrame)
+            SkyLightBridge.shared.orderWindow(windowID: windowID, op: .orderAbove, relativeTo: 0)
+            focusWindow(wid: windowID)
+        }
+    }
+
+    /// Toggles the visibility of a special workspace / scratchpad.
+    public func toggleSpecialWorkspace(
+        name: String = "scratchpad",
+        screenBounds: CGRect = .zero,
+        otherScreens: [CGRect] = [],
+        getFrame: (CGWindowID) -> CGRect? = { WindowDetector.shared.getWindowBounds(windowID: $0) },
+        setFrame: (CGWindowID, CGRect) -> Void = { WindowDetector.shared.setWindowFrame(windowID: $0, frame: $1) }
+    ) {
+        let normName = Self.normalizeSpecialName(name)
+        let allScreens = otherScreens.isEmpty ? HiddenWindowPlacement.allCGScreens() : otherScreens
+        let effectiveScreen: CGRect
+        if screenBounds != .zero {
+            effectiveScreen = screenBounds
+        } else if let provider = boundsProvider, provider() != .zero {
+            effectiveScreen = provider()
+        } else {
+            effectiveScreen = NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        }
+
+        let targetWindows = specialWorkspaces[normName] ?? []
+
+        if activeSpecialWorkspaces.contains(normName) {
+            // Hide scratchpad windows
+            activeSpecialWorkspaces.remove(normName)
+
+            for wid in targetWindows {
+                let cur = getFrame(wid)
+                if let curFrame = cur, !HiddenWindowPlacement.isParkedOrHidden(curFrame, screens: [effectiveScreen] + allScreens) {
+                    savedSpecialFrames[wid] = curFrame
+                }
+                let baseFrame = savedSpecialFrames[wid] ?? cur ?? CGRect(x: effectiveScreen.midX - 300, y: effectiveScreen.midY - 200, width: 600, height: 400)
+                let hiddenRect = HiddenWindowPlacement.calculate(
+                    screen: effectiveScreen,
+                    windowSize: baseFrame.size,
+                    preferredCorner: .bottomRight,
+                    otherScreens: allScreens.filter { $0 != effectiveScreen }
+                )
+                setFrame(wid, hiddenRect)
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderBelow, relativeTo: 0)
+            }
+        } else {
+            // Show scratchpad windows
+            activeSpecialWorkspaces.insert(normName)
+
+            let w = effectiveScreen.width * 0.75
+            let h = effectiveScreen.height * 0.75
+            let cx = effectiveScreen.origin.x + (effectiveScreen.width - w) / 2.0
+            let cy = effectiveScreen.origin.y + (effectiveScreen.height - h) / 2.0
+            let defaultCentered = CGRect(x: cx, y: cy, width: w, height: h)
+
+            for wid in targetWindows {
+                let restoreFrame = savedSpecialFrames[wid] ?? defaultCentered
+                savedSpecialFrames[wid] = restoreFrame
+                setFrame(wid, restoreFrame)
+                SkyLightBridge.shared.orderWindow(windowID: wid, op: .orderAbove, relativeTo: 0)
+                focusWindow(wid: wid)
+
+                if AnimationEngine.shared.config.animationsEnabled {
+                    AnimationEngine.shared.animateIn(windowID: wid, targetFrame: restoreFrame)
+                }
+            }
+        }
+    }
+
     // MARK: - Rule-Driven Overrides Accessors
 
     public var noBorderWindows: Set<CGWindowID> {
@@ -358,6 +546,12 @@ public final class WorkspaceManager {
         if let p = pid ?? getPID(for: wid) {
             windowPIDs[wid] = p
         }
+        for (k, _) in specialWorkspaces {
+            specialWorkspaces[k]?.remove(wid)
+            if specialWorkspaces[k]?.isEmpty == true {
+                specialWorkspaces.removeValue(forKey: k)
+            }
+        }
         windowWorkspaces[wid] = workspace
         if !windowOrder.contains(wid) {
             windowOrder.append(wid)
@@ -369,6 +563,13 @@ public final class WorkspaceManager {
         stateStore.removeWindow(wid)
         windowPIDs.removeValue(forKey: wid)
         windowOrder.removeAll(where: { $0 == wid })
+        for (k, _) in specialWorkspaces {
+            specialWorkspaces[k]?.remove(wid)
+            if specialWorkspaces[k]?.isEmpty == true {
+                specialWorkspaces.removeValue(forKey: k)
+            }
+        }
+        savedSpecialFrames.removeValue(forKey: wid)
         for (ws, focusedWid) in lastFocusedPerWorkspace where focusedWid == wid {
             lastFocusedPerWorkspace.removeValue(forKey: ws)
         }
@@ -382,6 +583,9 @@ public final class WorkspaceManager {
         manualSwitchInProgress = false
         lastWorkspaceSwitchTime = 0
         stateStore.reset()
+        specialWorkspaces.removeAll()
+        activeSpecialWorkspaces.removeAll()
+        savedSpecialFrames.removeAll()
         lastFocusedPerWorkspace.removeAll()
         windowPIDs.removeAll()
         windowOrder.removeAll()
@@ -402,7 +606,15 @@ public final class WorkspaceManager {
     public func activeWindowIDs() -> [CGWindowID] {
         let current = windows(for: activeWorkspace).filter { !minimizedWindowIDs.contains($0) }
         let pinned = windowOrder.filter { isPinned($0) && !minimizedWindowIDs.contains($0) && !current.contains($0) }
-        return current + pinned
+        var special: [CGWindowID] = []
+        for name in activeSpecialWorkspaces {
+            if let wids = specialWorkspaces[name] {
+                for wid in windowOrder where wids.contains(wid) && !minimizedWindowIDs.contains(wid) && !current.contains(wid) && !pinned.contains(wid) {
+                    special.append(wid)
+                }
+            }
+        }
+        return current + pinned + special
     }
 
     /// Returns the workspace number for a specific window, if known.
@@ -633,14 +845,14 @@ public final class WorkspaceManager {
 
         // Step 1: Pre-calculate the new layout upfront using Dwindle BEFORE moving any window
         let activeIDs = activeWindowIDs()
-        let tiledIDs = activeIDs.filter { !isPinned($0) && !(isFloating?($0) ?? stateStore.isFloating($0)) }
+        let tiledIDs = activeIDs.filter { !isPinned($0) && !isInSpecialWorkspace($0) && !(isFloating?($0) ?? stateStore.isFloating($0)) }
         var targetFrames = dwindle?.tileWindows(windowIDs: tiledIDs, in: bounds) ?? [:]
         for wid in activeIDs where (isFullscreen?(wid) == true || stateStore.isFullscreen(wid)) {
             targetFrames[wid] = bounds
         }
 
         // Step 2: Inactive windows belonging to other workspaces
-        let otherWindows = windowOrder.filter { windowWorkspaces[$0] != activeWorkspace && !isPinned($0) }
+        let otherWindows = windowOrder.filter { windowWorkspaces[$0] != activeWorkspace && !isPinned($0) && !(isInSpecialWorkspace($0) && activeSpecialWorkspaces.contains(specialWorkspaceName(for: $0) ?? "")) }
         let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
 
         let allScreens = HiddenWindowPlacement.allCGScreens()
@@ -748,6 +960,19 @@ public final class WorkspaceManager {
         if let wid = targetFocusWid {
             focusWindow(wid: wid)
         }
+
+        // 7. Trigger workspace switch animation if enabled
+        if AnimationEngine.shared.config.animationsEnabled {
+            let outgoing = windows(for: oldWorkspace)
+            let incoming = activeIDs
+            AnimationEngine.shared.animateWorkspaceSwitch(
+                oldWorkspace: oldWorkspace,
+                newWorkspace: number,
+                outgoingWindowIDs: outgoing,
+                incomingWindowIDs: incoming,
+                screenWidth: bounds.width
+            )
+        }
     }
 
     /// Convenience overload using configured dependencies.
@@ -803,6 +1028,12 @@ public final class WorkspaceManager {
         guard windowID > 0, targetWorkspace >= 1 && targetWorkspace <= 9 else { return }
 
         let oldWorkspace = windowWorkspaces[windowID] ?? activeWorkspace
+        for (k, _) in specialWorkspaces {
+            specialWorkspaces[k]?.remove(windowID)
+            if specialWorkspaces[k]?.isEmpty == true {
+                specialWorkspaces.removeValue(forKey: k)
+            }
+        }
         windowWorkspaces[windowID] = targetWorkspace
         if !windowOrder.contains(windowID) {
             windowOrder.append(windowID)

@@ -713,6 +713,17 @@ func runIntegratedDaemon(configPath: String?) {
                     }
                 }
 
+            case .specialWorkspace(let name, let silent):
+                if isNewWindow {
+                    keyManager.setFloating(windowID: wid, floating: true)
+                    workspaceManager.moveWindowToSpecialWorkspace(wid, name: name, silent: silent, screenBounds: tilingBounds)
+                    if dwindleEngine.managedWindowSet.contains(wid) {
+                        dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
+                        effectsManager.hideOverlay(for: wid)
+                        dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
+                    }
+                }
+
             case .size(let w, let h):
                 let curBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? bounds
                 let newFrame = CGRect(x: curBounds.origin.x, y: curBounds.origin.y, width: w, height: h)

@@ -14,6 +14,7 @@ public enum HyprRuleAction: Equatable, Hashable, Sendable {
     case float
     case tile
     case workspace(number: Int, silent: Bool)
+    case specialWorkspace(name: String, silent: Bool)
     case size(width: CGFloat, height: CGFloat)
     case center
     case opacity(active: Double, inactive: Double?)
