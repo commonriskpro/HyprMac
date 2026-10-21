@@ -139,6 +139,13 @@ public final class KeybindManager: @unchecked Sendable {
     public var onWindowMinimize: (@Sendable (CGWindowID) -> Void)?
     /// Notification/callback hook for window close / removal.
     public var onWindowClose: (@Sendable (CGWindowID) -> Void)?
+    /// Notification/callback hook for layout messages.
+    public var onLayoutMsg: (@Sendable (String) -> Void)?
+    /// Notification/callback hook for monitor focus.
+    public var onFocusMonitor: (@Sendable (String) -> Void)?
+
+    /// Optional weak reference to active MasterEngine for master layout messages.
+    public weak var masterEngine: MasterEngine?
 
     public init() {}
 
@@ -232,6 +239,18 @@ public final class KeybindManager: @unchecked Sendable {
             case "togglespecialworkspace", "toggle_special_workspace":
                 let name = binding.args.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.togglespecialworkspace(name: name.isEmpty ? "scratchpad" : name)
+            case "layoutmsg":
+                self.layoutmsg(binding.args)
+            case "focusmonitor":
+                self.focusmonitor(binding.args)
+            case "movewindow":
+                let arg = binding.args.trimmingCharacters(in: .whitespacesAndNewlines)
+                if arg.lowercased().hasPrefix("mon:") {
+                    let spec = String(arg.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                    self.movewindowToMonitor(spec)
+                } else {
+                    self.swapwindow(direction: arg)
+                }
             case "movetoworkspacesilent":
                 let arg = binding.args.trimmingCharacters(in: .whitespacesAndNewlines)
                 if arg.lowercased() == "special" || arg.lowercased().hasPrefix("special:") {
@@ -1150,6 +1169,67 @@ public final class KeybindManager: @unchecked Sendable {
                 MainActor.assumeIsolated {
                     WorkspaceManager.shared.moveWindowToWorkspace(windowID: windowID, targetWorkspace: number, follow: follow)
                 }
+            }
+        }
+    }
+
+    /// Dispatches a layout message to the active layout engine (e.g. MasterEngine).
+    public func layoutmsg(_ args: String) {
+        if let onLayoutMsg = onLayoutMsg {
+            onLayoutMsg(args)
+            return
+        }
+        runOnMainActor {
+            let bounds = WorkspaceManager.shared.boundsProvider?() ?? WorkspaceManager.shared.defaultTilingBounds()
+            let focusedWid = WindowDetector.shared.fastFocusedWindow()?.windowID
+            if let master = self.masterEngine {
+                let result = master.handleLayoutMsg(args, activeWindowID: focusedWid, in: bounds)
+                master.applyToSystem(windowFrames: result.frames, bridge: SkyLightBridge.shared)
+                if let target = result.focusTarget {
+                    WorkspaceManager.shared.focusWindow(wid: target)
+                }
+            }
+        }
+    }
+
+    /// Focuses the specified monitor using an index ("0", "1"), relative ("+1", "-1"), or direction ("l", "r", "u", "d").
+    public func focusmonitor(_ spec: String) {
+        if let onFocusMonitor = onFocusMonitor {
+            onFocusMonitor(spec)
+            return
+        }
+        runOnMainActor {
+            let screens = HiddenWindowPlacement.allCGScreens()
+            let displays: [(id: CGDirectDisplayID, frame: CGRect)] = NSScreen.screens.enumerated().map { (idx, scr) in
+                let dID = (scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? CGDirectDisplayID(idx)
+                let frame = screens.indices.contains(idx) ? screens[idx] : scr.frame
+                return (id: dID, frame: frame)
+            }
+            let curID = WorkspaceManager.shared.focusedMonitorID
+            if let target = WorkspaceManager.resolveTargetMonitor(from: curID, spec: spec, displays: displays) {
+                WorkspaceManager.shared.focusedMonitorID = target
+                let targetWS = WorkspaceManager.shared.activeWorkspace(for: target)
+                WorkspaceManager.shared.switchToWorkspace(targetWS)
+            }
+        }
+    }
+
+    /// Moves the active focused window to the target monitor and follows focus.
+    public func movewindowToMonitor(_ spec: String) {
+        guard let focused = WindowDetector.shared.getFocusedWindow() else { return }
+        let wid = focused.windowID
+        runOnMainActor {
+            let screens = HiddenWindowPlacement.allCGScreens()
+            let displays: [(id: CGDirectDisplayID, frame: CGRect)] = NSScreen.screens.enumerated().map { (idx, scr) in
+                let dID = (scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? CGDirectDisplayID(idx)
+                let frame = screens.indices.contains(idx) ? screens[idx] : scr.frame
+                return (id: dID, frame: frame)
+            }
+            let curID = WorkspaceManager.shared.focusedMonitorID
+            if let target = WorkspaceManager.resolveTargetMonitor(from: curID, spec: spec, displays: displays) {
+                let targetWS = WorkspaceManager.shared.activeWorkspace(for: target)
+                WorkspaceManager.shared.moveWindowToWorkspace(windowID: wid, targetWorkspace: targetWS, follow: true)
+                WorkspaceManager.shared.focusedMonitorID = target
             }
         }
     }

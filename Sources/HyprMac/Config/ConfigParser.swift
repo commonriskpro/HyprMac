@@ -234,6 +234,21 @@ public final class ConfigParser {
             return
         }
 
+        // 3e. Workspace monitor directives: workspace = <N>, monitor:<spec>
+        if lowerKey == "workspace" {
+            let tokens = parseCommaSeparatedTokens(rawVal)
+            if let firstToken = tokens.first, let wsNum = Int(firstToken) {
+                for token in tokens.dropFirst() {
+                    let trimmedToken = token.trimmingCharacters(in: .whitespaces)
+                    if trimmedToken.lowercased().hasPrefix("monitor:") {
+                        let spec = String(trimmedToken.dropFirst(8)).trimmingCharacters(in: .whitespaces)
+                        config.workspaceMonitorBindings[wsNum] = spec
+                    }
+                }
+            }
+            return
+        }
+
         // 4. Regular settings & Hyprland variables
         let currentSection = sectionStack.joined(separator: ".")
         if (currentSection == "animations" && lowerKey == "enabled") ||
@@ -329,6 +344,20 @@ public final class ConfigParser {
             }
         }
 
+        // 3e. Master Layout Configuration (master { ... } or master:key)
+        if currentSection == "master" || rawKey.lowercased().hasPrefix("master.") || rawKey.lowercased().hasPrefix("master:") {
+            let masterProp = normalizedKey.lowercased()
+            switch masterProp {
+            case "mfact":
+                if let d = Double(rawVal) { config.masterMfact = CGFloat(d) }
+            case "orientation":
+                config.masterOrientation = rawVal.trimmingCharacters(in: .whitespaces).lowercased()
+            case "new_on_top", "newontop":
+                if let b = parseBool(rawVal) { config.masterNewOnTop = b }
+            default:
+                break
+            }
+        }
 
         switch normalizedKey.lowercased() {
         case "gaps_in", "gapsin":

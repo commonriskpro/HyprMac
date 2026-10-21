@@ -623,11 +623,45 @@ func runIntegratedDaemon(configPath: String?) {
     // 3b. Auto-tiling Dwindle Engine setup (Decoupled from transient Z-order)
     let dwindleEngine = DwindleEngine(gapsIn: config.gapsIn, gapsOut: config.gapsOut)
 
+    // 3b-2. Master-and-Stack Engine setup
+    let masterEngine = MasterEngine(
+        gapsIn: config.gapsIn,
+        gapsOut: config.gapsOut,
+        mfact: config.masterMfact,
+        orientation: MasterOrientation(rawValue: config.masterOrientation.lowercased()) ?? .left,
+        newOnTop: config.masterNewOnTop
+    )
+
     // 3c. Virtual Workspaces Manager (Single Source of Truth for workspaces 1..9)
     let workspaceManager = WorkspaceManager.shared
     workspaceManager.dwindleEngine = dwindleEngine
+    if config.layout.lowercased() == "master" {
+        workspaceManager.masterEngine = masterEngine
+    }
     workspaceManager.borderManager = effectsManager
     workspaceManager.boundsProvider = { computeTilingBounds() }
+
+    // 3c-2. Apply workspace-monitor bindings from config
+    for (ws, spec) in config.workspaceMonitorBindings {
+        if let idx = Int(spec), idx >= 0 && idx < NSScreen.screens.count {
+            let scr = NSScreen.screens[idx]
+            if let dID = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+                workspaceManager.bindWorkspace(ws, toDisplay: dID)
+            }
+        }
+    }
+
+    // Reconcile multi-monitor layout on display hot-plug/unplug
+    NotificationCenter.default.addObserver(
+        forName: NSApplication.didChangeScreenParametersNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        MainActor.assumeIsolated {
+            let displayIDs = NSScreen.screens.compactMap { $0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID }
+            WorkspaceManager.shared.reconcileMonitors(availableDisplays: displayIDs)
+        }
+    }
 
     // 3d. Hyprland-identical window animation subsystem
     let animationEngine = AnimationEngine.shared
@@ -655,6 +689,7 @@ func runIntegratedDaemon(configPath: String?) {
 
     // 4. Initialize Keybinds
     let keyManager = KeybindManager.shared
+    keyManager.masterEngine = masterEngine
     keyManager.register(bindings: config.bindings)
 
     workspaceManager.isFloating = { [weak keyManager] wid in
@@ -839,8 +874,9 @@ func runIntegratedDaemon(configPath: String?) {
         }
     }
 
-    // Auto-tile on startup if layout is dwindle
-    if config.layout.lowercased() == "dwindle" {
+    // Auto-tile on startup if layout is dwindle or master
+    let isTilingLayout = (config.layout.lowercased() == "dwindle" || config.layout.lowercased() == "master")
+    if isTilingLayout {
         let tilingBounds = computeTilingBounds()
         let eligibleWindows = getEligibleUserWindows(in: tilingBounds, excludingPIDs: [getpid()])
         let currentIDs = eligibleWindows.map { $0.windowID }
@@ -857,20 +893,29 @@ func runIntegratedDaemon(configPath: String?) {
             }
             let activeIDs = workspaceManager.activeWindowIDs()
             let activeTiledIDs = activeIDs.filter { !keyManager.isFloating(windowID: $0) && !workspaceManager.isPinned($0) }
-            let frames = dwindleEngine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
-            dwindleEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+            if config.layout.lowercased() == "master" {
+                let frames = masterEngine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
+                masterEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+            } else {
+                let frames = dwindleEngine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
+                dwindleEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+            }
         }
     }
 
 
 
-    keyManager.onSwapWindow = { [weak dwindleEngine] widA, widB in
+    keyManager.onSwapWindow = { [weak dwindleEngine, weak masterEngine] widA, widB in
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
-                guard let engine = dwindleEngine else { return }
                 let tilingBounds = computeTilingBounds()
-                let frames = engine.swapWindows(windowA: widA, windowB: widB, in: tilingBounds)
-                engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                if config.layout.lowercased() == "master", let engine = masterEngine {
+                    let frames = engine.swapWindows(windowA: widA, windowB: widB, in: tilingBounds)
+                    engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                } else if let engine = dwindleEngine {
+                    let frames = engine.swapWindows(windowA: widA, windowB: widB, in: tilingBounds)
+                    engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                }
             }
         }
     }

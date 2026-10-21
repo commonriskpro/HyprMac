@@ -426,6 +426,12 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var variables: [String: String] = [:]
     /// Declarative window rules parsed from `windowrule` and `windowrulev2` directives.
     public var windowRules: [HyprWindowRule] = []
+    /// Master layout configuration parameters.
+    public var masterMfact: CGFloat = 0.55
+    public var masterOrientation: String = "left"
+    public var masterNewOnTop: Bool = false
+    /// Top-level workspace-to-monitor bindings (e.g. 1 -> "0", 2 -> "DP-1").
+    public var workspaceMonitorBindings: [Int: String] = [:]
 
     /// Included configuration file paths from `source` directives.
     public var sourceFiles: [String] = []
@@ -481,6 +487,10 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         bindings: [HyprBinding] = [],
         variables: [String: String] = [:],
         windowRules: [HyprWindowRule] = [],
+        masterMfact: CGFloat = 0.55,
+        masterOrientation: String = "left",
+        masterNewOnTop: Bool = false,
+        workspaceMonitorBindings: [Int: String] = [:],
         sourceFiles: [String] = [],
         rawSettings: [String: String] = [:],
         sections: [String: [String: String]] = [:]
@@ -504,6 +514,10 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         self.bindings = bindings
         self.variables = variables
         self.windowRules = windowRules
+        self.masterMfact = masterMfact
+        self.masterOrientation = masterOrientation
+        self.masterNewOnTop = masterNewOnTop
+        self.workspaceMonitorBindings = workspaceMonitorBindings
         self.sourceFiles = sourceFiles
         self.rawSettings = rawSettings
         self.sections = sections

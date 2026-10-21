@@ -248,6 +248,159 @@ public final class WorkspaceManager {
         stateStore.setPinned(wid, pinned: false)
     }
 
+    // MARK: - Multi-Monitor Display Topography
+
+    /// Mapping of workspace number (1..9) to bound monitor display ID.
+    public var workspaceMonitorBindings: [Int: CGDirectDisplayID] = [:]
+
+    /// Mapping of monitor display ID to its currently active workspace number (1..9).
+    public private(set) var activeWorkspaceByMonitor: [CGDirectDisplayID: Int] = [:]
+
+    /// Currently focused display monitor ID. Default: CGMainDisplayID().
+    public var focusedMonitorID: CGDirectDisplayID = CGMainDisplayID()
+
+    public func bindWorkspace(_ workspace: Int, toDisplay displayID: CGDirectDisplayID) {
+        workspaceMonitorBindings[workspace] = displayID
+    }
+
+    public func activeWorkspace(for displayID: CGDirectDisplayID) -> Int {
+        if let ws = activeWorkspaceByMonitor[displayID] {
+            return ws
+        }
+        if displayID == focusedMonitorID {
+            return activeWorkspace
+        }
+        if let bound = workspaceMonitorBindings.first(where: { $0.value == displayID })?.key {
+            return bound
+        }
+        return 1
+    }
+
+    public func setActiveWorkspace(_ workspace: Int, for displayID: CGDirectDisplayID) {
+        guard workspace >= 1 && workspace <= 9 else { return }
+        activeWorkspaceByMonitor[displayID] = workspace
+        if displayID == focusedMonitorID {
+            activeWorkspace = workspace
+        }
+    }
+
+    public func displayForWorkspace(_ workspace: Int, availableDisplays: [CGDirectDisplayID]) -> CGDirectDisplayID {
+        if let bound = workspaceMonitorBindings[workspace], availableDisplays.contains(bound) {
+            return bound
+        }
+        return availableDisplays.first ?? CGMainDisplayID()
+    }
+
+    public func reconcileMonitors(availableDisplays: [CGDirectDisplayID]) {
+        guard !availableDisplays.isEmpty else { return }
+        let primary = availableDisplays.first ?? CGMainDisplayID()
+
+        // 1. Unplugged displays: remove inactive monitor records
+        let existingMonitors = Array(activeWorkspaceByMonitor.keys)
+        for disp in existingMonitors where !availableDisplays.contains(disp) {
+            activeWorkspaceByMonitor.removeValue(forKey: disp)
+        }
+        for (ws, disp) in workspaceMonitorBindings where !availableDisplays.contains(disp) {
+            workspaceMonitorBindings[ws] = primary
+        }
+        if !availableDisplays.contains(focusedMonitorID) {
+            focusedMonitorID = primary
+        }
+
+        // 2. Newly connected displays: assign active workspace
+        var usedWorkspaces = Set(activeWorkspaceByMonitor.values)
+        for disp in availableDisplays {
+            if activeWorkspaceByMonitor[disp] == nil {
+                if let boundWS = workspaceMonitorBindings.first(where: { $0.value == disp && !usedWorkspaces.contains($0.key) })?.key {
+                    activeWorkspaceByMonitor[disp] = boundWS
+                    usedWorkspaces.insert(boundWS)
+                } else {
+                    let nextWS = (1...9).first(where: { !usedWorkspaces.contains($0) }) ?? 1
+                    activeWorkspaceByMonitor[disp] = nextWS
+                    usedWorkspaces.insert(nextWS)
+                }
+            }
+        }
+    }
+
+    /// Resolves target monitor display ID from a spec string (index "0", relative "+1"/"-1", or directional "l"/"r"/"u"/"d").
+    public nonisolated static func resolveTargetMonitor(
+        from currentID: CGDirectDisplayID,
+        spec: String,
+        displays: [(id: CGDirectDisplayID, frame: CGRect)]
+    ) -> CGDirectDisplayID? {
+        guard !displays.isEmpty else { return nil }
+        let trimmed = spec.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // 1. Direct index: "0", "1", "2"
+        if let idx = Int(trimmed), idx >= 0 && idx < displays.count {
+            return displays[idx].id
+        }
+
+        // 2. Relative offset: "+1", "-1", "next", "prev"
+        let curIdx = displays.firstIndex(where: { $0.id == currentID }) ?? 0
+        if trimmed == "+1" || trimmed == "next" {
+            let nextIdx = (curIdx + 1) % displays.count
+            return displays[nextIdx].id
+        }
+        if trimmed == "-1" || trimmed == "prev" {
+            let prevIdx = (curIdx - 1 + displays.count) % displays.count
+            return displays[prevIdx].id
+        }
+
+        // 3. Directional matching: "l", "r", "u", "d", "left", "right", "up", "down"
+        guard let dir = Direction.from(string: trimmed) else {
+            return nil
+        }
+        let curFrame = displays[curIdx].frame
+        let cx = curFrame.midX
+        let cy = curFrame.midY
+
+        var bestID: CGDirectDisplayID? = nil
+        var minScore: CGFloat = .infinity
+
+        for d in displays where d.id != currentID {
+            let rect = d.frame
+            let candX = rect.midX
+            let candY = rect.midY
+
+            let primaryDist: CGFloat
+            let orthogonalDist: CGFloat
+            let overlap: CGFloat
+
+            switch dir {
+            case .left:
+                guard candX < cx else { continue }
+                primaryDist = cx - candX
+                orthogonalDist = abs(cy - candY)
+                overlap = max(0, min(curFrame.maxY, rect.maxY) - max(curFrame.minY, rect.minY))
+            case .right:
+                guard candX > cx else { continue }
+                primaryDist = candX - cx
+                orthogonalDist = abs(cy - candY)
+                overlap = max(0, min(curFrame.maxY, rect.maxY) - max(curFrame.minY, rect.minY))
+            case .up:
+                guard candY < cy else { continue }
+                primaryDist = cy - candY
+                orthogonalDist = abs(cx - candX)
+                overlap = max(0, min(curFrame.maxX, rect.maxX) - max(curFrame.minX, rect.minX))
+            case .down:
+                guard candY > cy else { continue }
+                primaryDist = candY - cy
+                orthogonalDist = abs(cx - candX)
+                overlap = max(0, min(curFrame.maxX, rect.maxX) - max(curFrame.minX, rect.minX))
+            }
+
+            let score = overlap > 0 ? (primaryDist + orthogonalDist * 0.5) : (primaryDist + orthogonalDist * 2.5 + 1000.0)
+            if score < minScore {
+                minScore = score
+                bestID = d.id
+            }
+        }
+
+        return bestID
+    }
+
     // MARK: - Special Workspaces / Scratchpads
 
     /// Special workspaces / scratchpads (Name -> Set of window IDs).
@@ -488,6 +641,8 @@ public final class WorkspaceManager {
 
     /// Weak reference to active DwindleEngine for retiling on workspace transitions.
     public weak var dwindleEngine: DwindleEngine?
+    /// Weak reference to active MasterEngine for retiling on workspace transitions.
+    public weak var masterEngine: MasterEngine?
 
     /// Weak reference to active BorderManager for cleaning up overlay borders on hidden windows.
     public weak var borderManager: BorderManager?
@@ -583,6 +738,9 @@ public final class WorkspaceManager {
         manualSwitchInProgress = false
         lastWorkspaceSwitchTime = 0
         stateStore.reset()
+        workspaceMonitorBindings.removeAll()
+        activeWorkspaceByMonitor.removeAll()
+        focusedMonitorID = CGMainDisplayID()
         specialWorkspaces.removeAll()
         activeSpecialWorkspaces.removeAll()
         savedSpecialFrames.removeAll()
@@ -604,7 +762,13 @@ public final class WorkspaceManager {
 
     /// Returns all window IDs assigned to the currently active workspace, plus any pinned windows.
     public func activeWindowIDs() -> [CGWindowID] {
-        let current = windows(for: activeWorkspace).filter { !minimizedWindowIDs.contains($0) }
+        var activeWorkspacesSet = Set(activeWorkspaceByMonitor.values)
+        activeWorkspacesSet.insert(activeWorkspace)
+
+        var current: [CGWindowID] = []
+        for ws in activeWorkspacesSet {
+            current.append(contentsOf: windows(for: ws).filter { !minimizedWindowIDs.contains($0) })
+        }
         let pinned = windowOrder.filter { isPinned($0) && !minimizedWindowIDs.contains($0) && !current.contains($0) }
         var special: [CGWindowID] = []
         for name in activeSpecialWorkspaces {
@@ -821,6 +985,7 @@ public final class WorkspaceManager {
         number: Int,
         in bounds: CGRect,
         dwindle: DwindleEngine? = nil,
+        master: MasterEngine? = nil,
         borderManager: BorderManager? = nil
     ) {
         guard number >= 1 && number <= 9 else { return }
@@ -841,12 +1006,20 @@ public final class WorkspaceManager {
         let oldWorkspace = activeWorkspace
         previousWorkspace = oldWorkspace
         activeWorkspace = number
+        activeWorkspaceByMonitor[focusedMonitorID] = number
         lastWorkspaceSwitchTime = ProcessInfo.processInfo.systemUptime
 
-        // Step 1: Pre-calculate the new layout upfront using Dwindle BEFORE moving any window
+        // Step 1: Pre-calculate the new layout upfront using Master or Dwindle BEFORE moving any window
         let activeIDs = activeWindowIDs()
         let tiledIDs = activeIDs.filter { !isPinned($0) && !isInSpecialWorkspace($0) && !(isFloating?($0) ?? stateStore.isFloating($0)) }
-        var targetFrames = dwindle?.tileWindows(windowIDs: tiledIDs, in: bounds) ?? [:]
+        let effectiveMaster = master ?? self.masterEngine
+        let effectiveDwindle = dwindle ?? self.dwindleEngine
+        var targetFrames: [CGWindowID: CGRect] = [:]
+        if let m = effectiveMaster {
+            targetFrames = m.tileWindows(windowIDs: tiledIDs, in: bounds)
+        } else if let d = effectiveDwindle {
+            targetFrames = d.tileWindows(windowIDs: tiledIDs, in: bounds)
+        }
         for wid in activeIDs where (isFullscreen?(wid) == true || stateStore.isFullscreen(wid)) {
             targetFrames[wid] = bounds
         }
@@ -978,7 +1151,7 @@ public final class WorkspaceManager {
     /// Convenience overload using configured dependencies.
     public func switchToWorkspace(_ number: Int) {
         let bounds = boundsProvider?() ?? defaultTilingBounds()
-        switchToWorkspace(number: number, in: bounds, dwindle: dwindleEngine, borderManager: borderManager)
+        switchToWorkspace(number: number, in: bounds, dwindle: dwindleEngine, master: masterEngine, borderManager: borderManager)
     }
 
     /// Computes default dynamic tiling bounds from the active screen when no custom provider is configured.
@@ -1023,6 +1196,7 @@ public final class WorkspaceManager {
         follow: Bool,
         in bounds: CGRect? = nil,
         dwindle: DwindleEngine? = nil,
+        master: MasterEngine? = nil,
         borderManager: BorderManager? = nil
     ) {
         guard windowID > 0, targetWorkspace >= 1 && targetWorkspace <= 9 else { return }
@@ -1046,6 +1220,7 @@ public final class WorkspaceManager {
             userInfo: ["windowID": windowID, "workspace": targetWorkspace, "oldWorkspace": oldWorkspace]
         )
 
+        let effectiveMaster = master ?? self.masterEngine
         let engine = dwindle ?? self.dwindleEngine
         let bMgr = borderManager ?? self.borderManager
         let tileBounds = bounds ?? self.boundsProvider?() ?? defaultTilingBounds()
@@ -1058,7 +1233,10 @@ public final class WorkspaceManager {
                 // Retile remaining active windows on current workspace
                 let activeIDs = activeWindowIDs()
                 let tiledIDs = activeIDs.filter { !(isFloating?($0) ?? false) }
-                if let engine = engine {
+                if let m = effectiveMaster {
+                    let frames = m.tileWindows(windowIDs: tiledIDs, in: tileBounds)
+                    m.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                } else if let engine = engine {
                     let frames = engine.tileWindows(windowIDs: tiledIDs, in: tileBounds)
                     engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
                 }
@@ -1075,8 +1253,8 @@ public final class WorkspaceManager {
         lastFocusedPerWorkspace[targetWorkspace] = windowID
 
         if follow {
-            if let engine = engine, let bMgr = bMgr {
-                switchToWorkspace(number: targetWorkspace, in: tileBounds, dwindle: engine, borderManager: bMgr)
+            if (effectiveMaster != nil || engine != nil), let bMgr = bMgr {
+                switchToWorkspace(number: targetWorkspace, in: tileBounds, dwindle: engine, master: effectiveMaster, borderManager: bMgr)
             } else {
                 switchToWorkspace(targetWorkspace)
             }
