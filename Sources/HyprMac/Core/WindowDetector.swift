@@ -9,6 +9,7 @@ public struct FocusedWindowInfo: Sendable, Equatable {
     public let title: String
     public let bounds: CGRect
     public let appkitFrame: NSRect
+    public let bundleID: String
 
     public init(
         windowID: CGWindowID,
@@ -16,7 +17,8 @@ public struct FocusedWindowInfo: Sendable, Equatable {
         appName: String,
         title: String,
         bounds: CGRect,
-        appkitFrame: NSRect
+        appkitFrame: NSRect,
+        bundleID: String = ""
     ) {
         self.windowID = windowID
         self.processID = processID
@@ -24,6 +26,7 @@ public struct FocusedWindowInfo: Sendable, Equatable {
         self.title = title
         self.bounds = bounds
         self.appkitFrame = appkitFrame
+        self.bundleID = bundleID
     }
 }
 
@@ -115,11 +118,13 @@ public final class WindowDetector: @unchecked Sendable {
 
         // Strategy 1: Try system-wide focused application
         let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, 0.050)
         var focusedAppVal: AnyObject?
         let sysErr = AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedAppVal)
 
         if sysErr == .success, let val = focusedAppVal {
             let elem = val as! AXUIElement
+            AXUIElementSetMessagingTimeout(elem, 0.050)
             appElement = elem
             AXUIElementGetPid(elem, &pid)
         }
@@ -130,7 +135,9 @@ public final class WindowDetector: @unchecked Sendable {
                 return nil
             }
             pid = frontApp.processIdentifier
-            appElement = AXUIElementCreateApplication(pid)
+            let appElem = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(appElem, 0.050)
+            appElement = appElem
         }
 
         guard let targetApp = appElement else { return nil }
@@ -247,6 +254,7 @@ public final class WindowDetector: @unchecked Sendable {
 
         // Calculate AppKit screen coordinate frame
         let appkitFrame = convertToAppKitFrame(cgRect: cgBounds)
+        let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
 
         return FocusedWindowInfo(
             windowID: activeWindowID,
@@ -254,7 +262,8 @@ public final class WindowDetector: @unchecked Sendable {
             appName: appName,
             title: title,
             bounds: cgBounds,
-            appkitFrame: appkitFrame
+            appkitFrame: appkitFrame,
+            bundleID: bundleID
         )
     }
 
@@ -338,23 +347,8 @@ public final class WindowDetector: @unchecked Sendable {
     public func getWindowAXElement(windowID: CGWindowID, pid: pid_t? = nil) -> AXUIElement? {
         lock.lock()
         if let cached = axElementCache[windowID] {
-            var roleVal: AnyObject?
-            if AXUIElementCopyAttributeValue(cached, kAXRoleAttribute as CFString, &roleVal) == .success,
-               let role = roleVal as? String, role == (kAXWindowRole as String) {
-                if let cachedWid = getWindowID(for: cached) {
-                    if cachedWid == windowID {
-                        lock.unlock()
-                        return cached
-                    } else {
-                        axElementCache.removeValue(forKey: windowID)
-                    }
-                } else {
-                    lock.unlock()
-                    return cached
-                }
-            } else {
-                axElementCache.removeValue(forKey: windowID)
-            }
+            lock.unlock()
+            return cached
         }
         lock.unlock()
 
@@ -365,6 +359,7 @@ public final class WindowDetector: @unchecked Sendable {
         guard let validPID = appPID, validPID > 0 else { return nil }
 
         let appElement = AXUIElementCreateApplication(validPID)
+        AXUIElementSetMessagingTimeout(appElement, 0.050)
         var windowsVal: AnyObject?
         guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsVal) == .success,
               let axWindows = windowsVal as? [AXUIElement] else {
@@ -374,6 +369,7 @@ public final class WindowDetector: @unchecked Sendable {
         // Filter elements to strictly valid AXWindows (excluding non-window elements like Finder Desktop AXScrollArea)
         var windowElements: [AXUIElement] = []
         for elem in axWindows {
+            AXUIElementSetMessagingTimeout(elem, 0.050)
             var roleVal: AnyObject?
             if AXUIElementCopyAttributeValue(elem, kAXRoleAttribute as CFString, &roleVal) == .success,
                let role = roleVal as? String, role == (kAXWindowRole as String) {
@@ -423,6 +419,14 @@ public final class WindowDetector: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Prunes cached AXUIElements and PIDs for windows that are no longer alive.
+    public func pruneCache(aliveWindowIDs: Set<CGWindowID>) {
+        lock.lock()
+        axElementCache = axElementCache.filter { aliveWindowIDs.contains($0.key) }
+        pidCache = pidCache.filter { aliveWindowIDs.contains($0.key) }
+        lock.unlock()
+    }
+
     /// Clears the entire AXUIElement and PID caches.
     public func clearCache() {
         lock.lock()
@@ -436,9 +440,11 @@ public final class WindowDetector: @unchecked Sendable {
     public func getWindowTitle(windowID: CGWindowID, pid: pid_t? = nil) -> String? {
         if let elem = getWindowAXElement(windowID: windowID, pid: pid) {
             var titleVal: AnyObject?
-            if AXUIElementCopyAttributeValue(elem, kAXTitleAttribute as CFString, &titleVal) == .success,
-               let title = titleVal as? String, !title.isEmpty {
+            let err = AXUIElementCopyAttributeValue(elem, kAXTitleAttribute as CFString, &titleVal)
+            if err == .success, let title = titleVal as? String, !title.isEmpty {
                 return title
+            } else if err == .invalidUIElement || err == .cannotComplete {
+                invalidateWindow(windowID: windowID)
             }
         }
         guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
@@ -461,6 +467,9 @@ public final class WindowDetector: @unchecked Sendable {
         var pt = point
         if let posVal = AXValueCreate(.cgPoint, &pt) {
             let err = AXUIElementSetAttributeValue(winElem, kAXPositionAttribute as CFString, posVal)
+            if err == .invalidUIElement || err == .cannotComplete {
+                invalidateWindow(windowID: windowID)
+            }
             return err == .success
         }
         return false
@@ -534,6 +543,9 @@ public final class WindowDetector: @unchecked Sendable {
         }
         var minVal: AnyObject?
         let err = AXUIElementCopyAttributeValue(winElem, kAXMinimizedAttribute as CFString, &minVal)
+        if err == .invalidUIElement || err == .cannotComplete {
+            invalidateWindow(windowID: windowID)
+        }
         if err == .success, let val = minVal {
             if let boolVal = val as? Bool {
                 return boolVal
@@ -553,6 +565,9 @@ public final class WindowDetector: @unchecked Sendable {
         }
         let val = minimized ? kCFBooleanTrue : kCFBooleanFalse
         let err = AXUIElementSetAttributeValue(winElem, kAXMinimizedAttribute as CFString, val!)
+        if err == .invalidUIElement || err == .cannotComplete {
+            invalidateWindow(windowID: windowID)
+        }
         return err == .success
     }
 
@@ -565,26 +580,28 @@ public final class WindowDetector: @unchecked Sendable {
         // Query AXRole: must be AXWindow (kAXWindowRole)
         var roleVal: AnyObject?
         let roleErr = AXUIElementCopyAttributeValue(winElem, kAXRoleAttribute as CFString, &roleVal)
+        if roleErr == .invalidUIElement || roleErr == .cannotComplete {
+            invalidateWindow(windowID: windowID)
+            return false
+        }
         guard roleErr == .success, let role = roleVal as? String,
               role == (kAXWindowRole as String) || role == "AXWindow" else {
             return false
         }
 
-        // Query AXSubrole: must be AXStandardWindow (kAXStandardWindowSubrole)
+        // Query AXSubrole: filter out non-standard windows (popups, dropdowns, dialogs, floating toolbars)
         var subroleVal: AnyObject?
         let subroleErr = AXUIElementCopyAttributeValue(winElem, kAXSubroleAttribute as CFString, &subroleVal)
-        guard subroleErr == .success, let subrole = subroleVal as? String else {
-            return false
+        if subroleErr == .success, let subrole = subroleVal as? String {
+            let nonStandardSubroles: Set<String> = [
+                "AXFloatingWindow", "AXDialog", "AXSystemDialog", "AXUnknown"
+            ]
+            if nonStandardSubroles.contains(subrole) {
+                return false
+            }
         }
 
-        let nonStandardSubroles: Set<String> = [
-            "AXFloatingWindow", "AXDialog", "AXSystemDialog", "AXUnknown"
-        ]
-        if nonStandardSubroles.contains(subrole) {
-            return false
-        }
-
-        return subrole == (kAXStandardWindowSubrole as String) || subrole == "AXStandardWindow"
+        return true
     }
 
     /// Retrieves the current bounding rect for a window ID via AX, SkyLight, or WindowServer list fallback.
@@ -594,11 +611,17 @@ public final class WindowDetector: @unchecked Sendable {
             var pt = CGPoint.zero
             var sz = CGSize.zero
             var posVal: AnyObject?
-            if AXUIElementCopyAttributeValue(winElem, kAXPositionAttribute as CFString, &posVal) == .success, let pv = posVal {
+            let posErr = AXUIElementCopyAttributeValue(winElem, kAXPositionAttribute as CFString, &posVal)
+            if posErr == .invalidUIElement || posErr == .cannotComplete {
+                invalidateWindow(windowID: windowID)
+            } else if posErr == .success, let pv = posVal {
                 AXValueGetValue(pv as! AXValue, .cgPoint, &pt)
             }
             var sizeVal: AnyObject?
-            if AXUIElementCopyAttributeValue(winElem, kAXSizeAttribute as CFString, &sizeVal) == .success, let sv = sizeVal {
+            let sizeErr = AXUIElementCopyAttributeValue(winElem, kAXSizeAttribute as CFString, &sizeVal)
+            if sizeErr == .invalidUIElement || sizeErr == .cannotComplete {
+                invalidateWindow(windowID: windowID)
+            } else if sizeErr == .success, let sv = sizeVal {
                 AXValueGetValue(sv as! AXValue, .cgSize, &sz)
             }
             if sz.width > 0 && sz.height > 0 {
@@ -631,11 +654,12 @@ public final class WindowDetector: @unchecked Sendable {
     }
 
     /// Returns the set of all window IDs currently existing in the macOS WindowServer.
-    public func getAllAliveWindowIDs() -> Set<CGWindowID> {
-        guard let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
+    public func getAllAliveWindowIDs(fromSnapshot: [[String: Any]]? = nil) -> Set<CGWindowID> {
+        let windowList = fromSnapshot ?? (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]])
+        guard let list = windowList else {
             return []
         }
-        return Set(windowList.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
+        return Set(list.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
     }
 
     /// Fallback: returns the frontmost visible normal window using CGWindowListCopyWindowInfo (requires no AX permissions)
@@ -664,13 +688,15 @@ public final class WindowDetector: @unchecked Sendable {
             }
             guard isStandardWindow(windowID: wid, pid: pid) else { continue }
             let appkitFrame = convertToAppKitFrame(cgRect: cgBounds)
+            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
             result.append(FocusedWindowInfo(
                 windowID: wid,
                 processID: pid,
                 appName: appName,
                 title: title,
                 bounds: cgBounds,
-                appkitFrame: appkitFrame
+                appkitFrame: appkitFrame,
+                bundleID: bundleID
             ))
         }
         return result
@@ -679,9 +705,11 @@ public final class WindowDetector: @unchecked Sendable {
     /// Returns all eligible application windows for tiling, navigation, and focus management.
     public func getEligibleWindows(
         in screenBounds: CGRect? = nil,
-        excludingPIDs: Set<pid_t> = [getpid()]
+        excludingPIDs: Set<pid_t> = [getpid()],
+        windowListSnapshot: [[String: Any]]? = nil
     ) -> [FocusedWindowInfo] {
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        let windowList = windowListSnapshot ?? (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]])
+        guard let list = windowList else {
             return []
         }
 
@@ -693,9 +721,13 @@ public final class WindowDetector: @unchecked Sendable {
 
         var userWindows: [FocusedWindowInfo] = []
 
-        for item in windowList {
+        for item in list {
             guard let wid = item[kCGWindowNumber as String] as? CGWindowID, wid > 0 else { continue }
             guard let layer = item[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+            if windowListSnapshot != nil {
+                let isOnscreen = (item[kCGWindowIsOnscreen as String] as? Bool) ?? ((item[kCGWindowIsOnscreen as String] as? Int) == 1)
+                if !isOnscreen { continue }
+            }
             guard let pid = item[kCGWindowOwnerPID as String] as? pid_t, !excludingPIDs.contains(pid) else { continue }
             guard let appName = item[kCGWindowOwnerName as String] as? String, !excludedApps.contains(appName) else { continue }
             let title = (item[kCGWindowName as String] as? String) ?? ""
@@ -715,13 +747,15 @@ public final class WindowDetector: @unchecked Sendable {
             }
 
             let appkitFrame = convertToAppKitFrame(cgRect: rect)
+            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
             userWindows.append(FocusedWindowInfo(
                 windowID: wid,
                 processID: pid,
                 appName: appName,
                 title: title,
                 bounds: rect,
-                appkitFrame: appkitFrame
+                appkitFrame: appkitFrame,
+                bundleID: bundleID
             ))
         }
         return userWindows

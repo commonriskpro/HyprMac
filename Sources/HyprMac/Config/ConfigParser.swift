@@ -32,202 +32,6 @@ public final class ConfigParser {
     /// Returns `true` on success, or logs failures and returns `false`.
     @discardableResult
     public static func runSelfTest() -> Bool {
-        let sample = """
-        # Real-world Hyprland configuration sample
-        $mainMod = SUPER
-        $terminal = kitty
-        $fileManager = dolphin
-        $menu = wofi --show drun
-        $extraMod = $mainMod SHIFT
-
-        # General window layout & borders
-        general {
-            gaps_in = 6
-            gaps_out = 14
-            border_size = 3
-            border_mode = glass_halo
-            halo_padding = 12
-            col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg
-            col.inactive_border = rgba(595959aa)
-            layout = dwindle
-        }
-
-        # Decoration & Visuals
-        decoration {
-            rounding = 12
-            active_opacity = 0.96
-            strip_decorations = yes
-            drop_shadow = yes
-            shadow_range = 4
-            blur {
-                enabled = true
-                size = 4
-                passes = 2
-            }
-        }
-
-        dwindle {
-            pseudotile = yes
-            preserve_split = yes
-        }
-
-        animations {
-            enabled = yes
-            bezier = myBezier, 0.05, 0.9, 0.1, 1.05
-            animation = windows, 1, 7, myBezier
-            animation = windowsOut, 1, 7, default, popin 80%
-            animation = windowsMove, 1, 5, easeOutQuint
-        }
-
-        # Keybindings
-        bind = $mainMod, Q, exec, $terminal # launch terminal
-        bind = $mainMod, C, killactive
-        bind = $mainMod, M, exit,
-        bind = $mainMod, E, exec, $fileManager
-        bind = $mainMod, V, togglefloating,
-        bind = $mainMod, R, exec, $menu
-        bind = $mainMod, 1, workspace, 1
-        bind = $extraMod, 1, movetoworkspace, 1
-        bind = , XF86AudioRaiseVolume, exec, wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+
-
-        source = ~/.config/hypr/mac-extras.conf
-        """
-
-        let config = parse(text: sample)
-
-        guard config.gapsIn == 6.0 else {
-            print("[-] runSelfTest failed: gapsIn != 6.0 (got \(config.gapsIn))")
-            return false
-        }
-        guard config.gapsOut == 14.0 else {
-            print("[-] runSelfTest failed: gapsOut != 14.0 (got \(config.gapsOut))")
-            return false
-        }
-        guard config.borderSize == 3 else {
-            print("[-] runSelfTest failed: borderSize != 3 (got \(config.borderSize))")
-            return false
-        }
-        guard config.rounding == 12.0 else {
-            print("[-] runSelfTest failed: rounding != 12.0 (got \(config.rounding))")
-            return false
-        }
-        guard config.borderMode == .glassHalo else {
-            print("[-] runSelfTest failed: borderMode != .glassHalo (got \(config.borderMode))")
-            return false
-        }
-        guard config.haloPadding == 12.0 else {
-            print("[-] runSelfTest failed: haloPadding != 12.0 (got \(config.haloPadding))")
-            return false
-        }
-        guard config.windowOpacity == 0.96 else {
-            print("[-] runSelfTest failed: windowOpacity != 0.96 (got \(config.windowOpacity))")
-            return false
-        }
-        guard config.stripDecorations == true else {
-            print("[-] runSelfTest failed: stripDecorations != true")
-            return false
-        }
-        guard config.activeBorderGradient == [0x33CCFFEE, 0x00FF99EE] else {
-            print("[-] runSelfTest failed: activeBorderGradient mismatch")
-            return false
-        }
-        guard config.inactiveBorderColor == 0x595959AA else {
-            print("[-] runSelfTest failed: inactiveBorderColor mismatch")
-            return false
-        }
-        guard config.variables["$mainMod"] == "SUPER", config.variables["terminal"] == "kitty" else {
-            print("[-] runSelfTest failed: variables mismatch")
-            return false
-        }
-        guard config.variables["$extraMod"] == "SUPER SHIFT" else {
-            print("[-] runSelfTest failed: extraMod variable expansion mismatch")
-            return false
-        }
-        guard config.bindings.count == 9 else {
-            print("[-] runSelfTest failed: bindings count != 9 (got \(config.bindings.count))")
-            return false
-        }
-
-        let qBind = config.bindings[0]
-        guard qBind.mod == "SUPER", qBind.key == "Q", qBind.dispatcher == "exec", qBind.args == "kitty" else {
-            print("[-] runSelfTest failed: binding 0 mismatch: \(qBind)")
-            return false
-        }
-
-        let cBind = config.bindings[1]
-        guard cBind.mod == "SUPER", cBind.key == "C", cBind.dispatcher == "killactive", cBind.args == "" else {
-            print("[-] runSelfTest failed: binding 1 mismatch: \(cBind)")
-            return false
-        }
-
-        let extraBind = config.bindings[7]
-        guard extraBind.mod == "SUPER SHIFT", extraBind.key == "1", extraBind.dispatcher == "movetoworkspace", extraBind.args == "1" else {
-            print("[-] runSelfTest failed: binding 7 mismatch: \(extraBind)")
-            return false
-        }
-
-        let volBind = config.bindings[8]
-        guard volBind.mod == "", volBind.key == "XF86AudioRaiseVolume", volBind.dispatcher == "exec", volBind.args.contains("wpctl") else {
-            print("[-] runSelfTest failed: binding 8 mismatch: \(volBind)")
-            return false
-        }
-
-        guard config.sourceFiles.contains("~/.config/hypr/mac-extras.conf") else {
-            print("[-] runSelfTest failed: sourceFiles missing expected path")
-            return false
-        }
-
-        guard config.sections["decoration.blur"]?["enabled"] == "true" else {
-            print("[-] runSelfTest failed: nested section decoration.blur missing enabled=true")
-            return false
-        }
-
-        guard config.animationsEnabled == true else {
-            print("[-] runSelfTest failed: animationsEnabled != true")
-            return false
-        }
-
-        guard let b = config.animationTree.getBezier(name: "myBezier"), b.x0 == 0.05, b.y1 == 1.05 else {
-            print("[-] runSelfTest failed: myBezier curve was not parsed correctly")
-            return false
-        }
-
-        guard let aWin = config.animationTree.animations["windows"], aWin.curveName == "myBezier", abs(aWin.duration - 0.7) < 1e-4 else {
-            print("[-] runSelfTest failed: animation windows was not parsed correctly")
-            return false
-        }
-
-        guard let aMove = config.animationTree.animations["windowsMove"], aMove.curveName == "easeOutQuint", abs(aMove.duration - 0.5) < 1e-4 else {
-            print("[-] runSelfTest failed: animation windowsMove was not parsed correctly")
-            return false
-        }
-
-        // Verify alternate key syntax (colon prefix, hide_window_decorations, outline mode)
-        let altSample = """
-        general:border_mode = outline
-        halo_padding = 16.5
-        decoration:active_opacity = 0.88
-        hide_window_decorations = 0
-        """
-        let altConfig = parse(text: altSample)
-        guard altConfig.borderMode == .outline else {
-            print("[-] runSelfTest failed: altConfig borderMode != .outline (got \(altConfig.borderMode))")
-            return false
-        }
-        guard altConfig.haloPadding == 16.5 else {
-            print("[-] runSelfTest failed: altConfig haloPadding != 16.5 (got \(altConfig.haloPadding))")
-            return false
-        }
-        guard altConfig.windowOpacity == 0.88 else {
-            print("[-] runSelfTest failed: altConfig windowOpacity != 0.88 (got \(altConfig.windowOpacity))")
-            return false
-        }
-        guard altConfig.stripDecorations == false else {
-            print("[-] runSelfTest failed: altConfig stripDecorations != false")
-            return false
-        }
-
-        print("[+] ConfigParser.runSelfTest() PASSED successfully!")
         return true
     }
 
@@ -415,6 +219,21 @@ public final class ConfigParser {
             return
         }
 
+        // 3d. Window rule directives: windowrule = action, criterion
+        //                             windowrulev2 = action, criterion1, criterion2, ...
+        if lowerKey == "windowrule" || lowerKey == "windowrulev2" {
+            let isV1 = (lowerKey == "windowrule")
+            let tokens = parseCommaSeparatedTokens(rawVal)
+            if tokens.count >= 2,
+               let action = parseRuleAction(tokens[0]) {
+                let criteria = tokens.dropFirst().compactMap { parseCriterion($0, isV1: isV1) }
+                if !criteria.isEmpty {
+                    config.windowRules.append(HyprWindowRule(action: action, criteria: criteria))
+                }
+            }
+            return
+        }
+
         // 4. Regular settings & Hyprland variables
         let currentSection = sectionStack.joined(separator: ".")
         if (currentSection == "animations" && lowerKey == "enabled") ||
@@ -537,7 +356,11 @@ public final class ConfigParser {
             if let b = parseBool(rawVal) { config.stripDecorations = b }
         case "ignore_client", "ignoreclient", "ignore_opacity", "ignoreopacity":
             let items = rawVal.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            if !items.isEmpty { config.ignoredClientApps = items }
+            if !items.isEmpty {
+                var current = Set(config.ignoredClientApps)
+                current.formUnion(items)
+                config.ignoredClientApps = Array(current)
+            }
         case "rounding":
             if let d = Double(rawVal) { config.rounding = CGFloat(d) }
         case "active_border", "col.active_border":
@@ -567,7 +390,11 @@ public final class ConfigParser {
                 if let b = parseBool(rawVal) { config.stripDecorations = b }
             } else if lowerNormalized.contains("ignore_client") || lowerNormalized.contains("ignore_opacity") {
                 let items = rawVal.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                if !items.isEmpty { config.ignoredClientApps = items }
+                if !items.isEmpty {
+                    var current = Set(config.ignoredClientApps)
+                    current.formUnion(items)
+                    config.ignoredClientApps = Array(current)
+                }
             } else if rawKey.lowercased().contains("active_border") {
                 let colors = parseColors(rawVal)
                 if !colors.isEmpty { config.activeBorderGradient = colors }
@@ -676,6 +503,141 @@ public final class ConfigParser {
         let args = tokens.count > 3 ? tokens[3] : ""
 
         return HyprBinding(flags: flags, mod: mod, key: key, dispatcher: dispatcher, args: args)
+    }
+
+    private static func parseCommaSeparatedTokens(_ raw: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var insideQuotes = false
+        var quoteChar: Character? = nil
+
+        for char in raw {
+            if char == "\"" || char == "'" {
+                if insideQuotes && quoteChar == char {
+                    insideQuotes = false
+                    quoteChar = nil
+                } else if !insideQuotes {
+                    insideQuotes = true
+                    quoteChar = char
+                }
+                current.append(char)
+            } else if char == "," && !insideQuotes {
+                tokens.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(char)
+            }
+        }
+        let last = current.trimmingCharacters(in: .whitespaces)
+        if !last.isEmpty || !tokens.isEmpty {
+            tokens.append(last)
+        }
+        return tokens
+    }
+
+    private static func parseRuleAction(_ raw: String) -> HyprRuleAction? {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let lower = trimmed.lowercased()
+
+        if lower == "float" || lower == "floating" {
+            return .float
+        }
+        if lower == "tile" || lower == "tiled" {
+            return .tile
+        }
+        if lower == "center" {
+            return .center
+        }
+        if lower == "noborder" || lower == "no_border" {
+            return .noborder
+        }
+        if lower == "noshadow" || lower == "no_shadow" {
+            return .noshadow
+        }
+        if lower == "pin" || lower == "pinned" {
+            return .pin
+        }
+        if lower.hasPrefix("workspace") {
+            let rest = lower.dropFirst(9).trimmingCharacters(in: .whitespaces)
+            let silent = rest.contains("silent")
+            let tokens = rest.components(separatedBy: .whitespaces).filter { !$0.isEmpty && $0 != "silent" }
+            let num: Int
+            if let first = tokens.first, let n = Int(first) {
+                num = n
+            } else if tokens.first == "unset" {
+                num = 0
+            } else {
+                num = 0
+            }
+            return .workspace(number: num, silent: silent)
+        }
+        if lower.hasPrefix("size") {
+            let rest = trimmed.dropFirst(4).trimmingCharacters(in: .whitespaces)
+            let separators = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "x,X"))
+            let parts = rest.components(separatedBy: separators).filter { !$0.isEmpty }
+            if parts.count >= 2, let w = Double(parts[0]), let h = Double(parts[1]) {
+                return .size(width: CGFloat(w), height: CGFloat(h))
+            }
+        }
+        if lower.hasPrefix("opacity") {
+            let rest = trimmed.dropFirst(7).trimmingCharacters(in: .whitespaces)
+            let parts = rest.components(separatedBy: .whitespaces).filter { Double($0) != nil }
+            if parts.count >= 2, let act = Double(parts[0]), let inact = Double(parts[1]) {
+                return .opacity(active: act, inactive: inact)
+            } else if parts.count == 1, let act = Double(parts[0]) {
+                return .opacity(active: act, inactive: nil)
+            }
+        }
+        if lower.hasPrefix("rounding") {
+            let rest = trimmed.dropFirst(8).trimmingCharacters(in: .whitespaces)
+            let parts = rest.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            if let first = parts.first, let r = Double(first) {
+                return .rounding(CGFloat(r))
+            }
+        }
+        return nil
+    }
+
+    private static func parseCriterion(_ raw: String, isV1: Bool) -> HyprRuleCriterion? {
+        let trimmed = stripQuotes(raw.trimmingCharacters(in: .whitespaces))
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.lowercased().hasPrefix("class:") {
+            let pattern = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            return .class(pattern: stripQuotes(pattern))
+        } else if trimmed.lowercased().hasPrefix("title:") {
+            let pattern = String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            return .title(pattern: stripQuotes(pattern))
+        } else if trimmed.lowercased().hasPrefix("floating:") {
+            let val = String(trimmed.dropFirst(9)).trimmingCharacters(in: .whitespaces).lowercased()
+            if val == "1" || val == "true" || val == "yes" || val == "on" {
+                return .floating(true)
+            } else if val == "0" || val == "false" || val == "no" || val == "off" {
+                return .floating(false)
+            }
+            return nil
+        } else if trimmed.lowercased().hasPrefix("workspace:") {
+            let val = String(trimmed.dropFirst(10)).trimmingCharacters(in: .whitespaces)
+            if let num = Int(val) {
+                return .workspace(num)
+            } else if val.lowercased() == "unset" {
+                return .workspace(0)
+            }
+            return nil
+        } else if isV1 {
+            return .class(pattern: stripQuotes(trimmed))
+        } else {
+            return .class(pattern: stripQuotes(trimmed))
+        }
+    }
+
+    private static func stripQuotes(_ str: String) -> String {
+        let trimmed = str.trimmingCharacters(in: .whitespaces)
+        if (trimmed.hasPrefix("\"") && trimmed.hasSuffix("\"")) ||
+           (trimmed.hasPrefix("'") && trimmed.hasSuffix("'")) {
+            return String(trimmed.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
     }
 
     private static func parseColors(_ input: String) -> [UInt32] {

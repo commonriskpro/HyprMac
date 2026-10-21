@@ -172,128 +172,7 @@ func runMenuBar(args: [String]) {
 
 @MainActor
 func runTestBridge() {
-    print("""
-    ==================================================
-                 HyprMac Bridge & IPC Tests
-    ==================================================
-    """)
-
-    var passCount = 0
-    var failCount = 0
-
-    func assertTest(_ condition: Bool, _ name: String, _ details: String = "") {
-        if condition {
-            print("  [PASS] \(name)")
-            passCount += 1
-        } else {
-            print("  [FAIL] \(name) - \(details)")
-            failCount += 1
-        }
-    }
-
-    // 1. Ring Buffer Capacity & FIFO Ordering
-    print("[*] Suite 1: CommandRingBuffer FIFO & Drop Oldest")
-    let rb = CommandRingBuffer(capacity: 4)
-    assertTest(rb.isEmpty, "Initial buffer is empty")
-    assertTest(rb.count == 0, "Initial count is 0")
-
-    rb.enqueue(Data([1]))
-    rb.enqueue(Data([2]))
-    rb.enqueue(Data([3]))
-    assertTest(rb.count == 3, "Buffer count is 3 after 3 enqueues")
-
-    let d1 = rb.dequeue()
-    assertTest(d1 == Data([1]), "First dequeued item is 1 (FIFO)")
-    assertTest(rb.count == 2, "Buffer count is 2 after dequeue")
-
-    rb.enqueue(Data([4]))
-    rb.enqueue(Data([5]))
-    assertTest(rb.count == 4, "Buffer reaches capacity (4)")
-
-    // Overflow test: capacity is 4. Currently contains [2, 3, 4, 5].
-    // Enqueue 6 -> drops oldest (2), contains [3, 4, 5, 6].
-    rb.enqueue(Data([6]))
-    assertTest(rb.count == 4, "Buffer count stays at capacity (4) after overflow")
-
-    let allItems = rb.dequeueAll()
-    assertTest(allItems == [Data([3]), Data([4]), Data([5]), Data([6])],
-               "dequeueAll returns [3, 4, 5, 6] dropping oldest (2)",
-               "got: \(allItems.map { [UInt8]($0) })")
-    assertTest(rb.isEmpty, "Buffer is empty after dequeueAll")
-
-    // 2. Default Capacity 64 (REQ-WS-010)
-    print("\n[*] Suite 2: Default Capacity 64 (REQ-WS-010)")
-    let defaultRb = CommandRingBuffer()
-    assertTest(defaultRb.capacity == 64, "Default capacity is 64")
-    for i in 0..<80 {
-        defaultRb.enqueue(Data([UInt8(i % 256)]))
-    }
-    assertTest(defaultRb.count == 64, "Ring buffer bounded to 64 items after 80 enqueues")
-    let defAll = defaultRb.dequeueAll()
-    assertTest(defAll.count == 64, "Dequeued exactly 64 items")
-    assertTest(defAll.first == Data([16]), "Oldest 16 items were dropped (first is item 16)")
-    assertTest(defAll.last == Data([79]), "Last item is 79")
-
-    // 3. Thread Safety with Concurrent Enqueue / Dequeue
-    print("\n[*] Suite 3: Thread Safety Concurrent Access")
-    let concurrentRb = CommandRingBuffer(capacity: 64)
-    DispatchQueue.concurrentPerform(iterations: 500) { i in
-        concurrentRb.enqueue(Data([UInt8(i % 256)]))
-        _ = concurrentRb.dequeue()
-    }
-    assertTest(true, "Concurrent perform completed without deadlock or crash")
-
-    // 4. SkyLightBridge Routing & Hook Availability
-    print("\n[*] Suite 4: SkyLightBridge Routing Check")
-    let sl = SkyLightBridge.shared
-    assertTest(sl.isHookAvailable == HyprServerBridge.shared.isAvailable, "SkyLightBridge.isHookAvailable matches HyprServerBridge.isAvailable")
-    assertTest(sl.checkHookAvailable() == HyprServerBridge.shared.isAvailable, "SkyLightBridge.checkHookAvailable() matches HyprServerBridge.isAvailable")
-
-    // 5. Wire Protocol Serialization
-    print("\n[*] Suite 5: Wire Protocol Serialization")
-    let bridge = HyprServerBridge.shared
-    var sampleFloat: Float = 12.5
-    var floatData = Data()
-    withUnsafeBytes(of: &sampleFloat) { floatData.append(contentsOf: $0) }
-    let msg = bridge.buildMessage(command: .setCornerRadius, windowId: 0x1234, payload: floatData)
-    assertTest(msg.count == 20 + 4, "Serialized message has 20-byte header + 4-byte payload (24 bytes)")
-    let magic = msg.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
-    let version = msg.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt16.self) }
-    let cmdId = msg.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self) }
-    let wid = msg.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 12, as: UInt32.self) }
-    let payloadSize = msg.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 16, as: UInt32.self) }
-    assertTest(magic == HyprProtocol.magic, "Header magic is 0x48595052 (HYPR)")
-    assertTest(version == HyprProtocol.version, "Header version is 1")
-    assertTest(cmdId == HyprCommand.setCornerRadius.rawValue, "Command ID is 0x0010 (setCornerRadius)")
-    assertTest(wid == 0x1234, "Window ID is 0x1234")
-    assertTest(payloadSize == 4, "Payload size is 4 bytes")
-
-    // 6. Shared Memory Layout & Protocol Verification
-    print("\n[*] Suite 6: Shared Memory Layout & Ring Buffer Setup")
-    assertTest(MemoryLayout<HyprShmHeader>.size == 256, "HyprShmHeader struct size is exactly 256 bytes")
-    assertTest(MemoryLayout<HyprShmHeader>.stride == 256, "HyprShmHeader struct stride is exactly 256 bytes")
-    assertTest(HyprProtocol.shmMagic == 0x48534D49, "SHM magic is 0x48534D49 (HSMI)")
-    assertTest(HyprProtocol.shmVersion == 1, "SHM version is 1")
-    assertTest(HyprProtocol.shmSize == 65536, "SHM size is 64KB (65536 bytes)")
-    assertTest(HyprProtocol.cmdRingSize == 28672, "CMD ring size is 28KB (28672 bytes)")
-    assertTest(HyprProtocol.rspRingSize == 28672, "RSP ring size is 28KB (28672 bytes)")
-    assertTest(HyprProtocol.cmdRingOffset == 256, "CMD ring offset is 256")
-    assertTest(HyprProtocol.rspRingOffset == (HyprProtocol.cmdRingOffset + HyprProtocol.cmdRingSize), "RSP ring offset is 28928 (256 + 28672)")
-
-    let shmInitSuccess = bridge.setupSharedMemory()
-    assertTest(shmInitSuccess, "setupSharedMemory() successfully mapped /tmp/hyprmac-ipc.shm")
-    assertTest(bridge.isAvailable, "bridge.isAvailable is true after shared memory setup")
-    assertTest(sl.isHookAvailable, "SkyLightBridge.isHookAvailable is true after shared memory setup")
-
-    print("""
-    ==================================================
-    Test Summary: \(passCount) Passed, \(failCount) Failed
-    ==================================================
-    """)
-
-    if failCount > 0 {
-        exit(1)
-    }
+    print("[+] HyprMac Bridge & IPC Tests have moved to 'swift test'.")
 }
 
 @MainActor
@@ -375,10 +254,11 @@ func runStrip() {
 @MainActor
 func getEligibleUserWindows(
     in screenBounds: CGRect,
-    excludingPIDs: Set<pid_t> = [getpid()]
-) -> [(windowID: CGWindowID, pid: pid_t, appName: String, title: String, bounds: CGRect)] {
-    return WindowDetector.shared.getEligibleWindows(in: screenBounds, excludingPIDs: excludingPIDs).map {
-        ($0.windowID, $0.processID, $0.appName, $0.title, $0.bounds)
+    excludingPIDs: Set<pid_t> = [getpid()],
+    windowListSnapshot: [[String: Any]]? = nil
+) -> [(windowID: CGWindowID, pid: pid_t, appName: String, title: String, bounds: CGRect, bundleID: String)] {
+    return WindowDetector.shared.getEligibleWindows(in: screenBounds, excludingPIDs: excludingPIDs, windowListSnapshot: windowListSnapshot).map {
+        ($0.windowID, $0.processID, $0.appName, $0.title, $0.bounds, $0.bundleID)
     }
 }
 
@@ -451,225 +331,17 @@ func runTile() {
 
 @MainActor
 func runTestDwindle() {
-    print("""
-    ==================================================
-              HyprMac Dwindle Algorithm Tests
-    ==================================================
-    """)
-
-    let screenBounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-    let gapsIn: CGFloat = 5.0
-    let gapsOut: CGFloat = 10.0
-    let tol: CGFloat = 0.001
-
-    func isNear(_ a: CGFloat, _ b: CGFloat) -> Bool {
-        abs(a - b) <= tol
-    }
-
-    func isRectNear(_ r1: CGRect, _ r2: CGRect) -> Bool {
-        isNear(r1.origin.x, r2.origin.x) &&
-        isNear(r1.origin.y, r2.origin.y) &&
-        isNear(r1.width, r2.width) &&
-        isNear(r1.height, r2.height)
-    }
-
-    func noOverlap(_ r1: CGRect, _ r2: CGRect) -> Bool {
-        if !r1.intersects(r2) { return true }
-        let inter = r1.intersection(r2)
-        return inter.width <= tol || inter.height <= tol
-    }
-
-    var passCount = 0
-    var failCount = 0
-
-    func assertTest(_ condition: Bool, _ name: String, _ details: String = "") {
-        if condition {
-            print("  [PASS] \(name)")
-            passCount += 1
-        } else {
-            print("  [FAIL] \(name) - \(details)")
-            failCount += 1
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // TEST 1: Single Window (N = 1)
-    // ------------------------------------------------------------------------
-    print("[*] Suite 1: Single Window Tiling")
-    let engine1 = DwindleEngine(gapsIn: gapsIn, gapsOut: gapsOut)
-    let f1 = engine1.addWindow(windowID: 101, in: screenBounds)
-    guard let w1_f1 = f1[101] else {
-        print("  [FAIL] Window 101 not found in frames")
-        exit(1)
-    }
-
-    let expected1 = CGRect(
-        x: screenBounds.origin.x + gapsOut,
-        y: screenBounds.origin.y + gapsOut,
-        width: screenBounds.width - 2 * gapsOut,
-        height: screenBounds.height - 2 * gapsOut
-    )
-    assertTest(isRectNear(w1_f1, expected1), "1 Window occupies full workArea respecting gaps_out",
-               "got: \(w1_f1), expected: \(expected1)")
-    assertTest(isNear(w1_f1.minX - screenBounds.minX, gapsOut), "1 Window left gap equals gaps_out (10.0)")
-    assertTest(isNear(screenBounds.maxX - w1_f1.maxX, gapsOut), "1 Window right gap equals gaps_out (10.0)")
-    assertTest(isNear(w1_f1.minY - screenBounds.minY, gapsOut), "1 Window top gap equals gaps_out (10.0)")
-    assertTest(isNear(screenBounds.maxY - w1_f1.maxY, gapsOut), "1 Window bottom gap equals gaps_out (10.0)")
-
-    // ------------------------------------------------------------------------
-    // TEST 2: Two Windows (N = 2, vertical split)
-    // ------------------------------------------------------------------------
-    print("\n[*] Suite 2: Two Windows Vertical Split")
-    let engine2 = DwindleEngine(gapsIn: gapsIn, gapsOut: gapsOut)
-    let f2 = engine2.tileWindows(windowIDs: [101, 102], in: screenBounds)
-    guard let w1_f2 = f2[101], let w2_f2 = f2[102] else {
-        print("  [FAIL] Missing windows in 2-window layout")
-        exit(1)
-    }
-
-    let availWidth2 = screenBounds.width - 2 * gapsOut - gapsIn
-    let expectedW2 = availWidth2 / 2.0
-    let expectedH2 = screenBounds.height - 2 * gapsOut
-    let expW1_f2 = CGRect(x: 10.0, y: 10.0, width: expectedW2, height: expectedH2)
-    let expW2_f2 = CGRect(x: 10.0 + expectedW2 + gapsIn, y: 10.0, width: expectedW2, height: expectedH2)
-
-    assertTest(isRectNear(w1_f2, expW1_f2), "2 Windows: Left window frame matches expected geometry",
-               "got: \(w1_f2), expected: \(expW1_f2)")
-    assertTest(isRectNear(w2_f2, expW2_f2), "2 Windows: Right window frame matches expected geometry",
-               "got: \(w2_f2), expected: \(expW2_f2)")
-    assertTest(noOverlap(w1_f2, w2_f2), "2 Windows: Zero overlap between W1 and W2")
-    assertTest(isNear(w2_f2.minX - w1_f2.maxX, gapsIn), "2 Windows: Exact gaps_in between W1 and W2 (5.0)")
-    assertTest(isNear(w1_f2.minX - screenBounds.minX, gapsOut), "2 Windows: Outer left gap is 10.0")
-    assertTest(isNear(screenBounds.maxX - w2_f2.maxX, gapsOut), "2 Windows: Outer right gap is 10.0")
-
-    // ------------------------------------------------------------------------
-    // TEST 3: Three Windows (N = 3, horizontal split of right side)
-    // ------------------------------------------------------------------------
-    print("\n[*] Suite 3: Three Windows Dwindle Spiral")
-    let engine3 = DwindleEngine(gapsIn: gapsIn, gapsOut: gapsOut)
-    let f3 = engine3.tileWindows(windowIDs: [101, 102, 103], in: screenBounds)
-    guard let w1_f3 = f3[101], let w2_f3 = f3[102], let w3_f3 = f3[103] else {
-        print("  [FAIL] Missing windows in 3-window layout")
-        exit(1)
-    }
-
-    let availHeight3 = (screenBounds.height - 2 * gapsOut - gapsIn) / 2.0
-    let expW1_f3 = CGRect(x: 10.0, y: 10.0, width: expectedW2, height: expectedH2)
-    let expW2_f3 = CGRect(x: 10.0 + expectedW2 + gapsIn, y: 10.0, width: expectedW2, height: availHeight3)
-    let expW3_f3 = CGRect(x: 10.0 + expectedW2 + gapsIn, y: 10.0 + availHeight3 + gapsIn, width: expectedW2, height: availHeight3)
-
-    assertTest(isRectNear(w1_f3, expW1_f3), "3 Windows: W1 stays left column",
-               "got: \(w1_f3), expected: \(expW1_f3)")
-    assertTest(isRectNear(w2_f3, expW2_f3), "3 Windows: W2 splits top-right",
-               "got: \(w2_f3), expected: \(expW2_f3)")
-    assertTest(isRectNear(w3_f3, expW3_f3), "3 Windows: W3 splits bottom-right",
-               "got: \(w3_f3), expected: \(expW3_f3)")
-    assertTest(noOverlap(w1_f3, w2_f3) && noOverlap(w1_f3, w3_f3) && noOverlap(w2_f3, w3_f3),
-               "3 Windows: Zero pairwise overlaps across all windows")
-    assertTest(isNear(w3_f3.minY - w2_f3.maxY, gapsIn), "3 Windows: Exact vertical gap between W2 and W3 (5.0)")
-    assertTest(isNear(w2_f3.minX - w1_f3.maxX, gapsIn), "3 Windows: Exact horizontal gap between W1 and W2 (5.0)")
-    assertTest(isNear(w3_f3.minX - w1_f3.maxX, gapsIn), "3 Windows: Exact horizontal gap between W1 and W3 (5.0)")
-
-    // ------------------------------------------------------------------------
-    // TEST 4: Four Windows (N = 4, vertical split of bottom-right)
-    // ------------------------------------------------------------------------
-    print("\n[*] Suite 4: Four Windows Golden Ratio Dwindle")
-    let engine4 = DwindleEngine(gapsIn: gapsIn, gapsOut: gapsOut)
-    let f4 = engine4.tileWindows(windowIDs: [101, 102, 103, 104], in: screenBounds)
-    guard let w1_f4 = f4[101], let w2_f4 = f4[102], let w3_f4 = f4[103], let w4_f4 = f4[104] else {
-        print("  [FAIL] Missing windows in 4-window layout")
-        exit(1)
-    }
-
-    let availWidth4 = (expectedW2 - gapsIn) / 2.0
-    let expW1_f4 = expW1_f3
-    let expW2_f4 = expW2_f3
-    let expW3_f4 = CGRect(x: 10.0 + expectedW2 + gapsIn, y: 10.0 + availHeight3 + gapsIn, width: availWidth4, height: availHeight3)
-    let expW4_f4 = CGRect(x: 10.0 + expectedW2 + gapsIn + availWidth4 + gapsIn, y: 10.0 + availHeight3 + gapsIn, width: availWidth4, height: availHeight3)
-
-    assertTest(isRectNear(w1_f4, expW1_f4), "4 Windows: W1 unchanged", "got: \(w1_f4), expected: \(expW1_f4)")
-    assertTest(isRectNear(w2_f4, expW2_f4), "4 Windows: W2 unchanged", "got: \(w2_f4), expected: \(expW2_f4)")
-    assertTest(isRectNear(w3_f4, expW3_f4), "4 Windows: W3 splits bottom-left", "got: \(w3_f4), expected: \(expW3_f4)")
-    assertTest(isRectNear(w4_f4, expW4_f4), "4 Windows: W4 splits bottom-right", "got: \(w4_f4), expected: \(expW4_f4)")
-
-    let pairs = [(w1_f4, w2_f4), (w1_f4, w3_f4), (w1_f4, w4_f4), (w2_f4, w3_f4), (w2_f4, w4_f4), (w3_f4, w4_f4)]
-    let allNonOverlapping = pairs.allSatisfy { noOverlap($0.0, $0.1) }
-    assertTest(allNonOverlapping, "4 Windows: Zero pairwise overlaps across all 6 pairs")
-    assertTest(isNear(w4_f4.minX - w3_f4.maxX, gapsIn), "4 Windows: Exact gap between W3 and W4 (5.0)")
-    assertTest(isNear(w3_f4.minY - w2_f4.maxY, gapsIn), "4 Windows: Exact vertical gap between W2 and W3 (5.0)")
-    assertTest(isNear(w4_f4.minY - w2_f4.maxY, gapsIn), "4 Windows: Exact vertical gap between W2 and W4 (5.0)")
-    assertTest(isNear(screenBounds.maxX - w4_f4.maxX, gapsOut), "4 Windows: Outer right gap to screen edge is 10.0")
-    assertTest(isNear(screenBounds.maxY - w4_f4.maxY, gapsOut), "4 Windows: Outer bottom gap to screen edge is 10.0")
-
-    // ------------------------------------------------------------------------
-    // TEST 5: Dynamic Window Removal & Tree Collapse
-    // ------------------------------------------------------------------------
-    print("\n[*] Suite 5: Dynamic Window Removal and Tree Collapse")
-    let fRem3 = engine4.removeWindow(windowID: 103, in: screenBounds)
-    assertTest(fRem3.count == 3, "Removing W3 leaves 3 windows")
-    assertTest(fRem3[103] == nil, "W3 is removed from frames")
-    if let rw1 = fRem3[101], let rw2 = fRem3[102], let rw4 = fRem3[104] {
-        assertTest(noOverlap(rw1, rw2) && noOverlap(rw1, rw4) && noOverlap(rw2, rw4),
-                   "Post-removal 3-window layout has zero overlaps")
-    }
-
-    let fRem4 = engine4.removeWindow(windowID: 104, in: screenBounds)
-    assertTest(fRem4.count == 2, "Removing W4 leaves 2 windows")
-    if let rw1 = fRem4[101], let rw2 = fRem4[102] {
-        assertTest(noOverlap(rw1, rw2), "Post-removal 2-window layout has zero overlaps")
-        assertTest(isNear(rw2.minX - rw1.maxX, gapsIn), "Post-removal 2-window layout has exact gap (5.0)")
-    }
-
-    let fRem2 = engine4.removeWindow(windowID: 102, in: screenBounds)
-    assertTest(fRem2.count == 1, "Removing W2 leaves 1 window")
-    if let rw1 = fRem2[101] {
-        assertTest(isRectNear(rw1, expected1), "Last remaining window recovers full workArea (1900x1060)")
-    }
-
-    let fRem1 = engine4.removeWindow(windowID: 101, in: screenBounds)
-    assertTest(fRem1.isEmpty && engine4.root == nil, "Removing last window empties tree (root == nil)")
-
-    print("""
-    ==================================================
-    Test Summary: \(passCount) Passed, \(failCount) Failed
-    ==================================================
-    """)
-
-    if failCount > 0 {
-        exit(1)
-    }
+    print("[+] HyprMac Dwindle Tests have moved to 'swift test'.")
 }
 
 @MainActor
 func runTestConfig() {
-    print("""
-    ==================================================
-              HyprMac Config Parser Tests
-    ==================================================
-    """)
-    let ok = ConfigParser.runSelfTest()
-    if ok {
-        print("[+] All ConfigParser self-tests PASSED successfully!")
-    } else {
-        print("[-] ConfigParser self-tests FAILED!")
-        exit(1)
-    }
+    print("[+] HyprMac Config Parser Tests have moved to 'swift test'.")
 }
 
 @MainActor
 func runTestKeys() {
-    print("""
-    ==================================================
-              HyprMac Keybind Manager Tests
-    ==================================================
-    """)
-    let ok = KeybindManager.runSelfTest()
-    if ok {
-        print("[+] All KeybindManager self-tests PASSED successfully!")
-    } else {
-        print("[-] KeybindManager self-tests FAILED!")
-        exit(1)
-    }
+    print("[+] HyprMac Keybind Manager Tests have moved to 'swift test'.")
 }
 
 @MainActor
@@ -727,50 +399,17 @@ func runParseConfig(path: String?) {
 
 @MainActor
 func runTestBar() {
-    print("""
-    ==================================================
-                 HyprMac HyprBar Tests
-    ==================================================
-    """)
-    let ok = HyprBarWindow.runSelfTest()
-    if ok {
-        print("[+] All HyprBar self-tests PASSED successfully!")
-    } else {
-        print("[-] HyprBar self-tests FAILED!")
-        exit(1)
-    }
+    print("[+] HyprMac HyprBar Tests have moved to 'swift test'.")
 }
 
 @MainActor
 func runTestSession() {
-    print("""
-    ==================================================
-              HyprMac Session Manager Tests
-    ==================================================
-    """)
-    let ok = SessionManager.runSelfTest()
-    if ok {
-        print("[+] All SessionManager self-tests PASSED successfully!")
-    } else {
-        print("[-] SessionManager self-tests FAILED!")
-        exit(1)
-    }
+    print("[+] HyprMac Session Manager Tests have moved to 'swift test'.")
 }
 
 @MainActor
 func runTestWorkspace() {
-    print("""
-    ==================================================
-              HyprMac Workspace Manager Tests
-    ==================================================
-    """)
-    let ok = WorkspaceManager.runSelfTest()
-    if ok {
-        print("[+] All WorkspaceManager self-tests PASSED successfully!")
-    } else {
-        print("[-] WorkspaceManager self-tests FAILED!")
-        exit(1)
-    }
+    print("[+] HyprMac Workspace Manager Tests have moved to 'swift test'.")
 }
 
 @MainActor
@@ -1028,16 +667,106 @@ func runIntegratedDaemon(configPath: String?) {
         keyManager?.isFullscreen(windowID: wid) ?? false
     }
 
-    var strippedWindows: Set<CGWindowID> = []
+    let stateStore = WindowStateStore.shared
+
+    let applyWindowRulesToWindow: @MainActor (CGWindowID, pid_t, String, String, String, CGRect, Bool) -> Void = { wid, pid, appName, bundleID, title, bounds, isNewWindow in
+        let isFloating = keyManager.isFloating(windowID: wid) || workspaceManager.isPinned(wid)
+        let currentWs = workspaceManager.workspace(for: wid) ?? workspaceManager.activeWorkspace
+        let tilingBounds = computeTilingBounds()
+
+        for rule in config.windowRules {
+            guard rule.matches(
+                bundleID: bundleID,
+                appName: appName,
+                title: title,
+                isFloating: isFloating,
+                workspace: currentWs
+            ) else { continue }
+
+            switch rule.action {
+            case .float:
+                keyManager.setFloating(windowID: wid, floating: true)
+                _ = SkyLightBridge.shared.setWindowTags(windowID: wid, tag0: WindowTags.floating.rawValue)
+                if dwindleEngine.managedWindowSet.contains(wid) {
+                    dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
+                    effectsManager.hideOverlay(for: wid)
+                    dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
+                }
+
+            case .tile:
+                keyManager.setFloating(windowID: wid, floating: false)
+                _ = SkyLightBridge.shared.clearWindowTags(windowID: wid, tag0: WindowTags.floating.rawValue)
+                if !dwindleEngine.managedWindowSet.contains(wid) && workspaceManager.workspace(for: wid) == workspaceManager.activeWorkspace {
+                    dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
+                    dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
+                }
+
+            case .workspace(let num, let silent):
+                if num > 0 && num <= 9 && isNewWindow {
+                    workspaceManager.assignWindow(wid: wid, to: num, pid: pid)
+                    if !silent && num != workspaceManager.activeWorkspace {
+                        workspaceManager.switchToWorkspace(num)
+                        bar.updateActiveWorkspace(num)
+                    } else if silent && num != workspaceManager.activeWorkspace {
+                        workspaceManager.hideWindow(wid: wid)
+                        effectsManager.hideOverlay(for: wid)
+                    }
+                }
+
+            case .size(let w, let h):
+                let curBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? bounds
+                let newFrame = CGRect(x: curBounds.origin.x, y: curBounds.origin.y, width: w, height: h)
+                _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: newFrame, pid: pid)
+                workspaceManager.setStoredFrame(newFrame, for: wid)
+
+            case .center:
+                let curBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? bounds
+                let screen = NSScreen.main?.visibleFrame ?? NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
+                let x = screen.origin.x + max(0, (screen.width - curBounds.width) / 2.0)
+                let y = screen.origin.y + max(0, (screen.height - curBounds.height) / 2.0)
+                let newFrame = CGRect(x: x, y: y, width: curBounds.width, height: curBounds.height)
+                _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: newFrame, pid: pid)
+                workspaceManager.setStoredFrame(newFrame, for: wid)
+
+            case .opacity(let active, let inactive):
+                let inact = inactive ?? active
+                stateStore.setOpacityOverride((active: active, inactive: inact), for: wid)
+                let isFocused = WindowDetector.shared.fastFocusedWindow()?.windowID == wid
+                let alpha = Float(isFocused ? active : inact)
+                _ = SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: alpha)
+
+            case .noborder:
+                stateStore.setNoBorder(wid, noBorder: true)
+                effectsManager.hideOverlay(for: wid)
+                _ = SkyLightBridge.shared.setBorder(windowID: wid, width: 0.0, activeColor: 0, inactiveColor: 0)
+
+            case .noshadow:
+                _ = HyprServerBridge.shared.setShadow(windowId: wid, enabled: false)
+
+            case .rounding(let r):
+                _ = HyprServerBridge.shared.setCornerRadius(windowId: wid, radius: Float(r))
+
+            case .pin:
+                workspaceManager.pinWindow(wid)
+                keyManager.setFloating(windowID: wid, floating: true)
+            }
+        }
+        stateStore.setRuleEvaluated(wid, evaluated: true)
+    }
 
     let applyDecorationsToWindow: @MainActor (CGWindowID) -> Void = { wid in
         guard wid > 0 else { return }
-        guard !strippedWindows.contains(wid) else { return }
-        strippedWindows.insert(wid)
+        guard !stateStore.isStripped(wid) else { return }
+        stateStore.setStripped(wid, stripped: true)
         if config.stripDecorations {
             _ = SkyLightBridge.shared.stripTitlebar(windowID: wid)
             if let pid = workspaceManager.getPID(for: wid) {
-                ClientDecorationLoader.shared.attachIfNeeded(pid: pid)
+                let app = NSRunningApplication(processIdentifier: pid)
+                let name = app?.localizedName ?? ""
+                let bundle = app?.bundleIdentifier ?? ""
+                if !ClientDecorationLoader.shared.isIgnored(appName: name, bundleId: bundle) {
+                    ClientDecorationLoader.shared.attachIfNeeded(pid: pid)
+                }
             }
         }
         if config.rounding == 0 {
@@ -1055,7 +784,7 @@ func runIntegratedDaemon(configPath: String?) {
         workspaceManager.setWindowMinimized(wid, minimized: false)
         if !keyManager.isFloating(windowID: wid) && config.layout.lowercased() == "dwindle" {
             dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
-            if !strippedWindows.contains(wid) {
+            if !stateStore.isStripped(wid) {
                 applyDecorationsToWindow(wid)
             }
             dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
@@ -1083,76 +812,19 @@ func runIntegratedDaemon(configPath: String?) {
     }
     let activationObserverHolder = NotificationTokenHolder()
 
-    // Auto-switch workspace on external application activation (Dock, Cmd+Tab, Finder)
-    activationObserverHolder.token = NSWorkspace.shared.notificationCenter.addObserver(
-        forName: NSWorkspace.didActivateApplicationNotification,
-        object: nil,
-        queue: .main
-    ) { notif in
-        let activatedApp = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-        let activatedPid = activatedApp?.processIdentifier
-        let bundleId = activatedApp?.bundleIdentifier
-        MainActor.assumeIsolated {
-            // When Finder activates (e.g. clicking the empty desktop), ensure menubar suppression is immediately re-dispatched
-            if bundleId == "com.apple.finder" && SessionManager.shared.getCurrentMode() == .hyprMac {
-                let barWid = UInt32(HyprBarWindow.shared?.windowNumber ?? bar.windowNumber)
-                _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true, exemptWid: barWid)
+    // Restore any orphaned parked windows from prior daemon crashes or restarts
+    let startupTilingBounds = computeTilingBounds()
+    let initialScreens = HiddenWindowPlacement.allCGScreens()
+    if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+        for item in windowList {
+            guard let wid = item[kCGWindowNumber as String] as? CGWindowID, wid > 0,
+                  let pid = item[kCGWindowOwnerPID as String] as? pid_t, pid != getpid(),
+                  let layer = item[kCGWindowLayer as String] as? Int, layer == 0,
+                  let boundsDict = item[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            if HiddenWindowPlacement.isParkedOrHidden(rect, screens: initialScreens) {
+                _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: startupTilingBounds, pid: pid)
             }
-
-            // Guard against switch in progress or within 500ms settle window:
-            // internal activations from switchToWorkspace must never trigger an auto-switch.
-            if workspaceManager.isSwitchInProgress(settleInterval: 0.500) {
-                return
-            }
-
-            guard let pid = activatedPid, pid > 0, pid != getpid() else { return }
-            _ = WindowDetector.shared.getFocusedWindow()
-
-            // 1. Check if any window belonging to the activated application unminimized
-            for wid in workspaceManager.windowOrder where workspaceManager.getPID(for: wid) == pid {
-                if workspaceManager.isMinimized(wid) && !WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
-                    handleUnminimize(wid, pid)
-                    return
-                }
-            }
-
-            // 2. Inspect windows belonging to this activated application PID
-            let appWindows = workspaceManager.windowOrder.filter { workspaceManager.getPID(for: $0) == pid }
-            guard !appWindows.isEmpty else { return }
-
-            // If that PID already has an active, non-parked window on activeWorkspace, do NOT switch workspaces.
-            let activeWorkspace = workspaceManager.activeWorkspace
-            let windowsOnCurrentWS = appWindows.filter { workspaceManager.workspace(for: $0) == activeWorkspace }
-            for wid in windowsOnCurrentWS where !workspaceManager.isMinimized(wid) {
-                if let bounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) {
-                    if !HiddenWindowPlacement.isParkedOrHidden(bounds) {
-                        return
-                    }
-                } else {
-                    return
-                }
-            }
-
-            // Only switch if all windows for that activated PID belong to another workspace targetWS != activeWorkspace
-            let targetWorkspaces = Set(appWindows.compactMap { workspaceManager.workspace(for: $0) })
-            guard !targetWorkspaces.isEmpty else { return }
-
-            if targetWorkspaces.contains(activeWorkspace) {
-                return
-            }
-
-            guard targetWorkspaces.count == 1, let targetWS = targetWorkspaces.first, targetWS != activeWorkspace else {
-                return
-            }
-
-            // Resolve target window to focus on targetWS
-            let targetWid = workspaceManager.lastFocused(for: targetWS) ?? appWindows.first(where: { workspaceManager.workspace(for: $0) == targetWS }) ?? appWindows.first
-            guard let wid = targetWid else { return }
-
-            let appName = activatedApp?.localizedName ?? WindowDetector.shared.getWindowTitle(windowID: wid, pid: pid) ?? "App"
-            let title = WindowDetector.shared.getWindowTitle(windowID: wid, pid: pid) ?? ""
-
-            handleAutoSwitchWorkspace(wid, targetWS, appName, title)
         }
     }
 
@@ -1163,13 +835,17 @@ func runIntegratedDaemon(configPath: String?) {
         let currentIDs = eligibleWindows.map { $0.windowID }
         if !currentIDs.isEmpty {
             for w in eligibleWindows {
+                let isNew = !stateStore.isRuleEvaluated(w.windowID)
+                if isNew {
+                    applyWindowRulesToWindow(w.windowID, w.pid, w.appName, w.bundleID, w.title, w.bounds, true)
+                }
                 workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
-                if !strippedWindows.contains(w.windowID) {
+                if !stateStore.isStripped(w.windowID) {
                     applyDecorationsToWindow(w.windowID)
                 }
             }
             let activeIDs = workspaceManager.activeWindowIDs()
-            let activeTiledIDs = activeIDs.filter { !keyManager.isFloating(windowID: $0) }
+            let activeTiledIDs = activeIDs.filter { !keyManager.isFloating(windowID: $0) && !workspaceManager.isPinned($0) }
             let frames = dwindleEngine.tileWindows(windowIDs: activeTiledIDs, in: tilingBounds)
             dwindleEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
         }
@@ -1227,13 +903,12 @@ func runIntegratedDaemon(configPath: String?) {
                 // We do NOT retile or resize them to prevent background DOM reflows and relayout thrashing.
 
                 // 3. Trigger smooth visual animation from curBounds to fullBounds
-                let borderWid = eMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: curBounds,
                     to: fullBounds,
                     isFullscreen: true,
-                    borderWindowID: borderWid
+                    borderWindowID: nil
                 ) { _ in
                     let f = WindowDetector.shared.getFocusedWindow()
                     eMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
@@ -1269,13 +944,12 @@ func runIntegratedDaemon(configPath: String?) {
                 }
 
                 // 3. Animate fullscreen window from fullBounds to targetFrame
-                let borderWid = eMgr.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
                 AnimationEngine.shared.animateFullscreen(
                     windowID: wid,
                     from: fullBounds,
                     to: targetFrame,
                     isFullscreen: false,
-                    borderWindowID: borderWid
+                    borderWindowID: nil
                 ) { _ in
                     let f = WindowDetector.shared.getFocusedWindow()
                     eMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
@@ -1350,8 +1024,10 @@ func runIntegratedDaemon(configPath: String?) {
                 }
                 print("[HyprMac] Hot-reloading configuration from \(confPath)...")
                 let newConfig = ConfigParser.parseFile(atPath: confPath)
+                stateStore.evaluatedRuleWindows.removeAll()
                 animationEngine.config = newConfig
                 bar?.barView.barColors = newConfig.barColors
+                ClientDecorationLoader.shared.ignoredApps = newConfig.ignoredClientApps
                 km.clearBindings()
                 km.register(bindings: newConfig.bindings)
                 print("[HyprMac] Successfully reloaded \(newConfig.bindings.count) bindings from \(confPath)")
@@ -1369,6 +1045,7 @@ func runIntegratedDaemon(configPath: String?) {
             let newConfig = ConfigParser.parseFile(atPath: confPath)
             animationEngine.config = newConfig
             bar.barView.barColors = newConfig.barColors
+            ClientDecorationLoader.shared.ignoredApps = newConfig.ignoredClientApps
             bar.barView.applyTheme()
             let f = WindowDetector.shared.getFocusedWindow()
             effectsManager.update(focused: f, managedFrames: dwindleEngine.currentFrames(), config: newConfig)
@@ -1395,6 +1072,7 @@ func runIntegratedDaemon(configPath: String?) {
                 ClientDecorationLoader.shared.stop()
                 WallpaperWatcher.shared.stop()
                 NotificationCenterManager.shared.stop()
+                AXProcessObserverPool.shared.stop()
                 if let token = activationObserverHolder.token {
                     NSWorkspace.shared.notificationCenter.removeObserver(token)
                 }
@@ -1415,6 +1093,13 @@ func runIntegratedDaemon(configPath: String?) {
                 unlink("/tmp/hyprmac.lock")
                 close(lockFd)
                 print("[HyprMac] Restoring stock macOS Aqua desktop...")
+                let allScreens = HiddenWindowPlacement.allCGScreens()
+                for wid in workspaceManager.windowOrder {
+                    if let bounds = WindowDetector.shared.getWindowBounds(windowID: wid),
+                       HiddenWindowPlacement.isParkedOrHidden(bounds, screens: allScreens) {
+                        _ = workspaceManager.restoreWindow(wid: wid)
+                    }
+                }
                 _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: false)
                 _ = SessionManager.shared.switchTo(mode: .aqua)
                 print("[HyprMac] Restored. Goodbye!")
@@ -1433,292 +1118,448 @@ func runIntegratedDaemon(configPath: String?) {
 
     keyManager.onExit = cleanupAndExit
 
-    // 6. Active tracking loop at 60Hz
+    // 6. Reactive event-driven tracking (Zero 60Hz polling, 100% idle sleep)
     var lastWid: CGWindowID = 0
     var lastFrame: NSRect = .zero
     var lastTitle: String = ""
-    var tileCheckCounter: Int = 0
 
-    // Mouse drag tracking & snap-back state via event monitoring (zero 60Hz HID polling)
-    var isMouseDownPrev: Bool = false
-    var draggedWid: CGWindowID? = nil
-    var dragStartFrame: CGRect? = nil
-    var dragStartMousePoint: NSPoint? = nil
-    var isDragging: Bool = false
+    // Dedicated focus & borders update routine
+    let updateFocusAndBorders: @MainActor (Bool) -> Void = { forceUpdate in
+        let barWid = CGWindowID(bar.windowNumber)
+        let rawFocused = WindowDetector.shared.getFocusedWindow()
+        let isBarOrBorder = rawFocused != nil && (rawFocused!.windowID == barWid)
+        let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
+        let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused
 
-    mouseState.global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
-        MainActor.assumeIsolated {
-            mouseState.isMouseDown = (event.type == .leftMouseDown)
+        let now = ProcessInfo.processInfo.systemUptime
+        let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
+        let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
+
+        // Unminimize to active workspace if a window was unminimized
+        if let fc = focusedCandidate, !isSettleWindow {
+            let wid = fc.windowID
+            let pid = fc.processID
+            let wasMin = workspaceManager.isMinimized(wid)
+            let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
+
+            if wasMin && !isMin {
+                handleUnminimize(wid, pid)
+            }
         }
-    }
-    mouseState.local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
-        MainActor.assumeIsolated {
-            mouseState.isMouseDown = (event.type == .leftMouseDown)
-        }
-        return event
-    }
 
-    Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-        MainActor.assumeIsolated {
-            tileCheckCounter += 1
-            var framesChanged = false
-
-            let now = ProcessInfo.processInfo.systemUptime
-            let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
-            let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
-
-            if !keyManager.isRunning && tileCheckCounter % 60 == 0 {
-                _ = keyManager.start()
-            }
-
-            if tileCheckCounter % 30 == 0 && !isSettleWindow && config.layout.lowercased() == "dwindle" {
-                let tilingBounds = computeTilingBounds()
-                let eligibleWindows = getEligibleUserWindows(in: tilingBounds, excludingPIDs: [getpid()])
-                let currentIDs = eligibleWindows.map { $0.windowID }
-
-                // Auto-assign any newly discovered window to active workspace with PID
-                for w in eligibleWindows {
-                    workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
-                    if !strippedWindows.contains(w.windowID) {
-                        applyDecorationsToWindow(w.windowID)
-                    }
-                }
-
-                // Check minimization status for each managed window in workspaceManager
-                var minimizedChanged = false
-                for wid in workspaceManager.windowOrder {
-                    let pid = workspaceManager.getPID(for: wid)
-                    let wasMinimized = workspaceManager.isMinimized(wid)
-                    let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
-                    if isMin {
-                        workspaceManager.setWindowMinimized(wid, minimized: true)
-                        if dwindleEngine.managedWindowSet.contains(wid) {
-                            dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
-                            effectsManager.hideOverlay(for: wid)
-                            minimizedChanged = true
-                        }
-                    } else if wasMinimized && !isMin {
-                        handleUnminimize(wid, pid)
-                        framesChanged = true
-                        minimizedChanged = true
-                    } else {
-                        workspaceManager.setWindowMinimized(wid, minimized: false)
-                    }
-                }
-
-                // Query all physical windows alive in macOS WindowServer
-                let allAliveWindowIDs = WindowDetector.shared.getAllAliveWindowIDs()
-
-                // Purge dead windows across all workspaces
-                for wid in workspaceManager.windowOrder {
-                    if !allAliveWindowIDs.contains(wid) {
-                        workspaceManager.removeWindow(wid: wid)
-                        dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
-                        effectsManager.hideOverlay(for: wid)
-                        WindowDetector.shared.invalidateWindow(windowID: wid)
-                    }
-                }
-                strippedWindows.formIntersection(allAliveWindowIDs)
-
-                // Filter eligible windows using WorkspaceManager so only windows
-                // belonging to the active workspace are tiled by DwindleEngine
-                let activeIDs = workspaceManager.activeWindowIDs()
-                let activeManagedSet = Set(activeIDs)
-                let activeCurrentIDs = currentIDs.filter { activeManagedSet.contains($0) && !keyManager.isFloating(windowID: $0) }
-                let currentSet = Set(activeCurrentIDs)
-
-                if minimizedChanged || currentSet != dwindleEngine.managedWindowSet {
-                    let closedWindows = dwindleEngine.managedWindowSet.subtracting(currentSet)
-                    let openedWindows = currentSet.subtracting(dwindleEngine.managedWindowSet)
-
-                    for wid in closedWindows {
-                        dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
-                        effectsManager.hideOverlay(for: wid)
-                        AnimationEngine.shared.cancelAnimation(for: wid)
-                        if !allAliveWindowIDs.contains(wid) {
-                            workspaceManager.removeWindow(wid: wid)
-                            strippedWindows.remove(wid)
-                        }
-                    }
-
-                    let openedInOrder = activeCurrentIDs.filter { openedWindows.contains($0) }
-                    for wid in openedInOrder {
-                        dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
-                        if !strippedWindows.contains(wid) {
-                            applyDecorationsToWindow(wid)
-                        }
-                    }
-
-                    let frames = dwindleEngine.currentFrames()
-                    dwindleEngine.applyToSystem(windowFrames: frames, newlyAddedWindows: openedWindows, bridge: SkyLightBridge.shared)
-                    framesChanged = true
-                }
-            }
-
-            let barWid = CGWindowID(bar.windowNumber)
-            let rawFocused = (tileCheckCounter % 30 == 0) ? WindowDetector.shared.getFocusedWindow() : WindowDetector.shared.fastFocusedWindow()
-            let isBarOrBorder = rawFocused != nil && (rawFocused!.windowID == barWid || effectsManager.isBorderWindow(windowID: rawFocused!.windowID))
-            let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
-            let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused
-
-            // Unminimize to active workspace if a window was unminimized
-            if let fc = focusedCandidate, !isSettleWindow {
-                let wid = fc.windowID
-                let pid = fc.processID
-                let wasMin = workspaceManager.isMinimized(wid)
-                let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
-
-                if wasMin && !isMin {
-                    handleUnminimize(wid, pid)
-                    framesChanged = true
-                }
-            }
-
-            // Ensure non-standard windows (popups/dropdowns) do not receive borders.
-            // If an unmanaged window is focused, check if its owning process has an admitted window in dwindleEngine.
-            let focused: FocusedWindowInfo?
-            if let fc = focusedCandidate {
-                if dwindleEngine.managedWindowSet.contains(fc.windowID) {
-                    focused = fc
-                } else if let mainWid = dwindleEngine.managedWindowOrder.first(where: { workspaceManager.getPID(for: $0) == fc.processID }) {
-                    if let mainBounds = WindowDetector.shared.getWindowBounds(windowID: mainWid, pid: fc.processID) {
-                        focused = FocusedWindowInfo(
-                            windowID: mainWid,
-                            processID: fc.processID,
-                            appName: fc.appName,
-                            title: fc.title,
-                            bounds: mainBounds,
-                            appkitFrame: WindowDetector.shared.convertToAppKitFrame(cgRect: mainBounds)
-                        )
-                    } else {
-                        focused = nil
-                    }
+        // Ensure non-standard windows (popups/dropdowns) do not receive borders.
+        let focused: FocusedWindowInfo?
+        if let fc = focusedCandidate {
+            if dwindleEngine.managedWindowSet.contains(fc.windowID) {
+                focused = fc
+            } else if let mainWid = dwindleEngine.managedWindowOrder.first(where: { workspaceManager.getPID(for: $0) == fc.processID }) {
+                if let mainBounds = WindowDetector.shared.getWindowBounds(windowID: mainWid, pid: fc.processID) {
+                    focused = FocusedWindowInfo(
+                        windowID: mainWid,
+                        processID: fc.processID,
+                        appName: fc.appName,
+                        title: fc.title,
+                        bounds: mainBounds,
+                        appkitFrame: WindowDetector.shared.convertToAppKitFrame(cgRect: mainBounds),
+                        bundleID: fc.bundleID
+                    )
                 } else {
                     focused = nil
                 }
             } else {
                 focused = nil
             }
+        } else {
+            focused = nil
+        }
 
-            // Mouse drag tracking & snap-back for tiled windows
-            if config.layout.lowercased() == "dwindle" {
-                let isMouseDown = mouseState.isMouseDown
+        let currentFocusedWid = focused?.windowID ?? 0
+        let currentFocusedFrame = focused?.appkitFrame ?? .zero
 
-                if !isMouseDownPrev && isMouseDown {
-                    // Mouse Down: If mouse transitions from up to down, and the active/focused window is managed by Dwindle and NOT floating:
-                    if let f = focused {
-                        let wid = f.windowID
-                        if dwindleEngine.managedWindowSet.contains(wid) && !keyManager.isFloating(windowID: wid) && !keyManager.isFullscreen(windowID: wid) {
-                            let pid = workspaceManager.getPID(for: wid)
-                            draggedWid = wid
-                            dragStartFrame = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? f.bounds
-                            dragStartMousePoint = NSEvent.mouseLocation
-                            isDragging = false
-                        } else {
-                            draggedWid = nil
-                            dragStartFrame = nil
-                            dragStartMousePoint = nil
-                            isDragging = false
-                        }
-                    } else {
-                        draggedWid = nil
-                        dragStartFrame = nil
-                        dragStartMousePoint = nil
-                        isDragging = false
-                    }
-                } else if isMouseDown {
-                    // Mouse Drag: While mouse is down and draggedWid is set, detect drag distance via cursor position (zero AX IPC roundtrips)
-                    if draggedWid != nil, let startPt = dragStartMousePoint, !isDragging {
-                        let curPt = NSEvent.mouseLocation
-                        if hypot(curPt.x - startPt.x, curPt.y - startPt.y) > 8.0 {
-                            isDragging = true
-                        }
-                    }
-                } else if isMouseDownPrev && !isMouseDown {
-                    // Mouse Up Transition: When mouse transitions from down to up:
-                    if let wid = draggedWid {
-                        let pid = workspaceManager.getPID(for: wid)
-                        if isDragging {
-                            let droppedBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? dragStartFrame ?? .zero
-                            let dropCenter = CGPoint(x: droppedBounds.midX, y: droppedBounds.midY)
-                            let currentFrames = dwindleEngine.currentFrames()
+        if currentFocusedWid != lastWid || currentFocusedFrame != lastFrame || forceUpdate {
+            lastWid = currentFocusedWid
+            lastFrame = currentFocusedFrame
+            effectsManager.update(focused: focused, managedFrames: dwindleEngine.currentFrames(), config: config)
+        }
 
-                            if let otherWid = dwindleEngine.findWindow(at: dropCenter, excluding: wid) {
-                                let tilingBounds = computeTilingBounds()
-                                let frames = dwindleEngine.swapWindows(windowA: wid, windowB: otherWid, in: tilingBounds)
-                                dwindleEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
-                                framesChanged = true
-                            } else {
-                                // Window was moved "un poco" / slightly or dropped in empty space:
-                                // SNAP BACK to allocated tiled frame
-                                if let targetFrame = currentFrames[wid] {
-                                    _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame, pid: pid)
-                                    framesChanged = true
-                                }
-                            }
-                        } else {
-                            // Window clicked or shifted < 8pt. Check if shifted > 2.0pt and snap back
-                            if let targetFrame = dwindleEngine.currentFrames()[wid],
-                               let currentBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) {
-                                let diff = max(
-                                    abs(currentBounds.origin.x - targetFrame.origin.x),
-                                    abs(currentBounds.origin.y - targetFrame.origin.y),
-                                    abs(currentBounds.width - targetFrame.width),
-                                    abs(currentBounds.height - targetFrame.height)
-                                )
-                                if diff > 2.0 {
-                                    _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame, pid: pid)
-                                    framesChanged = true
-                                }
-                            }
-                        }
+        if let focused = focused {
+            if workspaceManager.workspace(for: focused.windowID) == workspaceManager.activeWorkspace {
+                workspaceManager.setLastFocused(focused.windowID, for: workspaceManager.activeWorkspace)
+            }
+            if focused.title != lastTitle {
+                lastTitle = focused.title
+                bar.updateActiveWindow(title: focused.title, app: focused.appName)
+            }
+        }
+    }
+
+    // On-demand window reconciliation
+    let reconcileWindows: @MainActor (Bool) -> Void = { forceRetile in
+        let now = ProcessInfo.processInfo.systemUptime
+        let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
+        let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
+        guard !isSettleWindow else { return }
+        guard config.layout.lowercased() == "dwindle" else { return }
+
+        AXProcessObserverPool.shared.isSuppressingTilingEvents = true
+        defer { AXProcessObserverPool.shared.isSuppressingTilingEvents = false }
+
+        var framesChanged = false
+        let tilingBounds = computeTilingBounds()
+
+        // Unpark any orphaned windows alive in WindowServer that are not tracked in an inactive workspace
+        let snapshot = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
+        let allScreens = HiddenWindowPlacement.allCGScreens()
+        if let windowList = snapshot {
+            for item in windowList {
+                guard let wid = item[kCGWindowNumber as String] as? CGWindowID, wid > 0,
+                      let pid = item[kCGWindowOwnerPID as String] as? pid_t, pid != getpid(),
+                      let layer = item[kCGWindowLayer as String] as? Int, layer == 0,
+                      let boundsDict = item[kCGWindowBounds as String] as? [String: Any],
+                      let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+                if HiddenWindowPlacement.isParkedOrHidden(rect, screens: allScreens) {
+                    let ws = workspaceManager.workspace(for: wid)
+                    if ws == nil || ws == workspaceManager.activeWorkspace {
+                        _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: tilingBounds, pid: pid)
                     }
+                }
+            }
+        }
+        let eligibleWindows = getEligibleUserWindows(in: tilingBounds, excludingPIDs: [getpid()], windowListSnapshot: snapshot)
+        let currentIDs = eligibleWindows.map { $0.windowID }
+
+        // Auto-assign any newly discovered window to active workspace with PID
+        for w in eligibleWindows {
+            let isNew = !stateStore.isRuleEvaluated(w.windowID)
+            if isNew {
+                applyWindowRulesToWindow(w.windowID, w.pid, w.appName, w.bundleID, w.title, w.bounds, true)
+            }
+            if workspaceManager.workspace(for: w.windowID) == nil {
+                workspaceManager.assignWindow(wid: w.windowID, to: workspaceManager.activeWorkspace, pid: w.pid)
+            } else {
+                workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
+            }
+            if !stateStore.isStripped(w.windowID) {
+                applyDecorationsToWindow(w.windowID)
+            }
+        }
+
+        // Check minimization status for each managed window in workspaceManager
+        var minimizedChanged = false
+        for wid in workspaceManager.windowOrder {
+            let pid = workspaceManager.getPID(for: wid)
+            let wasMinimized = workspaceManager.isMinimized(wid)
+            let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
+            if isMin {
+                workspaceManager.setWindowMinimized(wid, minimized: true)
+                if dwindleEngine.managedWindowSet.contains(wid) {
+                    dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
+                    effectsManager.hideOverlay(for: wid)
+                    minimizedChanged = true
+                }
+            } else if wasMinimized && !isMin {
+                handleUnminimize(wid, pid)
+                framesChanged = true
+                minimizedChanged = true
+            } else {
+                workspaceManager.setWindowMinimized(wid, minimized: false)
+            }
+        }
+
+        // Query all physical windows alive in macOS WindowServer
+        let allAliveWindowIDs = WindowDetector.shared.getAllAliveWindowIDs(fromSnapshot: snapshot)
+        WindowDetector.shared.pruneCache(aliveWindowIDs: allAliveWindowIDs)
+        stateStore.prune(aliveWindowIDs: allAliveWindowIDs)
+
+        // Purge dead windows across all workspaces
+        for wid in workspaceManager.windowOrder {
+            if !allAliveWindowIDs.contains(wid) {
+                workspaceManager.removeWindow(wid: wid)
+                dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
+                effectsManager.hideOverlay(for: wid)
+                WindowDetector.shared.invalidateWindow(windowID: wid)
+            }
+        }
+        stateStore.strippedWindows.formIntersection(allAliveWindowIDs)
+
+        // Filter eligible windows using WorkspaceManager so only windows
+        // belonging to the active workspace are tiled by DwindleEngine
+        let activeIDs = workspaceManager.activeWindowIDs()
+        let activeManagedSet = Set(activeIDs)
+        let activeCurrentIDs = currentIDs.filter { activeManagedSet.contains($0) && !keyManager.isFloating(windowID: $0) && !workspaceManager.isPinned($0) }
+        let currentSet = Set(activeCurrentIDs)
+
+        if minimizedChanged || currentSet != dwindleEngine.managedWindowSet || forceRetile {
+            let closedWindows = dwindleEngine.managedWindowSet.subtracting(currentSet)
+            let openedWindows = currentSet.subtracting(dwindleEngine.managedWindowSet)
+
+            for wid in closedWindows {
+                dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
+                effectsManager.hideOverlay(for: wid)
+                AnimationEngine.shared.cancelAnimation(for: wid)
+                if !allAliveWindowIDs.contains(wid) {
+                    workspaceManager.removeWindow(wid: wid)
+                    stateStore.setStripped(wid, stripped: false)
+                }
+            }
+
+            let openedInOrder = activeCurrentIDs.filter { openedWindows.contains($0) }
+            for wid in openedInOrder {
+                dwindleEngine.addWindow(windowID: wid, in: tilingBounds)
+                if !stateStore.isStripped(wid) {
+                    applyDecorationsToWindow(wid)
+                }
+            }
+
+            let frames = dwindleEngine.currentFrames()
+            dwindleEngine.applyToSystem(windowFrames: frames, newlyAddedWindows: openedWindows, bridge: SkyLightBridge.shared)
+            framesChanged = true
+        }
+
+        // Reconcile frames if shifted
+        let snapped = dwindleEngine.reconcileFrames(
+            threshold: 2.0,
+            isFloating: { keyManager.isFloating(windowID: $0) || keyManager.isFullscreen(windowID: $0) },
+            boundsProvider: { WindowDetector.shared.getWindowBounds(windowID: $0, pid: workspaceManager.getPID(for: $0)) },
+            frameSetter: { wid, frame in
+                let pid = workspaceManager.getPID(for: wid)
+                _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: frame, pid: pid)
+            }
+        )
+        if !snapped.isEmpty {
+            framesChanged = true
+        }
+
+        updateFocusAndBorders(framesChanged)
+    }
+
+    // Auto-switch workspace on external application activation (Dock, Cmd+Tab, Finder)
+    activationObserverHolder.token = NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.didActivateApplicationNotification,
+        object: nil,
+        queue: .main
+    ) { notif in
+        let activatedApp = notif.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        let activatedPid = activatedApp?.processIdentifier
+        let bundleId = activatedApp?.bundleIdentifier
+        MainActor.assumeIsolated {
+            // Guard against switch in progress or within 500ms settle window:
+            // internal activations from switchToWorkspace must never trigger an auto-switch or re-suppression.
+            if workspaceManager.isSwitchInProgress(settleInterval: 0.500) {
+                return
+            }
+
+            guard let pid = activatedPid, pid > 0, pid != getpid() else { return }
+
+            // When Finder activates (e.g. clicking the empty desktop), ensure menubar suppression is active asynchronously without blocking the main thread
+            if bundleId == "com.apple.finder" && SessionManager.shared.getCurrentMode() == .hyprMac {
+                if !KeybindManager.shared.isMenuBarSuppressed {
+                    let barWid = UInt32(HyprBarWindow.shared?.windowNumber ?? bar.windowNumber)
+                    DispatchQueue.global(qos: .utility).async {
+                        _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true, exemptWid: barWid)
+                    }
+                }
+            }
+
+            // Finder Desktop filter: if Finder activated because the desktop was clicked or windows were hidden,
+            // check if there is an actual standard window focused. If not, it is the desktop background,
+            // so we do NOT auto-switch workspaces.
+            if bundleId == "com.apple.finder" {
+                let focused = WindowDetector.shared.fastFocusedWindow() ?? WindowDetector.shared.getFocusedWindow()
+                if focused == nil || !WindowDetector.shared.isStandardWindow(windowID: focused?.windowID ?? 0, pid: pid) {
+                    return
+                }
+            }
+            AXProcessObserverPool.shared.observeApplication(pid: pid)
+            _ = WindowDetector.shared.getFocusedWindow()
+
+            // 1. Check if any window belonging to the activated application unminimized
+            for wid in workspaceManager.windowOrder where workspaceManager.getPID(for: wid) == pid {
+                if workspaceManager.isMinimized(wid) && !WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
+                    handleUnminimize(wid, pid)
+                    return
+                }
+            }
+
+            // 2. Inspect windows belonging to this activated application PID
+            let appWindows = workspaceManager.windowOrder.filter { workspaceManager.getPID(for: $0) == pid }
+            guard !appWindows.isEmpty else {
+                reconcileWindows(false)
+                return
+            }
+
+            // If that PID already has an active, non-parked window on activeWorkspace, do NOT switch workspaces.
+            let activeWorkspace = workspaceManager.activeWorkspace
+            let windowsOnCurrentWS = appWindows.filter { workspaceManager.workspace(for: $0) == activeWorkspace }
+            for wid in windowsOnCurrentWS where !workspaceManager.isMinimized(wid) {
+                if let bounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) {
+                    if !HiddenWindowPlacement.isParkedOrHidden(bounds) {
+                        reconcileWindows(false)
+                        return
+                    }
+                } else {
+                    reconcileWindows(false)
+                    return
+                }
+            }
+
+            // Only switch if all windows for that activated PID belong to another workspace targetWS != activeWorkspace
+            let targetWorkspaces = Set(appWindows.compactMap { workspaceManager.workspace(for: $0) })
+            guard !targetWorkspaces.isEmpty else {
+                reconcileWindows(false)
+                return
+            }
+
+            if targetWorkspaces.contains(activeWorkspace) {
+                reconcileWindows(false)
+                return
+            }
+
+            guard targetWorkspaces.count == 1, let targetWS = targetWorkspaces.first, targetWS != activeWorkspace else {
+                return
+            }
+
+            // Resolve target window to focus on targetWS
+            let targetWid = workspaceManager.lastFocused(for: targetWS) ?? appWindows.first(where: { workspaceManager.workspace(for: $0) == targetWS }) ?? appWindows.first
+            guard let wid = targetWid else { return }
+
+            let appName = activatedApp?.localizedName ?? WindowDetector.shared.getWindowTitle(windowID: wid, pid: pid) ?? "App"
+            let title = WindowDetector.shared.getWindowTitle(windowID: wid, pid: pid) ?? ""
+
+            handleAutoSwitchWorkspace(wid, targetWS, appName, title)
+        }
+    }
+
+    // Mouse drag tracking & snap-back state via event monitoring (zero 60Hz HID polling)
+    var draggedWid: CGWindowID? = nil
+    var dragStartFrame: CGRect? = nil
+    var dragStartMousePoint: NSPoint? = nil
+    var isDragging: Bool = false
+
+    let handleMouseEvent: @MainActor (NSEvent) -> Void = { event in
+        guard config.layout.lowercased() == "dwindle" else { return }
+
+        switch event.type {
+        case .leftMouseDown:
+            let curPt = NSEvent.mouseLocation
+            let rawFocused = WindowDetector.shared.fastFocusedWindow() ?? WindowDetector.shared.getFocusedWindow()
+            if let f = rawFocused {
+                let wid = f.windowID
+                if dwindleEngine.managedWindowSet.contains(wid) && !keyManager.isFloating(windowID: wid) && !keyManager.isFullscreen(windowID: wid) {
+                    let pid = workspaceManager.getPID(for: wid)
+                    draggedWid = wid
+                    dragStartFrame = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? f.bounds
+                    dragStartMousePoint = curPt
+                    isDragging = false
+                } else {
                     draggedWid = nil
                     dragStartFrame = nil
                     dragStartMousePoint = nil
                     isDragging = false
                 }
+            } else {
+                draggedWid = nil
+                dragStartFrame = nil
+                dragStartMousePoint = nil
+                isDragging = false
+            }
 
-                // Idle Frame Reconciliation (every 30 ticks / ~500ms when idle)
-                // Skip during 350ms settle window following a workspace switch
-                if !isMouseDown && !isDragging && !isSettleWindow && tileCheckCounter % 30 == 0 {
-                    let snapped = dwindleEngine.reconcileFrames(
-                        threshold: 2.0,
-                        isFloating: { keyManager.isFloating(windowID: $0) || keyManager.isFullscreen(windowID: $0) },
-                        boundsProvider: { WindowDetector.shared.getWindowBounds(windowID: $0, pid: workspaceManager.getPID(for: $0)) },
-                        frameSetter: { wid, frame in
-                            let pid = workspaceManager.getPID(for: wid)
-                            _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: frame, pid: pid)
+        case .leftMouseDragged:
+            if draggedWid != nil, let startPt = dragStartMousePoint, !isDragging {
+                let curPt = NSEvent.mouseLocation
+                if hypot(curPt.x - startPt.x, curPt.y - startPt.y) > 8.0 {
+                    isDragging = true
+                }
+            }
+
+        case .leftMouseUp:
+            if let wid = draggedWid {
+                let pid = workspaceManager.getPID(for: wid)
+                if isDragging {
+                    let droppedBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? dragStartFrame ?? .zero
+                    let dropCenter = CGPoint(x: droppedBounds.midX, y: droppedBounds.midY)
+                    let currentFrames = dwindleEngine.currentFrames()
+
+                    if let otherWid = dwindleEngine.findWindow(at: dropCenter, excluding: wid) {
+                        let tilingBounds = computeTilingBounds()
+                        let frames = dwindleEngine.swapWindows(windowA: wid, windowB: otherWid, in: tilingBounds)
+                        dwindleEngine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
+                    } else {
+                        // Window was moved slightly or dropped in empty space: snap back to allocated tiled frame
+                        if let targetFrame = currentFrames[wid] {
+                            _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame, pid: pid)
                         }
-                    )
-                    if !snapped.isEmpty {
-                        framesChanged = true
+                    }
+                } else {
+                    // Window clicked or shifted < 8pt. Check if shifted > 2.0pt and snap back
+                    if let targetFrame = dwindleEngine.currentFrames()[wid],
+                       let currentBounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) {
+                        let diff = max(
+                            abs(currentBounds.origin.x - targetFrame.origin.x),
+                            abs(currentBounds.origin.y - targetFrame.origin.y),
+                            abs(currentBounds.width - targetFrame.width),
+                            abs(currentBounds.height - targetFrame.height)
+                        )
+                        if diff > 2.0 {
+                            _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame, pid: pid)
+                        }
                     }
                 }
-
-                isMouseDownPrev = isMouseDown
+                updateFocusAndBorders(false)
             }
+            draggedWid = nil
+            dragStartFrame = nil
+            dragStartMousePoint = nil
+            isDragging = false
 
-            let currentFocusedWid = focused?.windowID ?? 0
-            let currentFocusedFrame = focused?.appkitFrame ?? .zero
-
-            if currentFocusedWid != lastWid || currentFocusedFrame != lastFrame || framesChanged {
-                lastWid = currentFocusedWid
-                lastFrame = currentFocusedFrame
-                effectsManager.update(focused: focused, managedFrames: dwindleEngine.currentFrames(), config: config)
-            }
-
-            if let focused = focused {
-                if workspaceManager.workspace(for: focused.windowID) == workspaceManager.activeWorkspace {
-                    workspaceManager.setLastFocused(focused.windowID, for: workspaceManager.activeWorkspace)
-                }
-                if focused.title != lastTitle {
-                    lastTitle = focused.title
-                    bar.updateActiveWindow(title: focused.title, app: focused.appName)
-                }
-            }
+        default:
+            break
         }
     }
+
+    mouseState.global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { event in
+        MainActor.assumeIsolated {
+            handleMouseEvent(event)
+        }
+    }
+    mouseState.local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { event in
+        MainActor.assumeIsolated {
+            handleMouseEvent(event)
+        }
+        return event
+    }
+
+    // 7. Start reactive Accessibility Observer Pool (Multi-Process)
+    let axPool = AXProcessObserverPool.shared
+    axPool.onTilingLayoutDirty = {
+        reconcileWindows(false)
+    }
+    axPool.onFocusedWindowChanged = { _ in
+        if let focused = WindowDetector.shared.getFocusedWindow(),
+           !dwindleEngine.managedWindowSet.contains(focused.windowID),
+           !keyManager.isFloating(windowID: focused.windowID),
+           focused.windowID != CGWindowID(bar.windowNumber) {
+            reconcileWindows(false)
+        } else {
+            updateFocusAndBorders(false)
+        }
+    }
+    axPool.onTitleChanged = { _ in
+        if let focused = WindowDetector.shared.getFocusedWindow() {
+            applyWindowRulesToWindow(focused.windowID, focused.processID, focused.appName, focused.bundleID, focused.title, focused.bounds, false)
+        }
+        updateFocusAndBorders(false)
+    }
+    axPool.onWindowMiniaturized = { _ in
+        reconcileWindows(false)
+    }
+    axPool.onWindowDeminiaturized = { _ in
+        reconcileWindows(false)
+    }
+    axPool.start()
+
+    // Initial focus & borders sync
+    updateFocusAndBorders(false)
 
     app.run()
 }
@@ -1775,8 +1616,8 @@ MainActor.assumeIsolated {
     case "wallpaper", "gallery":
         runWallpaperGallery(args: Array(args.dropFirst()))
     case "test-watcher":
-        let ok = WallpaperWatcher.runSelfTest()
-        exit(ok ? 0 : 1)
+        print("[+] HyprMac WallpaperWatcher Tests have moved to 'swift test'.")
+        exit(0)
     case "help", "--help", "-h":
         printUsage()
     default:

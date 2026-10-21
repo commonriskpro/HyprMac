@@ -1,6 +1,100 @@
 import Foundation
 import CoreGraphics
 
+/// Criterion for matching windows against declarative window rules.
+public enum HyprRuleCriterion: Equatable, Hashable, Sendable {
+    case `class`(pattern: String)
+    case title(pattern: String)
+    case floating(Bool)
+    case workspace(Int)
+}
+
+/// Declarative action applied to matching windows.
+public enum HyprRuleAction: Equatable, Hashable, Sendable {
+    case float
+    case tile
+    case workspace(number: Int, silent: Bool)
+    case size(width: CGFloat, height: CGFloat)
+    case center
+    case opacity(active: Double, inactive: Double?)
+    case noborder
+    case noshadow
+    case rounding(CGFloat)
+    case pin
+}
+
+/// Window rule defining an action and a set of criteria to match against candidate windows.
+public struct HyprWindowRule: Equatable, Hashable, Sendable {
+    public var action: HyprRuleAction
+    public var criteria: [HyprRuleCriterion]
+
+    public init(action: HyprRuleAction, criteria: [HyprRuleCriterion]) {
+        self.action = action
+        self.criteria = criteria
+    }
+
+    /// Helper to test whether a regex or substring pattern matches a target string.
+    public static func regexMatches(pattern: String, in target: String) -> Bool {
+        if pattern == ".*" || pattern == "^.*$" { return true }
+        if target.isEmpty {
+            return pattern.isEmpty || pattern == "^$"
+        }
+        // 1. Try standard regex matching
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+            let nsRange = NSRange(target.startIndex..<target.endIndex, in: target)
+            if regex.firstMatch(in: target, options: [], range: nsRange) != nil {
+                return true
+            }
+        }
+        // 2. Try case-insensitive regex matching
+        if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+            let nsRange = NSRange(target.startIndex..<target.endIndex, in: target)
+            if regex.firstMatch(in: target, options: [], range: nsRange) != nil {
+                return true
+            }
+        }
+        // 3. Fallback to exact or case-insensitive contains if pattern is plain string
+        if target.localizedCaseInsensitiveContains(pattern) || target.caseInsensitiveCompare(pattern) == .orderedSame {
+            return true
+        }
+        return false
+    }
+
+    /// Returns true if all criteria match the provided window attributes.
+    public func matches(
+        bundleID: String,
+        appName: String,
+        title: String,
+        isFloating: Bool,
+        workspace: Int
+    ) -> Bool {
+        guard !criteria.isEmpty else { return false }
+        for criterion in criteria {
+            switch criterion {
+            case .class(let pattern):
+                let matchesBundle = Self.regexMatches(pattern: pattern, in: bundleID)
+                let matchesApp = Self.regexMatches(pattern: pattern, in: appName)
+                if !matchesBundle && !matchesApp {
+                    return false
+                }
+            case .title(let pattern):
+                if !Self.regexMatches(pattern: pattern, in: title) {
+                    return false
+                }
+            case .floating(let expected):
+                if isFloating != expected {
+                    return false
+                }
+            case .workspace(let expected):
+                if workspace != expected {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+}
+
 /// Represents a cubic bezier curve definition: `bezier = name, x0, y0, x1, y1`
 public struct HyprBezier: Equatable, Hashable, Sendable {
     public var name: String
@@ -329,6 +423,8 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var clockFormat: String = "h:mm a  EEE"
     /// Map of user-defined and resolved configuration variables (e.g. `$mainMod: "SUPER"`).
     public var variables: [String: String] = [:]
+    /// Declarative window rules parsed from `windowrule` and `windowrulev2` directives.
+    public var windowRules: [HyprWindowRule] = []
 
     /// Included configuration file paths from `source` directives.
     public var sourceFiles: [String] = []
@@ -383,6 +479,7 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         clockFormat: String = "h:mm a  EEE",
         bindings: [HyprBinding] = [],
         variables: [String: String] = [:],
+        windowRules: [HyprWindowRule] = [],
         sourceFiles: [String] = [],
         rawSettings: [String: String] = [:],
         sections: [String: [String: String]] = [:]
@@ -405,6 +502,7 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         self.clockFormat = clockFormat
         self.bindings = bindings
         self.variables = variables
+        self.windowRules = windowRules
         self.sourceFiles = sourceFiles
         self.rawSettings = rawSettings
         self.sections = sections

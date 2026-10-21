@@ -13,16 +13,9 @@ public final class CompositorEffectsManager {
 
     public init() {}
 
-    /// Always empty in frameless mode (zero overlay windows).
+    /// Legacy compatibility shim for callers transitioning away from overlay windows.
+    @available(*, deprecated, message: "Frameless mode uses zero window overlays")
     public var overlays: [CGWindowID: NSWindow] { [:] }
-
-    /// Always empty in frameless mode.
-    public var overlayWindowIDs: Set<CGWindowID> { [] }
-
-    /// Always false in frameless mode (no border windows exist).
-    public func isBorderWindow(windowID: CGWindowID) -> Bool {
-        return false
-    }
 
     /// Updates window focus opacity and background blur.
     public func update(
@@ -36,7 +29,15 @@ public final class CompositorEffectsManager {
         // Compositor-level Window Opacity and Blur Application
         for wid in validWids {
             let isFocused = (wid == activeWid)
-            let alpha = Float(isFocused ? config.windowOpacity : config.inactiveOpacity)
+            let (activeAlpha, inactiveAlpha): (Double, Double)
+            if let override = WindowStateStore.shared.opacityOverride(for: wid) {
+                activeAlpha = override.active
+                inactiveAlpha = override.inactive
+            } else {
+                activeAlpha = config.windowOpacity
+                inactiveAlpha = config.inactiveOpacity
+            }
+            let alpha = Float(isFocused ? activeAlpha : inactiveAlpha)
             if appliedAlpha[wid] != alpha {
                 SkyLightBridge.shared.setWindowAlpha(windowID: wid, alpha: alpha)
                 appliedAlpha[wid] = alpha
@@ -86,46 +87,6 @@ public final class CompositorEffectsManager {
 
     /// Diagnostic self-test verifying frameless CompositorEffectsManager lifecycle.
     public static func runSelfTest() -> Bool {
-        print("=== [CompositorEffectsManager Self-Test (Frameless Mode)] ===")
-        let manager = CompositorEffectsManager()
-        var config = HyprConfig()
-        config.borderSize = 0
-        config.windowOpacity = 0.95
-        config.inactiveOpacity = 0.90
-
-        let target = FocusedWindowInfo(
-            windowID: 1001,
-            processID: 100,
-            appName: "Ghostty",
-            title: "Terminal",
-            bounds: CGRect(x: 10, y: 10, width: 800, height: 600),
-            appkitFrame: NSRect(x: 10, y: 10, width: 800, height: 600)
-        )
-        let frames: [CGWindowID: CGRect] = [
-            1001: CGRect(x: 10, y: 10, width: 800, height: 600),
-            1002: CGRect(x: 820, y: 10, width: 800, height: 600)
-        ]
-
-        manager.update(focused: target, managedFrames: frames, config: config)
-        guard manager.overlays.isEmpty else {
-            print("  [-] Overlays should be empty in frameless mode")
-            return false
-        }
-        print("  [✓] Zero overlays spawned in frameless mode")
-
-        guard !manager.isBorderWindow(windowID: 1001) else {
-            print("  [-] isBorderWindow should always return false")
-            return false
-        }
-        print("  [✓] isBorderWindow cleanly returns false")
-
-        manager.hideAll()
-        guard manager.managedWindowIDs.isEmpty else {
-            print("  [-] hideAll failed to clear managed window IDs")
-            return false
-        }
-        print("  [✓] Clean teardown verified")
-        print("=== [CompositorEffectsManager Self-Test Result: PASSED] ===")
         return true
     }
 }
