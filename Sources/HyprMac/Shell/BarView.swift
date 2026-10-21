@@ -7,6 +7,7 @@ import CoreAudio
 import Darwin
 import CoreWLAN
 import CoreLocation
+import Network
 
 /// Battery status representation read from hardware power sources
 public struct BatteryStatus: Sendable, Equatable {
@@ -92,6 +93,7 @@ public enum BatteryMonitor {
 /// Reader for hardware CPU & Memory utilization using Mach host statistics
 public enum HardwareMonitor {
     nonisolated(unsafe) private static var lastTicks: (user: UInt32, sys: UInt32, idle: UInt32, nice: UInt32)?
+    private static let hostPort: mach_port_t = mach_host_self()
 
     public static func currentCPULoad() -> Int {
         let count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size)
@@ -99,7 +101,7 @@ public enum HardwareMonitor {
         var cpuLoad = host_cpu_load_info()
         let kerr = withUnsafeMutablePointer(to: &cpuLoad) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &actualCount)
+                host_statistics(hostPort, HOST_CPU_LOAD_INFO, $0, &actualCount)
             }
         }
         guard kerr == KERN_SUCCESS else { return 24 }
@@ -133,7 +135,7 @@ public enum HardwareMonitor {
         var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
         let kerr = withUnsafeMutablePointer(to: &stats) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+                host_statistics64(hostPort, HOST_VM_INFO64, $0, &count)
             }
         }
         guard kerr == KERN_SUCCESS else { return 35 }
@@ -151,6 +153,12 @@ public enum HardwareMonitor {
 
 /// Reader for system output volume via CoreAudio / AudioToolbox
 public enum VolumeMonitor {
+    public static var shared: VolumeMonitor.Type { VolumeMonitor.self }
+
+    nonisolated(unsafe) private static var trackedSystemBlock: AudioObjectPropertyListenerBlock?
+    nonisolated(unsafe) private static var trackedDeviceBlock: AudioObjectPropertyListenerBlock?
+    nonisolated(unsafe) private static var trackedDeviceID: AudioDeviceID?
+
     public static func currentVolume() -> Int {
         var defaultOutputDeviceID = AudioDeviceID(0)
         var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -229,50 +237,109 @@ public enum VolumeMonitor {
         }
     }
 
-    nonisolated(unsafe) private static var volumeListenerBlock: AudioObjectPropertyListenerBlock?
-
-    public static func startMonitoring(onChange: @escaping @Sendable (Int) -> Void) {
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        let block: AudioObjectPropertyListenerBlock = { _, _ in
-            let vol = currentVolume()
-            onChange(vol)
+    public static func stopMonitoring() {
+        if let block = trackedSystemBlock {
+            var propertyAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &propertyAddress,
+                DispatchQueue.main,
+                block
+            )
+            trackedSystemBlock = nil
         }
-        volumeListenerBlock = block
-
-        AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            DispatchQueue.main,
-            block
-        )
-
-        var defaultOutputDeviceID = AudioDeviceID(0)
-        var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
-        if AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0,
-            nil,
-            &propertySize,
-            &defaultOutputDeviceID
-        ) == noErr && defaultOutputDeviceID != 0 {
+        if let block = trackedDeviceBlock, let deviceID = trackedDeviceID, deviceID != 0 {
             var volAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
                 mScope: kAudioObjectPropertyScopeOutput,
                 mElement: kAudioObjectPropertyElementMain
             )
-            AudioObjectAddPropertyListenerBlock(
-                defaultOutputDeviceID,
+            AudioObjectRemovePropertyListenerBlock(
+                deviceID,
                 &volAddress,
                 DispatchQueue.main,
                 block
             )
+            trackedDeviceBlock = nil
+            trackedDeviceID = nil
         }
+    }
+
+    public static func startMonitoring(onChange: @escaping @Sendable (Int) -> Void) {
+        stopMonitoring()
+
+        func attachDeviceListener() {
+            if let block = trackedDeviceBlock, let deviceID = trackedDeviceID, deviceID != 0 {
+                var volAddress = AudioObjectPropertyAddress(
+                    mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+                    mScope: kAudioObjectPropertyScopeOutput,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+                AudioObjectRemovePropertyListenerBlock(deviceID, &volAddress, DispatchQueue.main, block)
+                trackedDeviceBlock = nil
+                trackedDeviceID = nil
+            }
+
+            var defaultOutputDeviceID = AudioDeviceID(0)
+            var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+            var propertyAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            if AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &propertyAddress,
+                0,
+                nil,
+                &propertySize,
+                &defaultOutputDeviceID
+            ) == noErr && defaultOutputDeviceID != 0 {
+                var volAddress = AudioObjectPropertyAddress(
+                    mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+                    mScope: kAudioObjectPropertyScopeOutput,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+                let devBlock: AudioObjectPropertyListenerBlock = { _, _ in
+                    let vol = currentVolume()
+                    onChange(vol)
+                }
+                trackedDeviceBlock = devBlock
+                trackedDeviceID = defaultOutputDeviceID
+                AudioObjectAddPropertyListenerBlock(
+                    defaultOutputDeviceID,
+                    &volAddress,
+                    DispatchQueue.main,
+                    devBlock
+                )
+            }
+        }
+
+        var systemAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let sysBlock: AudioObjectPropertyListenerBlock = { _, _ in
+            attachDeviceListener()
+            let vol = currentVolume()
+            onChange(vol)
+        }
+        trackedSystemBlock = sysBlock
+
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &systemAddress,
+            DispatchQueue.main,
+            sysBlock
+        )
+
+        attachDeviceListener()
         onChange(currentVolume())
     }
 }
@@ -305,8 +372,8 @@ public enum NetworkMonitor {
     nonisolated(unsafe) private static var wifiObserver: WiFiEventObserver?
     nonisolated(unsafe) private static var locationManager: CLLocationManager?
     nonisolated(unsafe) private static var locationDelegate: LocationDelegate?
-    nonisolated(unsafe) private static var isIpconfigRunning: Bool = false
-    nonisolated(unsafe) private static var lastIpconfigTime: TimeInterval = 0
+    nonisolated(unsafe) private static var pathMonitor: NWPathMonitor?
+    private static let monitorQueue = DispatchQueue(label: "org.hyprmac.network-monitor", qos: .utility)
 
     public static func resetCache() {
         refreshAsync()
@@ -340,6 +407,20 @@ public enum NetworkMonitor {
         _ = try? client.startMonitoringEvent(with: .powerDidChange)
         _ = try? client.startMonitoringEvent(with: .bssidDidChange)
 
+        // Reactive kernel-level network path monitoring via NWPathMonitor (zero subprocesses, zero ipconfig polling)
+        let monitor = NWPathMonitor()
+        pathMonitor = monitor
+        monitor.pathUpdateHandler = { path in
+            DispatchQueue.main.async {
+                if path.status != .satisfied {
+                    cachedSSID = "Disconnected"
+                } else {
+                    refreshAsync()
+                }
+            }
+        }
+        monitor.start(queue: monitorQueue)
+
         refreshAsync()
     }
 
@@ -361,47 +442,19 @@ public enum NetworkMonitor {
             }
         }
 
-        // 2. Asynchronous background fallback to ipconfig (never blocks the main thread, single-flight & debounced to 10s)
-        let now = ProcessInfo.processInfo.systemUptime
-        guard !isIpconfigRunning && (now - lastIpconfigTime >= 10.0) else { return }
-        isIpconfigRunning = true
-        lastIpconfigTime = now
-
-        DispatchQueue.global(qos: .utility).async {
-            defer { isIpconfigRunning = false }
-            let iface = CWWiFiClient.shared().interface()?.interfaceName ?? "en0"
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/sbin/ipconfig")
-            task.arguments = ["getsummary", iface]
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = Pipe()
-
-            do {
-                try task.run()
-                task.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let str = String(data: data, encoding: .utf8) {
-                    for line in str.components(separatedBy: .newlines) {
-                        let trimmed = line.trimmingCharacters(in: .whitespaces)
-                        if trimmed.hasPrefix("SSID : ") {
-                            let ssid = trimmed.replacingOccurrences(of: "SSID : ", with: "").trimmingCharacters(in: .whitespaces)
-                            if !ssid.isEmpty && ssid != "<redacted>" {
-                                DispatchQueue.main.async {
-                                    self.cachedSSID = ssid
-                                }
-                                return
-                            }
-                        }
-                    }
-                }
-            } catch {}
-
-            DispatchQueue.main.async {
-                if self.cachedSSID == "<redacted>" {
-                    self.cachedSSID = "Wi-Fi"
-                }
+        // 2. Reactive Network.framework state fallback (zero fork/exec subprocesses)
+        if let currentPath = pathMonitor?.currentPath {
+            if currentPath.status != .satisfied {
+                cachedSSID = "Disconnected"
+            } else if currentPath.usesInterfaceType(.wiredEthernet) {
+                cachedSSID = "Ethernet"
+            } else if currentPath.usesInterfaceType(.wifi) {
+                cachedSSID = "Wi-Fi"
+            } else {
+                cachedSSID = "Connected"
             }
+        } else {
+            cachedSSID = "Wi-Fi"
         }
     }
 
@@ -675,6 +728,7 @@ public final class BarView: NSView {
             leftCapsule.cornerRadius = cornerRadius
             centerCapsule.cornerRadius = cornerRadius
             rightCapsule.cornerRadius = cornerRadius
+            musicCapsule.cornerRadius = cornerRadius
         }
     }
 
@@ -695,6 +749,7 @@ public final class BarView: NSView {
             leftCapsule.surfaceAlpha = capsuleAlpha
             centerCapsule.surfaceAlpha = capsuleAlpha
             rightCapsule.surfaceAlpha = capsuleAlpha
+            musicCapsule.surfaceAlpha = capsuleAlpha
         }
     }
 
@@ -710,6 +765,18 @@ public final class BarView: NSView {
     public let leftCapsule = FloatingCapsuleView(cornerRadius: 5.0)
     public let centerCapsule = FloatingCapsuleView(cornerRadius: 5.0)
     public let rightCapsule = FloatingCapsuleView(cornerRadius: 5.0)
+    public let musicCapsule = FloatingCapsuleView(cornerRadius: 5.0)
+
+    // Music Module Elements: Status Icon, Track Title, Controls (Prev, Play/Pause, Next)
+    public let musicStatusLabel = NSTextField(labelWithString: "󰝚")
+    public let musicTrackContainer = ClickablePill()
+    public let musicTrackLabel = NSTextField(labelWithString: "")
+    public let musicPrevButton = ClickablePill()
+    public let musicPrevLabel = NSTextField(labelWithString: "󰒮")
+    public let musicPlayPauseButton = ClickablePill()
+    public let musicPlayPauseLabel = NSTextField(labelWithString: "󰏤")
+    public let musicNextButton = ClickablePill()
+    public let musicNextLabel = NSTextField(labelWithString: "󰒭")
 
     // Left Island Elements: Japanese Kanji Workspaces + Compact Window Title
     private let workspacesStack = NSStackView()
@@ -807,6 +874,9 @@ public final class BarView: NSView {
         // 2. Build Center Island
         setupCenterIsland()
 
+        // 2b. Build Music Module inside Center Island
+        setupMusicModule()
+
         // 3. Build Right Island
         setupRightIsland()
 
@@ -873,6 +943,108 @@ public final class BarView: NSView {
         volumeLabel.alignment = .center
         volumeLabel.font = .barFont(ofSize: 11, weight: .medium)
         centerCapsule.stackView.addArrangedSubview(volumeLabel)
+    }
+
+    // MARK: - Music Module Setup
+
+    private func setupMusicModule() {
+        musicCapsule.translatesAutoresizingMaskIntoConstraints = false
+        musicCapsule.isHidden = true // Auto-hidden until active music is detected
+        musicCapsule.stackView.spacing = 6.0
+
+        // 1. Status Icon ("󰝚" or "󰏤")
+        musicStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        musicStatusLabel.isEditable = false
+        musicStatusLabel.isSelectable = false
+        musicStatusLabel.font = .barFont(ofSize: 11, weight: .bold)
+        musicStatusLabel.stringValue = "󰝚"
+        musicCapsule.stackView.addArrangedSubview(musicStatusLabel)
+
+        // 2. Track Title Clickable Container (activates music player)
+        musicTrackContainer.translatesAutoresizingMaskIntoConstraints = false
+        musicTrackContainer.onClick = {
+            MusicMonitor.shared.activatePlayerApp()
+        }
+
+        musicTrackLabel.translatesAutoresizingMaskIntoConstraints = false
+        musicTrackLabel.isEditable = false
+        musicTrackLabel.isSelectable = false
+        musicTrackLabel.font = .barFont(ofSize: 11, weight: .medium)
+        musicTrackLabel.lineBreakMode = .byTruncatingTail
+        musicTrackLabel.maximumNumberOfLines = 1
+
+        let maxTrackWidth = musicTrackLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 180.0)
+        maxTrackWidth.priority = .defaultHigh
+        maxTrackWidth.isActive = true
+
+        musicTrackContainer.addSubview(musicTrackLabel)
+        NSLayoutConstraint.activate([
+            musicTrackLabel.topAnchor.constraint(equalTo: musicTrackContainer.topAnchor),
+            musicTrackLabel.bottomAnchor.constraint(equalTo: musicTrackContainer.bottomAnchor),
+            musicTrackLabel.leadingAnchor.constraint(equalTo: musicTrackContainer.leadingAnchor),
+            musicTrackLabel.trailingAnchor.constraint(equalTo: musicTrackContainer.trailingAnchor)
+        ])
+        musicCapsule.stackView.addArrangedSubview(musicTrackContainer)
+
+        // 3. Previous Button (󰒮)
+        musicPrevButton.translatesAutoresizingMaskIntoConstraints = false
+        musicPrevButton.onClick = {
+            MusicMonitor.shared.previousTrack()
+        }
+        musicPrevLabel.translatesAutoresizingMaskIntoConstraints = false
+        musicPrevLabel.isEditable = false
+        musicPrevLabel.isSelectable = false
+        musicPrevLabel.font = .barFont(ofSize: 10, weight: .bold)
+        musicPrevLabel.stringValue = "󰒮"
+        musicPrevButton.addSubview(musicPrevLabel)
+        NSLayoutConstraint.activate([
+            musicPrevLabel.centerXAnchor.constraint(equalTo: musicPrevButton.centerXAnchor),
+            musicPrevLabel.centerYAnchor.constraint(equalTo: musicPrevButton.centerYAnchor),
+            musicPrevLabel.leadingAnchor.constraint(equalTo: musicPrevButton.leadingAnchor, constant: 1.0),
+            musicPrevLabel.trailingAnchor.constraint(equalTo: musicPrevButton.trailingAnchor, constant: -1.0)
+        ])
+        musicCapsule.stackView.addArrangedSubview(musicPrevButton)
+
+        // 4. Play/Pause Button (󰏤 / 󰐊)
+        musicPlayPauseButton.translatesAutoresizingMaskIntoConstraints = false
+        musicPlayPauseButton.onClick = {
+            MusicMonitor.shared.togglePlayPause()
+        }
+        musicPlayPauseLabel.translatesAutoresizingMaskIntoConstraints = false
+        musicPlayPauseLabel.isEditable = false
+        musicPlayPauseLabel.isSelectable = false
+        musicPlayPauseLabel.font = .barFont(ofSize: 10, weight: .bold)
+        musicPlayPauseLabel.stringValue = "󰏤"
+        musicPlayPauseButton.addSubview(musicPlayPauseLabel)
+        NSLayoutConstraint.activate([
+            musicPlayPauseLabel.centerXAnchor.constraint(equalTo: musicPlayPauseButton.centerXAnchor),
+            musicPlayPauseLabel.centerYAnchor.constraint(equalTo: musicPlayPauseButton.centerYAnchor),
+            musicPlayPauseLabel.leadingAnchor.constraint(equalTo: musicPlayPauseButton.leadingAnchor, constant: 1.0),
+            musicPlayPauseLabel.trailingAnchor.constraint(equalTo: musicPlayPauseButton.trailingAnchor, constant: -1.0)
+        ])
+        musicCapsule.stackView.addArrangedSubview(musicPlayPauseButton)
+
+        // 5. Next Button (󰒭)
+        musicNextButton.translatesAutoresizingMaskIntoConstraints = false
+        musicNextButton.onClick = {
+            MusicMonitor.shared.nextTrack()
+        }
+        musicNextLabel.translatesAutoresizingMaskIntoConstraints = false
+        musicNextLabel.isEditable = false
+        musicNextLabel.isSelectable = false
+        musicNextLabel.font = .barFont(ofSize: 10, weight: .bold)
+        musicNextLabel.stringValue = "󰒭"
+        musicNextButton.addSubview(musicNextLabel)
+        NSLayoutConstraint.activate([
+            musicNextLabel.centerXAnchor.constraint(equalTo: musicNextButton.centerXAnchor),
+            musicNextLabel.centerYAnchor.constraint(equalTo: musicNextButton.centerYAnchor),
+            musicNextLabel.leadingAnchor.constraint(equalTo: musicNextButton.leadingAnchor, constant: 1.0),
+            musicNextLabel.trailingAnchor.constraint(equalTo: musicNextButton.trailingAnchor, constant: -1.0)
+        ])
+        musicCapsule.stackView.addArrangedSubview(musicNextButton)
+
+        // Insert at the beginning of center island
+        centerCapsule.stackView.insertArrangedSubview(musicCapsule, at: 0)
     }
 
     // MARK: - Right Island Setup
@@ -978,6 +1150,8 @@ public final class BarView: NSView {
         centerCapsule.updateTheme()
         rightCapsule.theme = theme
         rightCapsule.updateTheme()
+        musicCapsule.theme = theme
+        musicCapsule.updateTheme()
 
         let actBg = theme.resolveColor(barColors.workspacesActiveBg, fallback: theme.primary)
         let actFg = theme.resolveColor(barColors.workspacesActiveFg, fallback: theme.onPrimary)
@@ -1000,10 +1174,16 @@ public final class BarView: NSView {
         cpuLabel.textColor = theme.resolveColor(barColors.cpu, fallback: theme.secondary)
         memLabel.textColor = theme.resolveColor(barColors.memory, fallback: theme.secondary)
         powerLabel.textColor = theme.resolveColor(barColors.power, fallback: theme.error)
+        musicStatusLabel.textColor = theme.primary
+        musicTrackLabel.textColor = theme.onSurface
+        musicPrevLabel.textColor = theme.secondary
+        musicPlayPauseLabel.textColor = theme.primary
+        musicNextLabel.textColor = theme.secondary
 
         leftCapsule.needsDisplay = true
         centerCapsule.needsDisplay = true
         rightCapsule.needsDisplay = true
+        musicCapsule.needsDisplay = true
         needsDisplay = true
     }
 
@@ -1110,6 +1290,26 @@ public final class BarView: NSView {
         }
     }
 
+    // MARK: - Music Module Updates
+
+    /// Updates the music player capsule state and visibility.
+    public func updateMusicTrack(_ track: MusicTrackInfo?) {
+        guard let track = track else {
+            musicCapsule.isHidden = true
+            musicTrackLabel.stringValue = ""
+            centerCapsule.needsLayout = true
+            needsLayout = true
+            return
+        }
+
+        musicCapsule.isHidden = false
+        musicTrackLabel.stringValue = track.formattedText
+        musicStatusLabel.stringValue = track.isPlaying ? "󰝚" : "󰏤"
+        musicPlayPauseLabel.stringValue = track.isPlaying ? "󰏤" : "󰐊"
+        centerCapsule.needsLayout = true
+        needsLayout = true
+    }
+
     public func startTimers() {
         // Initial setup
         updateClock()
@@ -1118,6 +1318,13 @@ public final class BarView: NSView {
         updateVolume()
         updateNetwork()
         updateNotificationIndicator()
+
+        // Wire and start MusicMonitor
+        MusicMonitor.shared.onTrackChange = { [weak self] track in
+            self?.updateMusicTrack(track)
+        }
+        MusicMonitor.shared.start()
+        updateMusicTrack(MusicMonitor.shared.currentTrack)
 
         // Event-driven listeners for Battery, Volume and Notifications
         BatteryMonitor.startMonitoring { [weak self] _ in
@@ -1181,6 +1388,8 @@ public final class BarView: NSView {
         updateTimer?.invalidate()
         updateTimer = nil
         BatteryMonitor.stopMonitoring()
+        VolumeMonitor.stopMonitoring()
+        MusicMonitor.shared.stop()
         NotificationCenter.default.removeObserver(self, name: NotificationCenterManager.stateDidChangeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.screensDidSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.removeObserver(self, name: NSWorkspace.screensDidWakeNotification, object: nil)
