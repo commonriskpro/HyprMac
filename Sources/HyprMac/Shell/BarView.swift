@@ -597,11 +597,19 @@ public final class FloatingCapsuleView: NSView {
         }
     }
 
+    public var isFrameless: Bool = false {
+        didSet {
+            updateAppearance()
+        }
+    }
+
     private let clipView = NSView()
     private let visualEffectView = NSVisualEffectView()
     private let darkOverlay = NSView()
     public let stackView = NSStackView()
     public var contentView: NSView { clipView }
+    private var stackLeadingConstraint: NSLayoutConstraint?
+    private var stackTrailingConstraint: NSLayoutConstraint?
 
     public init(cornerRadius: CGFloat = 5.0, theme: HyprTheme = .shared, surfaceAlpha: CGFloat = 0.65) {
         self.cornerRadius = cornerRadius
@@ -653,6 +661,11 @@ public final class FloatingCapsuleView: NSView {
         stackView.alignment = .centerY
         clipView.addSubview(stackView)
 
+        let leading = stackView.leadingAnchor.constraint(equalTo: clipView.leadingAnchor, constant: 8.0)
+        let trailing = stackView.trailingAnchor.constraint(equalTo: clipView.trailingAnchor, constant: -8.0)
+        self.stackLeadingConstraint = leading
+        self.stackTrailingConstraint = trailing
+
         NSLayoutConstraint.activate([
             clipView.topAnchor.constraint(equalTo: topAnchor),
             clipView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -671,12 +684,13 @@ public final class FloatingCapsuleView: NSView {
 
             stackView.topAnchor.constraint(equalTo: clipView.topAnchor),
             stackView.bottomAnchor.constraint(equalTo: clipView.bottomAnchor),
-            stackView.leadingAnchor.constraint(equalTo: clipView.leadingAnchor, constant: 8.0),
-            stackView.trailingAnchor.constraint(equalTo: clipView.trailingAnchor, constant: -8.0)
+            leading,
+            trailing
         ])
 
         updateCornerRadius()
         updateTheme()
+        updateAppearance()
     }
 
     private func updateCornerRadius() {
@@ -687,8 +701,36 @@ public final class FloatingCapsuleView: NSView {
     }
 
     public func updateTheme() {
-        darkOverlay.layer?.backgroundColor = theme.surface.withAlphaComponent(surfaceAlpha).cgColor
-        darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        if isFrameless {
+            darkOverlay.layer?.backgroundColor = NSColor.clear.cgColor
+            darkOverlay.layer?.borderWidth = 0.0
+            darkOverlay.layer?.borderColor = NSColor.clear.cgColor
+        } else {
+            darkOverlay.layer?.backgroundColor = theme.surface.withAlphaComponent(surfaceAlpha).cgColor
+            darkOverlay.layer?.borderWidth = 1.0
+            darkOverlay.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        }
+    }
+
+    private func updateAppearance() {
+        if isFrameless {
+            layer?.shadowOpacity = 0.0
+            layer?.shadowPath = nil
+            visualEffectView.isHidden = true
+            darkOverlay.layer?.backgroundColor = NSColor.clear.cgColor
+            darkOverlay.layer?.borderWidth = 0.0
+            darkOverlay.layer?.borderColor = NSColor.clear.cgColor
+            stackLeadingConstraint?.constant = 0.0
+            stackTrailingConstraint?.constant = 0.0
+        } else {
+            layer?.shadowOpacity = 0.25
+            visualEffectView.isHidden = false
+            darkOverlay.layer?.borderWidth = 1.0
+            stackLeadingConstraint?.constant = 8.0
+            stackTrailingConstraint?.constant = -8.0
+            updateTheme()
+        }
+        needsLayout = true
     }
 
     private var previousRenderedFrame: NSRect = .zero
@@ -696,7 +738,10 @@ public final class FloatingCapsuleView: NSView {
     public override func layout() {
         super.layout()
         let currentFrame = frame
-        if bounds.width > 0 && bounds.height > 0 {
+        if isFrameless {
+            layer?.shadowOpacity = 0.0
+            layer?.shadowPath = nil
+        } else if bounds.width > 0 && bounds.height > 0 {
             layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
         }
 
@@ -949,6 +994,7 @@ public final class BarView: NSView {
 
     private func setupMusicModule() {
         musicCapsule.translatesAutoresizingMaskIntoConstraints = false
+        musicCapsule.isFrameless = true
         musicCapsule.isHidden = true // Auto-hidden until active music is detected
         musicCapsule.stackView.spacing = 6.0
 
