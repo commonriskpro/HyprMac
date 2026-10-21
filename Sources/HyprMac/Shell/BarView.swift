@@ -1016,6 +1016,7 @@ public final class BarView: NSView {
         musicTrackLabel.isEditable = false
         musicTrackLabel.isSelectable = false
         musicTrackLabel.font = .barFont(ofSize: 11, weight: .medium)
+        musicTrackLabel.textColor = theme.resolveColor(barColors.music, fallback: theme.secondary)
         musicTrackLabel.lineBreakMode = .byTruncatingTail
         musicTrackLabel.maximumNumberOfLines = 1
 
@@ -1221,7 +1222,7 @@ public final class BarView: NSView {
         memLabel.textColor = theme.resolveColor(barColors.memory, fallback: theme.secondary)
         powerLabel.textColor = theme.resolveColor(barColors.power, fallback: theme.error)
         musicStatusLabel.textColor = theme.primary
-        musicTrackLabel.textColor = theme.onSurface
+        musicTrackLabel.textColor = theme.resolveColor(barColors.music, fallback: theme.secondary)
         musicPrevLabel.textColor = theme.secondary
         musicPlayPauseLabel.textColor = theme.primary
         musicNextLabel.textColor = theme.secondary

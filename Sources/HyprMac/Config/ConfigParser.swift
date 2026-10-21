@@ -337,6 +337,8 @@ public final class ConfigParser {
                 config.barColors.power = cleanVal
             case "col.surface", "surface", "col.background", "background":
                 config.barColors.surface = cleanVal
+            case "col.music", "music", "col.track", "track":
+                config.barColors.music = cleanVal
             case "opacity", "alpha", "capsule_alpha", "capsulealpha", "bar_opacity", "baropacity":
                 if let d = Double(cleanVal) { config.barOpacity = d }
             default:

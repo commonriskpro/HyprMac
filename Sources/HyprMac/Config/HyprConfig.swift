@@ -350,6 +350,7 @@ public struct HyprBarColors: Equatable, Hashable, Sendable {
     public var notification: String?
     public var power: String?
     public var surface: String?
+    public var music: String?
 
     public init(
         windowTitle: String? = nil,
@@ -364,7 +365,8 @@ public struct HyprBarColors: Equatable, Hashable, Sendable {
         memory: String? = nil,
         notification: String? = nil,
         power: String? = nil,
-        surface: String? = nil
+        surface: String? = nil,
+        music: String? = nil
     ) {
         self.windowTitle = windowTitle
         self.workspacesInactive = workspacesInactive
@@ -379,6 +381,7 @@ public struct HyprBarColors: Equatable, Hashable, Sendable {
         self.notification = notification
         self.power = power
         self.surface = surface
+        self.music = music
     }
 }
 
