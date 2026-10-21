@@ -834,6 +834,17 @@ func runIntegratedDaemon(configPath: String?) {
                 applyDecorationsToWindow(wid)
             }
             dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
+        } else {
+            let cur = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) ?? .zero
+            if HiddenWindowPlacement.isParkedOrHidden(cur) || cur.width < 100 || cur.height < 100 {
+                let defaultFrame = CGRect(
+                    x: tilingBounds.midX - 400,
+                    y: tilingBounds.midY - 300,
+                    width: 800,
+                    height: 600
+                )
+                _ = WindowDetector.shared.setWindowFrame(windowID: wid, frame: defaultFrame, pid: pid)
+            }
         }
         workspaceManager.focusWindow(wid: wid)
         let f = WindowDetector.shared.getFocusedWindow()
@@ -1187,18 +1198,17 @@ func runIntegratedDaemon(configPath: String?) {
         let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
         let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused
 
-        let now = ProcessInfo.processInfo.systemUptime
-        let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
-        let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
-
         // Unminimize to active workspace if a window was unminimized
-        if let fc = focusedCandidate, !isSettleWindow {
+        if let fc = focusedCandidate {
             let wid = fc.windowID
             let pid = fc.processID
             let wasMin = workspaceManager.isMinimized(wid)
             let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
 
             if wasMin && !isMin {
+                handleUnminimize(wid, pid)
+            } else if wasMin {
+                _ = WindowDetector.shared.setWindowMinimized(windowID: wid, minimized: false, pid: pid)
                 handleUnminimize(wid, pid)
             }
         }
@@ -1427,9 +1437,19 @@ func runIntegratedDaemon(configPath: String?) {
                 }
             }
             AXProcessObserverPool.shared.observeApplication(pid: pid)
-            _ = WindowDetector.shared.getFocusedWindow()
+            let rawFocused = WindowDetector.shared.fastFocusedWindow() ?? WindowDetector.shared.getFocusedWindow()
 
-            // 1. Check if any window belonging to the activated application unminimized
+            // 1. Check if the activated application's focused window is minimized and needs unminimizing
+            if let f = rawFocused, f.processID == pid {
+                let wid = f.windowID
+                if workspaceManager.isMinimized(wid) || WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
+                    _ = WindowDetector.shared.setWindowMinimized(windowID: wid, minimized: false, pid: pid)
+                    handleUnminimize(wid, pid)
+                    return
+                }
+            }
+
+            // Check if any window belonging to the activated application unminimized
             for wid in workspaceManager.windowOrder where workspaceManager.getPID(for: wid) == pid {
                 if workspaceManager.isMinimized(wid) && !WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
                     handleUnminimize(wid, pid)
@@ -1444,10 +1464,22 @@ func runIntegratedDaemon(configPath: String?) {
                 return
             }
 
+            // If ALL windows of this application are minimized:
+            // Do NOT auto-switch workspaces to an inactive workspace!
+            // Instead, restore/unminimize into the currently active workspace.
+            let nonMinimizedAppWindows = appWindows.filter { !workspaceManager.isMinimized($0) && !WindowDetector.shared.isWindowMinimized(windowID: $0, pid: pid) }
+            if nonMinimizedAppWindows.isEmpty {
+                if let minWid = appWindows.first(where: { workspaceManager.isMinimized($0) || WindowDetector.shared.isWindowMinimized(windowID: $0, pid: pid) }) {
+                    _ = WindowDetector.shared.setWindowMinimized(windowID: minWid, minimized: false, pid: pid)
+                    handleUnminimize(minWid, pid)
+                }
+                return
+            }
+
             // If that PID already has an active, non-parked window on activeWorkspace, do NOT switch workspaces.
             let activeWorkspace = workspaceManager.activeWorkspace
-            let windowsOnCurrentWS = appWindows.filter { workspaceManager.workspace(for: $0) == activeWorkspace }
-            for wid in windowsOnCurrentWS where !workspaceManager.isMinimized(wid) {
+            let windowsOnCurrentWS = nonMinimizedAppWindows.filter { workspaceManager.workspace(for: $0) == activeWorkspace }
+            for wid in windowsOnCurrentWS {
                 if let bounds = WindowDetector.shared.getWindowBounds(windowID: wid, pid: pid) {
                     if !HiddenWindowPlacement.isParkedOrHidden(bounds) {
                         reconcileWindows(false)
@@ -1459,8 +1491,8 @@ func runIntegratedDaemon(configPath: String?) {
                 }
             }
 
-            // Only switch if all windows for that activated PID belong to another workspace targetWS != activeWorkspace
-            let targetWorkspaces = Set(appWindows.compactMap { workspaceManager.workspace(for: $0) })
+            // Only switch if all NON-MINIMIZED windows for that activated PID belong to another workspace targetWS != activeWorkspace
+            let targetWorkspaces = Set(nonMinimizedAppWindows.compactMap { workspaceManager.workspace(for: $0) })
             guard !targetWorkspaces.isEmpty else {
                 reconcileWindows(false)
                 return
@@ -1476,7 +1508,7 @@ func runIntegratedDaemon(configPath: String?) {
             }
 
             // Resolve target window to focus on targetWS
-            let targetWid = workspaceManager.lastFocused(for: targetWS) ?? appWindows.first(where: { workspaceManager.workspace(for: $0) == targetWS }) ?? appWindows.first
+            let targetWid = workspaceManager.lastFocused(for: targetWS) ?? nonMinimizedAppWindows.first(where: { workspaceManager.workspace(for: $0) == targetWS }) ?? nonMinimizedAppWindows.first
             guard let wid = targetWid else { return }
 
             let appName = activatedApp?.localizedName ?? WindowDetector.shared.getWindowTitle(windowID: wid, pid: pid) ?? "App"
@@ -1606,10 +1638,29 @@ func runIntegratedDaemon(configPath: String?) {
         }
         updateFocusAndBorders(false)
     }
-    axPool.onWindowMiniaturized = { _ in
+    axPool.onWindowMiniaturized = { pid, maybeWid in
+        if let wid = maybeWid, wid > 0 {
+            workspaceManager.setWindowMinimized(wid, minimized: true)
+            let tilingBounds = computeTilingBounds()
+            if dwindleEngine.managedWindowSet.contains(wid) {
+                dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
+                effectsManager.hideOverlay(for: wid)
+                dwindleEngine.applyToSystem(windowFrames: dwindleEngine.currentFrames(), bridge: SkyLightBridge.shared)
+            }
+        }
         reconcileWindows(false)
     }
-    axPool.onWindowDeminiaturized = { _ in
+    axPool.onWindowDeminiaturized = { pid, maybeWid in
+        if let wid = maybeWid, wid > 0 {
+            handleUnminimize(wid, pid)
+        } else {
+            for wid in workspaceManager.windowOrder where workspaceManager.getPID(for: wid) == pid {
+                if workspaceManager.isMinimized(wid) && !WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
+                    handleUnminimize(wid, pid)
+                    break
+                }
+            }
+        }
         reconcileWindows(false)
     }
     axPool.start()

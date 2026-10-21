@@ -108,9 +108,24 @@ On Linux, a Hyprland rice gives you total control: square corners, zero shadows,
 
 ## Prerequisites
 
-- **macOS 27+ (tested on macOS 27.0.1)** on Apple Silicon (arm64e)
-- **SIP disabled** (`csrutil disable` from Recovery Mode — required for root `WindowServer` task port access)
-- *Note: Xcode Command Line Tools is only required if compiling from source.*
+Before running the installer, two one-time system settings are required on Apple Silicon:
+
+1. **System Integrity Protection (SIP) Disabled**:
+   - Restart your Mac and hold the Power / Touch ID button to enter **Recovery Mode**.
+   - Open **Utilities ➔ Terminal** and run:
+     ```bash
+     csrutil disable
+     ```
+   - Restart normally. *(Required to obtain task port access for root `WindowServer` composition hooks).*
+
+2. **ARM64e Preview ABI Enabled**:
+   - In your regular macOS Terminal, run:
+     ```bash
+     sudo nvram boot-args="-arm64e_preview_abi"
+     ```
+   - Restart your Mac. *(Required on macOS 14+ / 15+ to load custom ARM64e pointer-authenticated dynamic libraries).*
+
+*Note: Xcode Command Line Tools (`xcode-select --install`) is only required if compiling from source.*
 
 ---
 
@@ -133,8 +148,23 @@ tar -xzf HyprMac-arm64e.tar.gz
 ### What `install.sh` does:
 1. **Verifies Code Signature**: Ensures binaries are signed with an Apple Developer ID Application certificate. *(Ad-hoc signatures are never used, ensuring macOS Accessibility / TCC permissions persist across reboots).*
 2. **Deploys Binaries & App**: Installs `hypr-inject` and `libhyprserver.dylib` to `/usr/local/`, places `HyprMac.app` in `/Applications/`, and symlinks the global `hyprmac` CLI.
-3. **Installs System LaunchDaemon** (`/Library/LaunchDaemons/com.hyprmac.inject.plist`): Injects the compositor hook into `WindowServer` on system boot with root privileges.
+3. **Installs System LaunchDaemon** (`/Library/LaunchDaemons/com.hyprmac.inject.plist`): Injects the compositor hook into `WindowServer` on system boot and maintains a lightweight privileged helper daemon (`/tmp/hyprmac-inject.sock`) for sub-millisecond, zero-process client window decoration stripping.
 4. **Installs User LaunchAgent** (`~/Library/LaunchAgents/com.hyprmac.daemon.plist`): Automatically launches the desktop daemon (HyprBar, hotkeys, Dwindle tiling) upon user login.
+
+---
+
+### Mandatory Post-Installation Steps (macOS Permissions)
+
+macOS enforces strict TCC (Transparency, Consent, and Control) security policies that Apple prohibits scripts from granting automatically:
+
+1. **Accessibility Permission (Mandatory)**:
+   - Open **System Settings ➔ Privacy & Security ➔ Accessibility**.
+   - Enable the toggle for **HyprMac.app**.
+   *(Required for global keybind event taps, active window focus detection, and window placement).*
+
+2. **Location Services Permission (Optional)**:
+   - Open **System Settings ➔ Privacy & Security ➔ Location Services**.
+   - Enable access for **HyprMac.app** if you want HyprBar to display the exact Wi-Fi SSID name. *(If omitted, HyprBar uses kernel-level `NWPathMonitor` to display connection state without polling).*
 
 To uninstall completely at any time:
 ```bash
@@ -238,7 +268,7 @@ Watches `~/Library/Application Support/com.apple.wallpaper/Store` using kernel `
 HyprMac includes an extensive test suite verifying mathematical tiling bounds, IPC protocol framing, config parsing, and event handling:
 
 ```bash
-# Run complete test suite (271 tests)
+# Run complete test suite (276 tests)
 swift test
 
 # Run C harness for SHM IPC ring buffer

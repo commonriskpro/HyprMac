@@ -40,6 +40,6 @@ sudo rm -f /usr/local/bin/HyprMac
 sudo rm -f /usr/local/bin/hyprmac
 sudo rm -f /usr/local/lib/libhyprserver.dylib
 sudo rm -rf /Applications/HyprMac.app
-sudo rm -f /tmp/hyprmac-ipc.shm /tmp/hyprserver.ready /tmp/hyprmac-daemon.log /var/log/hyprmac-inject.log
+sudo rm -f /tmp/hyprmac-ipc.shm /tmp/hyprmac-ipc.trigger /tmp/hyprmac-inject.sock /tmp/hyprserver.ready /tmp/hyprmac-daemon.log /var/log/hyprmac-inject.log
 
 echo -e "\n${GREEN}${BOLD}✓ HyprMac completely uninstalled from system.${NC}"

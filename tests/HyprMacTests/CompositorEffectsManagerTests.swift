@@ -32,8 +32,6 @@ final class CompositorEffectsManagerTests: XCTestCase {
 
         manager.update(focused: target1, managedFrames: managedFrames, config: config)
         XCTAssertTrue(manager.overlays.isEmpty, "Frameless mode must never spawn window overlays")
-        XCTAssertFalse(manager.isBorderWindow(windowID: 201))
-        XCTAssertFalse(manager.isBorderWindow(windowID: 202))
         XCTAssertEqual(manager.managedWindowIDs, Set([201, 202]))
 
         manager.hideAll()

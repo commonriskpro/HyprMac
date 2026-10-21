@@ -34,6 +34,7 @@
 #include <CoreGraphics/CoreGraphics.h>
 
 static void diag_log(const char *fmt, ...) {
+#ifndef NDEBUG
     char buf[512];
     va_list ap;
     va_start(ap, fmt);
@@ -47,15 +48,16 @@ static void diag_log(const char *fmt, ...) {
             close(fd);
         }
     }
+#else
+    (void)fmt;
+#endif
 }
 
-#define HYPR_MAX_CLIENTS 32
 #define CLIENT_WRITE_BUF_SIZE 4096
 #define HYPR_MANAGED_WINDOWS_CAPACITY 4096
 #define HYPR_MAX_DISPLAYS 8
 #define HYPR_TIMER_SPACE_DEBOUNCE 1001
 #define HYPR_TIMER_DISPLAY_DEBOUNCE 1002
-#define HYPR_TIMER_AUTH_BASE 2000
 
 #ifndef kCGDisplayBeginConfigurationFlag
 #define kCGDisplayBeginConfigurationFlag (1 << 0)
@@ -84,9 +86,10 @@ static void diag_log(const char *fmt, ...) {
 
 /* ---- Logging & Rotation (Task 1.8) --------------------------------------- */
 
-static os_unfair_lock g_log_lock = OS_UNFAIR_LOCK_INIT;
+static __attribute__((unused)) os_unfair_lock g_log_lock = OS_UNFAIR_LOCK_INIT;
 
 static void hypr_log(const char *fmt, ...) {
+#ifndef NDEBUG
     char buf[1024];
     va_list args;
     va_start(args, fmt);
@@ -110,6 +113,9 @@ static void hypr_log(const char *fmt, ...) {
         }
     }
     os_unfair_lock_unlock(&g_log_lock);
+#else
+    (void)fmt;
+#endif
 }
 
 /* ---- Private Types & Symbol Function Signatures (Task 3.1) --------------- */
@@ -974,37 +980,40 @@ static void handle_display_reconfiguration_settled(void) {
 
     CGSConnectionID cid = g_symbols.MainConnectionID();
 
-    os_unfair_lock_lock(&g_state_lock);
-    uint32_t active_wids[HYPR_MANAGED_WINDOWS_CAPACITY];
-    size_t count = 0;
-    for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
-        if (g_managed_windows[i].active && g_managed_windows[i].wid != 0) {
-            active_wids[count++] = g_managed_windows[i].wid;
+    for (size_t offset = 0; offset < HYPR_MANAGED_WINDOWS_CAPACITY; ) {
+        uint32_t batch[64];
+        size_t count = 0;
+        os_unfair_lock_lock(&g_state_lock);
+        while (offset < HYPR_MANAGED_WINDOWS_CAPACITY && count < 64) {
+            if (g_managed_windows[offset].active && g_managed_windows[offset].wid != 0) {
+                batch[count++] = g_managed_windows[offset].wid;
+            }
+            offset++;
         }
-    }
-    os_unfair_lock_unlock(&g_state_lock);
+        os_unfair_lock_unlock(&g_state_lock);
 
-    for (size_t i = 0; i < count; i++) {
-        uint32_t wid = active_wids[i];
+        for (size_t i = 0; i < count; i++) {
+            uint32_t wid = batch[i];
 
-        // Display disconnect safety: probe with is_window_alive (uses SLSGetWindowBounds)
-        if (!is_window_alive(cid, wid)) {
-            os_unfair_lock_lock(&g_state_lock);
-            managed_window_evict(wid);
-            os_unfair_lock_unlock(&g_state_lock);
-            hypr_log("Display disconnect safety: window wid=%u no longer valid, evicted", wid);
-            continue;
+            // Display disconnect safety: probe with is_window_alive (uses SLSGetWindowBounds)
+            if (!is_window_alive(cid, wid)) {
+                os_unfair_lock_lock(&g_state_lock);
+                managed_window_evict(wid);
+                os_unfair_lock_unlock(&g_state_lock);
+                hypr_log("Display disconnect safety: window wid=%u no longer valid, evicted", wid);
+                continue;
+            }
+
+            CGRect bounds = {0};
+            if (g_symbols.GetWindowBounds) {
+                g_symbols.GetWindowBounds(cid, wid, &bounds);
+            }
+            CGDirectDisplayID win_display = find_display_for_bounds(bounds);
+            hypr_log("Display reconfiguration: window wid=%u on display 0x%x (bounds: %.0f, %.0f, %.0f, %.0f)",
+                     wid, win_display, bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height);
+
+            reapply_decorations_to_window(cid, wid);
         }
-
-        CGRect bounds = {0};
-        if (g_symbols.GetWindowBounds) {
-            g_symbols.GetWindowBounds(cid, wid, &bounds);
-        }
-        CGDirectDisplayID win_display = find_display_for_bounds(bounds);
-        hypr_log("Display reconfiguration: window wid=%u on display 0x%x (bounds: %.0f, %.0f, %.0f, %.0f)",
-                 wid, win_display, bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height);
-
-        reapply_decorations_to_window(cid, wid);
     }
 }
 
@@ -1060,26 +1069,29 @@ static void handle_space_transition_settled(void) {
         return;
     }
 
-    // 1. Re-apply decorations to all existing managed windows
-    os_unfair_lock_lock(&g_state_lock);
-    uint32_t active_wids[HYPR_MANAGED_WINDOWS_CAPACITY];
-    size_t count = 0;
-    for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
-        if (g_managed_windows[i].active && g_managed_windows[i].wid != 0) {
-            active_wids[count++] = g_managed_windows[i].wid;
+    // 1. Re-apply decorations to all existing managed windows in small batches
+    for (size_t offset = 0; offset < HYPR_MANAGED_WINDOWS_CAPACITY; ) {
+        uint32_t batch[64];
+        size_t count = 0;
+        os_unfair_lock_lock(&g_state_lock);
+        while (offset < HYPR_MANAGED_WINDOWS_CAPACITY && count < 64) {
+            if (g_managed_windows[offset].active && g_managed_windows[offset].wid != 0) {
+                batch[count++] = g_managed_windows[offset].wid;
+            }
+            offset++;
         }
-    }
-    os_unfair_lock_unlock(&g_state_lock);
+        os_unfair_lock_unlock(&g_state_lock);
 
-    for (size_t i = 0; i < count; i++) {
-        uint32_t wid = active_wids[i];
-        if (!is_window_alive(cid, wid)) {
-            os_unfair_lock_lock(&g_state_lock);
-            managed_window_evict(wid);
-            os_unfair_lock_unlock(&g_state_lock);
-            continue;
+        for (size_t i = 0; i < count; i++) {
+            uint32_t wid = batch[i];
+            if (!is_window_alive(cid, wid)) {
+                os_unfair_lock_lock(&g_state_lock);
+                managed_window_evict(wid);
+                os_unfair_lock_unlock(&g_state_lock);
+                continue;
+            }
+            reapply_decorations_to_window(cid, wid);
         }
-        reapply_decorations_to_window(cid, wid);
     }
 
     // 2. Re-query visible windows on current space and auto-decorate newly visible windows
@@ -2049,58 +2061,7 @@ static void resolve_symbols_and_probe(void) {
     sigaction(SIGBUS, &old_bus, NULL);
 }
 
-/* ---- Client Connection State & kqueue Server (Task 1.4) ------------------ */
-
-typedef struct {
-    int     fd;
-    bool    active;
-    bool    authenticated;
-    uint8_t read_buf[HYPR_MAX_PAYLOAD_SIZE];
-    size_t  read_len;
-    uint8_t write_buf[CLIENT_WRITE_BUF_SIZE];
-    size_t  write_len;
-    size_t  write_pos;
-} ClientConn;
-
-static ClientConn g_clients[HYPR_MAX_CLIENTS];
 static uint8_t *g_shm_base = NULL;
-
-static __attribute__((unused)) ClientConn *find_client(int fd) {
-    for (int i = 0; i < HYPR_MAX_CLIENTS; i++) {
-        if (g_clients[i].active && g_clients[i].fd == fd) return &g_clients[i];
-    }
-    return NULL;
-}
-
-static __attribute__((unused)) ClientConn *alloc_client(int fd) {
-    for (int i = 0; i < HYPR_MAX_CLIENTS; i++) {
-        if (!g_clients[i].active) {
-            memset(&g_clients[i], 0, sizeof(ClientConn));
-            g_clients[i].fd = fd;
-            g_clients[i].active = true;
-            return &g_clients[i];
-        }
-    }
-    return NULL;
-}
-
-static void close_client(int kq, ClientConn *c) {
-    if (!c || !c->active) return;
-    if (c->fd == -1) return;
-    int idx = (int)(c - g_clients);
-    if (kq >= 0) {
-        struct kevent tev;
-        EV_SET(&tev, HYPR_TIMER_AUTH_BASE + idx, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
-        kevent(kq, &tev, 1, NULL, 0, NULL);
-    }
-    close(c->fd);
-    c->active = false;
-    c->authenticated = false;
-    c->fd = -1;
-    c->read_len = 0;
-    c->write_len = 0;
-    c->write_pos = 0;
-}
 
 /* ---- Shared Memory Ring Buffer IPC --------------------------------------- */
 
@@ -2245,109 +2206,7 @@ static void shm_send_response(const void *hdr, size_t hdr_len, const void *paylo
     }
 }
 
-static void client_send_response(int kq, ClientConn *c, const void *hdr, size_t hdr_len, const void *payload, size_t payload_len) {
-    if (!c || !c->active) return;
-
-    if (c->fd == -1) {
-        shm_send_response(hdr, hdr_len, payload, payload_len);
-        return;
-    }
-
-    if (c->write_len > c->write_pos) {
-        size_t needed = hdr_len + payload_len;
-        size_t available = sizeof(c->write_buf) - c->write_len;
-        if (needed <= available) {
-            memcpy(c->write_buf + c->write_len, hdr, hdr_len);
-            c->write_len += hdr_len;
-            if (payload && payload_len > 0) {
-                memcpy(c->write_buf + c->write_len, payload, payload_len);
-                c->write_len += payload_len;
-            }
-        } else {
-            hypr_log("Write buffer overflow for fd=%d, dropping connection", c->fd);
-            close_client(kq, c);
-        }
-        return;
-    }
-
-    c->write_pos = 0;
-    c->write_len = 0;
-
-    struct iovec iov[2];
-    int iovcnt = 0;
-    iov[iovcnt].iov_base = (void *)hdr;
-    iov[iovcnt].iov_len = hdr_len;
-    iovcnt++;
-    if (payload && payload_len > 0) {
-        iov[iovcnt].iov_base = (void *)payload;
-        iov[iovcnt].iov_len = payload_len;
-        iovcnt++;
-    }
-
-    size_t total = hdr_len + payload_len;
-    ssize_t n = writev(c->fd, iov, iovcnt);
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            n = 0;
-        } else {
-            hypr_log("writev error fd=%d: %s", c->fd, strerror(errno));
-            close_client(kq, c);
-            return;
-        }
-    }
-
-    if ((size_t)n < total) {
-        size_t rem = total - (size_t)n;
-        if ((size_t)n < hdr_len) {
-            size_t hdr_rem = hdr_len - (size_t)n;
-            memcpy(c->write_buf, (const char *)hdr + n, hdr_rem);
-            if (payload && payload_len > 0) {
-                memcpy(c->write_buf + hdr_rem, payload, payload_len);
-            }
-        } else {
-            size_t payload_written = (size_t)n - hdr_len;
-            size_t payload_rem = payload_len - payload_written;
-            memcpy(c->write_buf, (const char *)payload + payload_written, payload_rem);
-        }
-        c->write_pos = 0;
-        c->write_len = rem;
-
-        struct kevent ev;
-        EV_SET(&ev, c->fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, NULL);
-        kevent(kq, &ev, 1, NULL, 0, NULL);
-    }
-}
-
-static __attribute__((unused)) void handle_client_write(int kq, ClientConn *c) {
-    if (!c || !c->active) return;
-    if (c->write_pos >= c->write_len) {
-        struct kevent ev;
-        EV_SET(&ev, c->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-        kevent(kq, &ev, 1, NULL, 0, NULL);
-        c->write_pos = 0;
-        c->write_len = 0;
-        return;
-    }
-
-    size_t remaining = c->write_len - c->write_pos;
-    ssize_t n = write(c->fd, c->write_buf + c->write_pos, remaining);
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return;
-        hypr_log("client write error fd=%d: %s", c->fd, strerror(errno));
-        close_client(kq, c);
-        return;
-    }
-    c->write_pos += (size_t)n;
-    if (c->write_pos >= c->write_len) {
-        c->write_pos = 0;
-        c->write_len = 0;
-        struct kevent ev;
-        EV_SET(&ev, c->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-        kevent(kq, &ev, 1, NULL, 0, NULL);
-    }
-}
-
-static void send_ack(int kq, ClientConn *c, uint32_t seq, uint32_t status, const char *msg) {
+static void send_ack(uint32_t seq, uint32_t status, const char *msg) {
     HyprMessageHeader header;
     memset(&header, 0, sizeof(header));
     header.magic = HYPR_MAGIC;
@@ -2361,10 +2220,10 @@ static void send_ack(int kq, ClientConn *c, uint32_t seq, uint32_t status, const
     ack.status = status;
     if (msg) snprintf(ack.message, sizeof(ack.message), "%s", msg);
 
-    client_send_response(kq, c, &header, sizeof(header), &ack, sizeof(ack));
+    shm_send_response(&header, sizeof(header), &ack, sizeof(ack));
 }
 
-static void send_pong(int kq, ClientConn *c, uint32_t seq) {
+static void send_pong(uint32_t seq) {
     HyprMessageHeader header;
     memset(&header, 0, sizeof(header));
     header.magic = HYPR_MAGIC;
@@ -2388,58 +2247,67 @@ static void send_pong(int kq, ClientConn *c, uint32_t seq) {
         }
     }
 
-    client_send_response(kq, c, &header, sizeof(header), &pong, sizeof(pong));
+    shm_send_response(&header, sizeof(header), &pong, sizeof(pong));
 }
 
-static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr, const uint8_t *payload) {
-    if (!c->authenticated && hdr->command_id != HYPR_CMD_AUTH) {
-        hypr_log("Unauthorized command 0x%04x from fd=%d rejected", hdr->command_id, c->fd);
-        send_ack(kq, c, hdr->sequence, HYPR_ERR_UNAUTHORIZED, "Unauthorized");
+static void dispatch_command(const uint8_t *payload, uint32_t len) {
+    if (!payload || len < sizeof(HyprMessageHeader)) {
         return;
     }
+
+    const HyprMessageHeader *hdr = (const HyprMessageHeader *)payload;
+
+    if (hdr->magic != HYPR_MAGIC) {
+        hypr_log("dispatch_command: bad magic 0x%08x", hdr->magic);
+        send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad magic");
+        return;
+    }
+    if (hdr->version != HYPR_PROTO_VERSION) {
+        hypr_log("dispatch_command: bad version %u", hdr->version);
+        send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad version");
+        return;
+    }
+    if (hdr->payload_size > HYPR_MAX_PAYLOAD_SIZE ||
+        sizeof(HyprMessageHeader) + hdr->payload_size > len) {
+        hypr_log("dispatch_command: bad payload size %u (len=%u)", hdr->payload_size, len);
+        send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Payload size error");
+        return;
+    }
+
+    const uint8_t *cmd_payload = (hdr->payload_size > 0)
+                                 ? (payload + sizeof(HyprMessageHeader)) : NULL;
+
 
     switch (hdr->command_id) {
         case HYPR_CMD_AUTH: {
             if (hdr->payload_size != sizeof(HyprPayloadAuth)) {
-                hypr_log("HYPR_CMD_AUTH fd=%d bad payload size %u", c->fd, hdr->payload_size);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_UNAUTHORIZED, "Unauthorized");
-                close_client(kq, c);
+                hypr_log("HYPR_CMD_AUTH bad payload size %u", hdr->payload_size);
+                send_ack(hdr->sequence, HYPR_ERR_UNAUTHORIZED, "Unauthorized");
                 return;
             }
-            const HyprPayloadAuth *auth = (const HyprPayloadAuth *)payload;
+            const HyprPayloadAuth *auth = (const HyprPayloadAuth *)cmd_payload;
             if (memcmp(auth->token, g_auth_token, sizeof(g_auth_token)) == 0) {
-                c->authenticated = true;
-                if (c->fd != -1) {
-                    int idx = (int)(c - g_clients);
-                    struct kevent tev;
-                    EV_SET(&tev, HYPR_TIMER_AUTH_BASE + idx, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
-                    kevent(kq, &tev, 1, NULL, 0, NULL);
-                }
-
-                hypr_log("Client fd=%d successfully authenticated", c->fd);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "Authenticated");
+                hypr_log("Client successfully authenticated");
+                send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "Authenticated");
             } else {
-                hypr_log("Client fd=%d authentication failed (token mismatch)", c->fd);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_UNAUTHORIZED, "Unauthorized");
-                if (c->fd != -1) {
-                    close_client(kq, c);
-                }
+                hypr_log("Client authentication failed (token mismatch)");
+                send_ack(hdr->sequence, HYPR_ERR_UNAUTHORIZED, "Unauthorized");
             }
             break;
         }
         case HYPR_CMD_PING:
-            send_pong(kq, c, hdr->sequence);
+            send_pong(hdr->sequence);
             break;
         case HYPR_CMD_SET_CORNER_RADIUS: {
             if (hdr->payload_size != sizeof(HyprPayloadCornerRadius)) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
             HyprPayloadCornerRadius p;
-            memcpy(&p, payload, sizeof(p));
+            memcpy(&p, cmd_payload, sizeof(p));
             if (!g_symbols.resolved || !g_symbols.MainConnectionID) {
                 hypr_log("SET_CORNER_RADIUS wid=%u: compositor mutations unavailable", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
+                send_ack(hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
@@ -2448,7 +2316,7 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 managed_window_evict(hdr->window_id);
                 os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("SET_CORNER_RADIUS wid=%u: invalid or destroyed window", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
+                send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
             }
             os_unfair_lock_lock(&g_state_lock);
@@ -2461,19 +2329,19 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("SET_CORNER_RADIUS wid=%u r=%.2f: OK", hdr->window_id, p.corner_radius);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_SET_SHADOW_STATE: {
             if (hdr->payload_size != sizeof(HyprPayloadShadow)) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
             HyprPayloadShadow p;
-            memcpy(&p, payload, sizeof(p));
+            memcpy(&p, cmd_payload, sizeof(p));
             if (!g_symbols.resolved || !g_symbols.MainConnectionID) {
                 hypr_log("SET_SHADOW wid=%u: compositor mutations unavailable", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
+                send_ack(hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
@@ -2482,7 +2350,7 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 managed_window_evict(hdr->window_id);
                 os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("SET_SHADOW wid=%u: invalid or destroyed window", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
+                send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
             }
             os_unfair_lock_lock(&g_state_lock);
@@ -2510,19 +2378,19 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("SET_SHADOW wid=%u en=%u: OK", hdr->window_id, p.shadow_enabled);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_SET_WINDOW_BORDER: {
             if (hdr->payload_size != sizeof(HyprPayloadBorder)) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
             HyprPayloadBorder p;
-            memcpy(&p, payload, sizeof(p));
+            memcpy(&p, cmd_payload, sizeof(p));
             if (!g_symbols.resolved || !g_symbols.MainConnectionID) {
                 hypr_log("SET_BORDER wid=%u: compositor mutations unavailable", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
+                send_ack(hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
@@ -2531,7 +2399,7 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 managed_window_evict(hdr->window_id);
                 os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("SET_BORDER wid=%u: invalid or destroyed window", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
+                send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
             }
             os_unfair_lock_lock(&g_state_lock);
@@ -2547,19 +2415,19 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             invalidate_window(cid, hdr->window_id);
             hypr_log("SET_BORDER wid=%u w=%.2f a=0x%08x i=0x%08x",
                      hdr->window_id, p.border_width, p.color_active, p.color_inactive);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_STRIP_TITLEBAR: {
             if (hdr->payload_size != sizeof(HyprPayloadStripTitlebar)) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
             HyprPayloadStripTitlebar p;
-            memcpy(&p, payload, sizeof(p));
+            memcpy(&p, cmd_payload, sizeof(p));
             if (!g_symbols.resolved || !g_symbols.MainConnectionID) {
                 hypr_log("STRIP_TITLEBAR wid=%u: compositor mutations unavailable", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
+                send_ack(hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
@@ -2568,7 +2436,7 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 managed_window_evict(hdr->window_id);
                 os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("STRIP_TITLEBAR wid=%u: invalid or destroyed window", hdr->window_id);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
+                send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
             }
             os_unfair_lock_lock(&g_state_lock);
@@ -2590,12 +2458,12 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("STRIP_TITLEBAR wid=%u s=%u: OK", hdr->window_id, p.strip);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_QUERY_WINDOW: {
             if (!g_symbols.resolved || !g_symbols.MainConnectionID) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
+                send_ack(hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
@@ -2603,14 +2471,14 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(hdr->window_id);
                 os_unfair_lock_unlock(&g_state_lock);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_WID, "Window not found");
+                send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Window not found");
                 return;
             }
             os_unfair_lock_lock(&g_state_lock);
             HyprManagedWindow *win = managed_window_find(hdr->window_id);
             if (!win || !win->active) {
                 os_unfair_lock_unlock(&g_state_lock);
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_WID, "Window not managed");
+                send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Window not managed");
                 return;
             }
             HyprPayloadQueryResponse resp;
@@ -2630,16 +2498,16 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             header.sequence = hdr->sequence;
             header.window_id = hdr->window_id;
             header.payload_size = sizeof(HyprPayloadQueryResponse);
-            client_send_response(kq, c, &header, sizeof(header), &resp, sizeof(resp));
+            shm_send_response(&header, sizeof(header), &resp, sizeof(resp));
             break;
         }
         case HYPR_CMD_SET_WINDOW_FOCUS: {
             uint32_t target_wid = hdr->window_id;
-            if (hdr->payload_size >= sizeof(uint32_t) && payload) {
-                target_wid = *(const uint32_t *)payload;
+            if (hdr->payload_size >= sizeof(uint32_t) && cmd_payload) {
+                target_wid = *(const uint32_t *)cmd_payload;
             }
             if (!g_symbols.resolved || !g_symbols.MainConnectionID) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
+                send_ack(hdr->sequence, HYPR_ERR_HOOK_UNAVAIL, "Compositor unavailable");
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
@@ -2660,16 +2528,16 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 invalidate_window(cid, target_wid);
             }
             hypr_log("SET_WINDOW_FOCUS focused wid=%u: OK", target_wid);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_SET_GLOBAL_POLICY: {
             if (hdr->payload_size != sizeof(HyprPayloadGlobalPolicy)) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
             HyprPayloadGlobalPolicy p;
-            memcpy(&p, payload, sizeof(p));
+            memcpy(&p, cmd_payload, sizeof(p));
             os_unfair_lock_lock(&g_state_lock);
             g_global_policy.auto_square_corners = p.auto_square_corners;
             g_global_policy.auto_strip_shadow = p.auto_strip_shadow;
@@ -2683,12 +2551,12 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             hypr_log("SET_GLOBAL_POLICY square=%u shadow=%u titlebar=%u border=%u (w=%.1f act=0x%08x inact=0x%08x): OK",
                      p.auto_square_corners, p.auto_strip_shadow, p.auto_strip_titlebar, p.auto_set_border,
                      p.border_width, p.border_color_active, p.border_color_inactive);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_SET_MENUBAR_SUPPRESSION: {
             if (hdr->payload_size < 1) {
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
             uint32_t suppress = 0;
@@ -2697,11 +2565,11 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
             const uint32_t *wids = NULL;
 
             if (hdr->payload_size == 1) {
-                suppress = ((const uint8_t *)payload)[0] != 0 ? 1 : 0;
+                suppress = ((const uint8_t *)cmd_payload)[0] != 0 ? 1 : 0;
             } else if (hdr->payload_size == sizeof(uint32_t)) {
-                suppress = ((const uint32_t *)payload)[0] != 0 ? 1 : 0;
+                suppress = ((const uint32_t *)cmd_payload)[0] != 0 ? 1 : 0;
             } else if (hdr->payload_size >= 12) {
-                const HyprPacketMenuBarSuppression *packet = (const HyprPacketMenuBarSuppression *)payload;
+                const HyprPacketMenuBarSuppression *packet = (const HyprPacketMenuBarSuppression *)cmd_payload;
                 suppress = packet->suppress != 0 ? 1 : 0;
                 exempt_wid = packet->exempt_wid;
                 count = packet->count;
@@ -2710,23 +2578,23 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 if (count > max_count_by_payload) count = (uint32_t)max_count_by_payload;
                 wids = packet->wids;
             } else if (hdr->payload_size >= 8) {
-                suppress = ((const uint32_t *)payload)[0] != 0 ? 1 : 0;
-                exempt_wid = ((const uint32_t *)payload)[1];
+                suppress = ((const uint32_t *)cmd_payload)[0] != 0 ? 1 : 0;
+                exempt_wid = ((const uint32_t *)cmd_payload)[1];
             } else {
-                suppress = ((const uint8_t *)payload)[0] != 0 ? 1 : 0;
+                suppress = ((const uint8_t *)cmd_payload)[0] != 0 ? 1 : 0;
             }
             apply_menubar_suppression(suppress != 0, exempt_wid, wids, count);
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         case HYPR_CMD_SET_WORKSPACE_TRANSFORM: {
             if (hdr->payload_size != sizeof(HyprPayloadWorkspaceTransform)) {
                 hypr_log("HYPR_CMD_SET_WORKSPACE_TRANSFORM fd=%d bad payload size %u expected %zu",
-                         c->fd, hdr->payload_size, sizeof(HyprPayloadWorkspaceTransform));
-                send_ack(kq, c, hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
+                         hdr->payload_size, sizeof(HyprPayloadWorkspaceTransform));
+                send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
             }
-            const HyprPayloadWorkspaceTransform *p = (const HyprPayloadWorkspaceTransform *)payload;
+            const HyprPayloadWorkspaceTransform *p = (const HyprPayloadWorkspaceTransform *)cmd_payload;
             CGSConnectionID cid = 0;
             if (g_symbols.MainConnectionID) {
                 cid = g_symbols.MainConnectionID();
@@ -2764,148 +2632,13 @@ static void dispatch_command(int kq, ClientConn *c, const HyprMessageHeader *hdr
                 g_symbols.TransactionCommit(tx, 1);
             }
 
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_SUCCESS, "OK");
+            send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
             break;
         }
         default:
-            send_ack(kq, c, hdr->sequence, HYPR_ERR_INVALID_CMD, "Unknown");
+            send_ack(hdr->sequence, HYPR_ERR_INVALID_CMD, "Unknown");
             break;
     }
-}
-
-static __attribute__((unused)) void handle_client_read(int kq, ClientConn *c) {
-    if (!c || !c->active) return;
-
-    size_t space = sizeof(c->read_buf) - c->read_len;
-    if (space == 0) {
-        hypr_log("Client read buffer full for fd=%d without complete frame, dropping", c->fd);
-        close_client(kq, c);
-        return;
-    }
-
-    ssize_t n = read(c->fd, c->read_buf + c->read_len, space);
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return;
-        hypr_log("read error fd=%d: %s", c->fd, strerror(errno));
-        close_client(kq, c);
-        return;
-    }
-    if (n == 0) {
-        close_client(kq, c);
-        return;
-    }
-
-    c->read_len += (size_t)n;
-
-    while (c->active && c->read_len >= sizeof(HyprMessageHeader)) {
-        HyprMessageHeader header;
-        memcpy(&header, c->read_buf, sizeof(header));
-
-        if (header.magic != HYPR_MAGIC) {
-            hypr_log("Bad magic 0x%08x from fd=%d", header.magic, c->fd);
-            send_ack(kq, c, header.sequence, HYPR_ERR_INTERNAL, "Bad magic");
-            close_client(kq, c);
-            return;
-        }
-        if (header.version != HYPR_PROTO_VERSION) {
-            hypr_log("Bad version %u from fd=%d", header.version, c->fd);
-            send_ack(kq, c, header.sequence, HYPR_ERR_INTERNAL, "Bad version");
-            close_client(kq, c);
-            return;
-        }
-        if (header.payload_size > HYPR_MAX_PAYLOAD_SIZE) {
-            hypr_log("Payload too large (%u bytes) from fd=%d", header.payload_size, c->fd);
-            send_ack(kq, c, header.sequence, HYPR_ERR_INTERNAL, "Payload too large");
-            close_client(kq, c);
-            return;
-        }
-
-        size_t total_msg_len = sizeof(HyprMessageHeader) + header.payload_size;
-        if (c->read_len < total_msg_len) {
-            break;
-        }
-
-        const uint8_t *payload = c->read_buf + sizeof(HyprMessageHeader);
-        dispatch_command(kq, c, &header, payload);
-        if (!c->active) return;
-
-        size_t rem = c->read_len - total_msg_len;
-        if (rem > 0) {
-            memmove(c->read_buf, c->read_buf + total_msg_len, rem);
-        }
-        c->read_len = rem;
-    }
-}
-
-
-/* Client-mode kqueue event loop: the hook is connected to the Swift
- * socket server as a single client. No accept() needed. Processes
- * incoming commands from Swift and sends responses back. Timers for
- * space/display debounce still work. */
-static __attribute__((unused)) void client_kqueue_loop(int conn_fd) {
-    int kq = kqueue();
-    if (kq < 0) {
-        hypr_log("kqueue() failed: %s", strerror(errno));
-        close(conn_fd);
-        return;
-    }
-    g_kq = kq;
-
-    /* Register the connected fd for read events */
-    struct kevent ev;
-    EV_SET(&ev, conn_fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
-    if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
-        hypr_log("kevent() failed to register conn_fd: %s", strerror(errno));
-        close(kq);
-        close(conn_fd);
-        return;
-    }
-
-    struct kevent events[32];
-    while (1) {
-        int nev = kevent(kq, NULL, 0, events, 32, NULL);
-        if (nev < 0) {
-            if (errno == EINTR) continue;
-            hypr_log("kqueue wait error: %s", strerror(errno));
-            break;
-        }
-
-        for (int i = 0; i < nev; i++) {
-            int fd = (int)events[i].ident;
-            int filter = events[i].filter;
-            uint16_t flags = events[i].flags;
-
-            if (filter == EVFILT_TIMER) {
-                if (events[i].ident == HYPR_TIMER_SPACE_DEBOUNCE) {
-                    handle_space_transition_settled();
-                } else if (events[i].ident == HYPR_TIMER_DISPLAY_DEBOUNCE) {
-                    handle_display_reconfiguration_settled();
-                }
-                continue;
-            }
-
-            /* All data events are for the single connected fd */
-            ClientConn *c = find_client(fd);
-            if (!c) continue;
-
-            if (flags & EV_EOF) {
-                hypr_log("Swift server disconnected (fd=%d)", fd);
-                close_client(kq, c);
-                /* Could attempt reconnect here in the future */
-                goto loop_exit;
-            }
-
-            if (filter == EVFILT_READ) {
-                handle_client_read(kq, c);
-            } else if (filter == EVFILT_WRITE) {
-                handle_client_write(kq, c);
-            }
-        }
-    }
-loop_exit:
-    close(kq);
-    g_kq = -1;
-    hypr_log("Client kqueue loop exited");
 }
 
 static void shm_poll_loop(void *shm_base) {
@@ -2919,11 +2652,15 @@ static void shm_poll_loop(void *shm_base) {
     }
     g_kq = kq;
 
-    ClientConn dummy_conn;
-    memset(&dummy_conn, 0, sizeof(dummy_conn));
-    dummy_conn.fd = -1;
-    dummy_conn.active = true;
-    dummy_conn.authenticated = true;
+    // Register trigger file for event-driven wake-up via kqueue EVFILT_VNODE
+    int trigger_fd = open(HYPR_TRIGGER_PATH, O_RDWR | O_CREAT | O_TRUNC, 0666);
+    if (trigger_fd >= 0 && kq >= 0) {
+        struct kevent ev;
+        EV_SET(&ev, trigger_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB, 0, NULL);
+        if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+            hypr_log("shm_poll_loop: failed to register trigger vnode filter: %s", strerror(errno));
+        }
+    }
 
     static uint8_t msg_buf[sizeof(HyprMessageHeader) + HYPR_MAX_PAYLOAD_SIZE];
     uint32_t msg_len = 0;
@@ -2947,40 +2684,42 @@ static void shm_poll_loop(void *shm_base) {
                              (const uint32_t *)(const void *)&hdr->cmd_write_pos,
                              msg_buf, &msg_len, (uint32_t)sizeof(msg_buf)) == 0) {
             work_done = 1;
-            if (msg_len >= sizeof(HyprMessageHeader)) {
-                HyprMessageHeader header;
-                memcpy(&header, msg_buf, sizeof(header));
-
-                if (header.magic != HYPR_MAGIC) {
-                    hypr_log("shm_poll_loop: bad magic 0x%08x", header.magic);
-                    send_ack(kq, &dummy_conn, header.sequence, HYPR_ERR_INTERNAL, "Bad magic");
-                    continue;
-                }
-                if (header.version != HYPR_PROTO_VERSION) {
-                    hypr_log("shm_poll_loop: bad version %u", header.version);
-                    send_ack(kq, &dummy_conn, header.sequence, HYPR_ERR_INTERNAL, "Bad version");
-                    continue;
-                }
-                if (header.payload_size > HYPR_MAX_PAYLOAD_SIZE ||
-                    sizeof(HyprMessageHeader) + header.payload_size > msg_len) {
-                    hypr_log("shm_poll_loop: bad payload size %u (msg_len=%u)", header.payload_size, msg_len);
-                    send_ack(kq, &dummy_conn, header.sequence, HYPR_ERR_INTERNAL, "Payload size error");
-                    continue;
-                }
-
-                const uint8_t *payload = (header.payload_size > 0)
-                                         ? (msg_buf + sizeof(HyprMessageHeader)) : NULL;
-                dispatch_command(kq, &dummy_conn, &header, payload);
-            }
+            dispatch_command(msg_buf, msg_len);
         }
 
-        // Check kqueue timers (non-blocking)
+        // Wait on kqueue for events or adaptive timeout
         if (kq >= 0) {
-            struct timespec ts = {0, 0};
+            struct timespec ts;
+            if (work_done) {
+                // When work was just processed, do a non-blocking check for pending timers
+                ts.tv_sec = 0;
+                ts.tv_nsec = 0;
+            } else {
+                // Adaptive backoff timeout for kevent wait
+                if (idle_ticks > 300) {
+                    ts.tv_sec = 0;
+                    ts.tv_nsec = 250000000; // 250ms (~4Hz check when deeply idle)
+                } else if (idle_ticks > 100) {
+                    ts.tv_sec = 0;
+                    ts.tv_nsec = 100000000; // 100ms
+                } else if (idle_ticks > 20) {
+                    ts.tv_sec = 0;
+                    ts.tv_nsec = 20000000;  // 20ms
+                } else if (idle_ticks > 5) {
+                    ts.tv_sec = 0;
+                    ts.tv_nsec = 5000000;   // 5ms
+                } else {
+                    ts.tv_sec = 0;
+                    ts.tv_nsec = 1000000;   // 1ms
+                }
+            }
+
             struct kevent events[16];
             int nev = kevent(kq, NULL, 0, events, 16, &ts);
             for (int i = 0; i < nev; i++) {
-                if (events[i].filter == EVFILT_TIMER) {
+                if (events[i].filter == EVFILT_VNODE) {
+                    work_done = 1;
+                } else if (events[i].filter == EVFILT_TIMER) {
                     work_done = 1;
                     if (events[i].ident == HYPR_TIMER_SPACE_DEBOUNCE) {
                         handle_space_transition_settled();
@@ -2989,27 +2728,21 @@ static void shm_poll_loop(void *shm_base) {
                     }
                 }
             }
+        } else {
+            // Fallback if kqueue failed
+            if (!work_done) {
+                useconds_t sleep_us = (idle_ticks > 100) ? 50000 : 2000;
+                usleep(sleep_us);
+            }
         }
 
-        // Avoid busy-spinning if idle with adaptive backoff to conserve CPU & battery
         if (work_done) {
             idle_ticks = 0;
         } else {
             idle_ticks++;
-            useconds_t sleep_us = 500; // 0.5ms initial response
-            if (idle_ticks > 100) {
-                sleep_us = 20000; // 20ms sleep (~50Hz poll when deeply idle)
-            } else if (idle_ticks > 20) {
-                sleep_us = 5000;  // 5ms sleep when idle
-            } else if (idle_ticks > 5) {
-                sleep_us = 2000;  // 2ms sleep
-            }
-            usleep(sleep_us);
         }
     }
 }
-
-/* server_kqueue_loop removed: replaced by client_kqueue_loop */
 
 static void init_auth_token(void) {
     arc4random_buf(g_auth_token, sizeof(g_auth_token));

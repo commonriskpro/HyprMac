@@ -16,6 +16,9 @@ let package = Package(
         .executableTarget(
             name: "HyprMac",
             path: "Sources/HyprMac",
+            swiftSettings: [
+                .unsafeFlags(["-cross-module-optimization"], .when(configuration: .release))
+            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ApplicationServices"),

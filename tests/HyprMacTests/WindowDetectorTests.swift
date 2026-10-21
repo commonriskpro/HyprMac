@@ -136,4 +136,36 @@ final class WindowDetectorTests: XCTestCase {
         XCTAssertNil(elem)
         XCTAssertFalse(detector.isStandardWindow(windowID: bogusWid, pid: getpid()))
     }
+
+    @MainActor
+    func testSequentialWindowTilingLayoutDwindle() {
+        let screen = CGRect(x: 0, y: 37, width: 1920, height: 1043)
+        let engine = DwindleEngine(gapsIn: 5.0, gapsOut: 10.0)
+
+        // 1. Finder opens first
+        let finderWid: CGWindowID = 178
+        let frames1 = engine.addWindow(windowID: finderWid, in: screen)
+        XCTAssertEqual(frames1.count, 1)
+        XCTAssertTrue(engine.managedWindowSet.contains(finderWid))
+        let finderFrameInitial = frames1[finderWid]!
+        XCTAssertEqual(finderFrameInitial.width, 1900.0) // 1920 - 20 (gapsOut)
+
+        // 2. Ghostty opens second
+        let ghosttyWid: CGWindowID = 205
+        let frames2 = engine.addWindow(windowID: ghosttyWid, in: screen)
+        XCTAssertEqual(frames2.count, 2)
+        XCTAssertTrue(engine.managedWindowSet.contains(finderWid))
+        XCTAssertTrue(engine.managedWindowSet.contains(ghosttyWid))
+
+        let finderFrameTiled = frames2[finderWid]!
+        let ghosttyFrameTiled = frames2[ghosttyWid]!
+
+        // Must split horizontally (side by side because width 1900 >= height 1023)
+        XCTAssertLessThan(finderFrameTiled.width, 1000.0)
+        XCTAssertLessThan(ghosttyFrameTiled.width, 1000.0)
+        XCTAssertEqual(finderFrameTiled.origin.x, 10.0)
+        XCTAssertGreaterThan(ghosttyFrameTiled.origin.x, finderFrameTiled.maxX)
+        // No overlap
+        XCTAssertFalse(finderFrameTiled.intersects(ghosttyFrameTiled))
+    }
 }

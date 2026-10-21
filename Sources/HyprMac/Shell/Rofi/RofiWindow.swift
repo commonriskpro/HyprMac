@@ -540,6 +540,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     public private(set) var selectedIndex: Int = 0
     public private(set) var currentMode: RofiMode = .apps
     private var cachedBaseWallpaper: NSImage?
+    private var currentPreviewCancellationToken: ThumbnailCancellationToken?
 
     public let effectView = NSVisualEffectView()
     public let darkOverlayView = NSView()
@@ -577,8 +578,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
         searchField.stringValue = query
         searchField.delegate = self
 
-        cachedBaseWallpaper = loadWallpaperImage()
-        imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
+        loadWallpaperImageAsync()
         applyFilter(query: query)
         centerOnActiveScreen()
 
@@ -591,6 +591,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
 
     deinit {
+        currentPreviewCancellationToken?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -652,41 +653,81 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
 
     public func refreshWallpaper() {
-        cachedBaseWallpaper = loadWallpaperImage()
-        imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
+        loadWallpaperImageAsync()
     }
 
-    public func loadWallpaperImage() -> NSImage? {
-        // 1. Read path string from ~/.cache/current_wallpaper
+    public func currentWallpaperPath() -> String? {
         let cachePath = NSString(string: "~/.cache/current_wallpaper").expandingTildeInPath
         if FileManager.default.fileExists(atPath: cachePath),
            let raw = try? String(contentsOfFile: cachePath, encoding: .utf8) {
             let path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if !path.isEmpty && FileManager.default.fileExists(atPath: path) {
-                if let thumb = createDownsampledImage(atPath: path, maxPixelSize: 1000) {
-                    return thumb
-                }
-                if let img = NSImage(contentsOfFile: path) {
-                    return img
-                }
+                return path
             }
         }
 
-        // 2. Query the active screen's macOS wallpaper
         let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens.first
         if let scr = targetScreen,
            let url = NSWorkspace.shared.desktopImageURL(for: scr),
            FileManager.default.fileExists(atPath: url.path) {
-            if let thumb = createDownsampledImage(atPath: url.path, maxPixelSize: 1000) {
-                return thumb
-            }
-            if let img = NSImage(contentsOf: url) {
-                return img
-            }
+            return url.path
+        }
+        return nil
+    }
+
+    public func loadWallpaperImageAsync(completion: (@MainActor (NSImage?) -> Void)? = nil) {
+        guard let path = currentWallpaperPath() else {
+            cachedBaseWallpaper = nil
+            imageBoxView.updateWallpaper(image: nil)
+            completion?(nil)
+            return
         }
 
-        // 3. Fallback: return nil (clean dark translucent gradient/surface with NO image)
-        return nil
+        let targetSize = NSSize(
+            width: Self.defaultImageBoxWidth,
+            height: Self.defaultHeight - (Self.defaultOuterPadding * 2.0)
+        )
+
+        // 1. Check memory cache fast-path
+        if let cached = WallpaperThumbnailLoader.shared.cachedImage(for: path, targetSize: targetSize) {
+            cachedBaseWallpaper = cached
+            if shouldDisplayBaseWallpaper {
+                imageBoxView.updateWallpaper(image: cached)
+            }
+            completion?(cached)
+            return
+        }
+
+        // 2. Load asynchronously without blocking MainActor
+        WallpaperThumbnailLoader.shared.loadThumbnail(for: path, targetSize: targetSize) { [weak self] image in
+            guard let self = self else { return }
+            self.cachedBaseWallpaper = image
+            if self.shouldDisplayBaseWallpaper {
+                self.imageBoxView.updateWallpaper(image: image)
+            }
+            completion?(image)
+        }
+    }
+
+    private var shouldDisplayBaseWallpaper: Bool {
+        if selectedIndex >= 0 && selectedIndex < filteredResults.count {
+            if case .wallpaper = filteredResults[selectedIndex] {
+                return false
+            }
+        }
+        return true
+    }
+
+    public func loadWallpaperImage() -> NSImage? {
+        guard let path = currentWallpaperPath() else { return nil }
+        let targetSize = NSSize(width: Self.defaultImageBoxWidth, height: Self.defaultHeight - (Self.defaultOuterPadding * 2.0))
+        if let cached = WallpaperThumbnailLoader.shared.cachedImage(for: path, targetSize: targetSize) {
+            return cached
+        }
+        if let thumb = createDownsampledImage(atPath: path, maxPixelSize: 1000) {
+            return thumb
+        }
+        return NSImage(contentsOfFile: path)
     }
 
     private func createDownsampledImage(atPath path: String, maxPixelSize: Int) -> NSImage? {
@@ -720,7 +761,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     public func showLauncher() {
         ClipboardTracker.shared.checkPasteboard()
         if cachedBaseWallpaper == nil {
-            refreshWallpaper()
+            loadWallpaperImageAsync()
         }
         centerOnActiveScreen()
         makeKeyAndOrderFront(nil)
@@ -860,6 +901,9 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
 
     private func updateCardPreviewForCurrentSelection() {
+        currentPreviewCancellationToken?.cancel()
+        currentPreviewCancellationToken = nil
+
         guard selectedIndex >= 0 && selectedIndex < filteredResults.count else {
             if imageBoxView.wallpaperImageView.image !== cachedBaseWallpaper {
                 imageBoxView.updateWallpaper(image: cachedBaseWallpaper)
@@ -869,7 +913,11 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
 
         let item = filteredResults[selectedIndex]
         if case .wallpaper(let path, _, _) = item {
-            WallpaperPreviewLoader.shared.load(path: path) { [weak self] image in
+            let targetSize = NSSize(
+                width: Self.defaultImageBoxWidth,
+                height: Self.defaultHeight - (Self.defaultOuterPadding * 2.0)
+            )
+            currentPreviewCancellationToken = WallpaperThumbnailLoader.shared.loadThumbnail(for: path, targetSize: targetSize) { [weak self] image in
                 guard let self = self, self.selectedIndex < self.filteredResults.count else { return }
                 if case .wallpaper(let curPath, _, _) = self.filteredResults[self.selectedIndex], curPath == path {
                     self.imageBoxView.updateWallpaper(image: image)

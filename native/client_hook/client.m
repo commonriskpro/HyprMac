@@ -497,12 +497,13 @@ static void strip_window_decorations(NSWindow *window) {
 
     @try {
         BOOL alreadyStripped = [objc_getAssociatedObject(window, kHyprWindowStrippedKey) boolValue];
+        if (alreadyStripped) {
+            return;
+        }
 
         // 1. Strip window shadow completely
-        if (window.hasShadow || !alreadyStripped) {
-            window.hasShadow = NO;
-            [window invalidateShadow];
-        }
+        window.hasShadow = NO;
+        [window invalidateShadow];
 
         // 2. Hide titlebar & make content view full size if titled
         if (window.styleMask & NSWindowStyleMaskTitled) {
@@ -514,6 +515,9 @@ static void strip_window_decorations(NSWindow *window) {
             }
             if (!(window.styleMask & NSWindowStyleMaskFullSizeContentView)) {
                 window.styleMask |= NSWindowStyleMaskFullSizeContentView;
+            }
+            if (is_standard_window(window) && !(window.styleMask & NSWindowStyleMaskMiniaturizable)) {
+                window.styleMask |= NSWindowStyleMaskMiniaturizable;
             }
         }
 
@@ -537,27 +541,24 @@ static void strip_window_decorations(NSWindow *window) {
             }
         }
 
-        // 3. Permanently hide standard traffic light buttons (do NOT removeFromSuperview)
+        // 3. Permanently hide standard traffic light buttons (do NOT zero out frames or disable in Electron)
         NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
         if (closeBtn) {
-            closeBtn.hidden = NO;
+            closeBtn.hidden = YES;
             closeBtn.alphaValue = 0.0;
-            closeBtn.frame = NSMakeRect(0, 0, 14.0, 14.0);
             closeBtn.enabled = YES; // MUST remain enabled so Cmd+W, performClose: and AXPress close actions succeed!
         }
         NSButton *minBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
         if (minBtn) {
             minBtn.hidden = YES;
-            minBtn.alphaValue = 0.0;
-            minBtn.frame = NSZeroRect;
-            minBtn.enabled = NO;
+            minBtn.alphaValue = 1.0;
+            minBtn.enabled = YES;
         }
         NSButton *zoomBtn = [window standardWindowButton:NSWindowZoomButton];
         if (zoomBtn) {
             zoomBtn.hidden = YES;
             zoomBtn.alphaValue = 0.0;
-            zoomBtn.frame = NSZeroRect;
-            zoomBtn.enabled = NO;
+            zoomBtn.enabled = YES;
         }
 
         // 4. Remove titlebar separator line (macOS 11+)
@@ -720,6 +721,7 @@ static void strip_window_decorations(NSWindow *window) {
 - (void)hypr_setContentView:(NSView *)view;
 - (BOOL)hypr_isOpaque;
 - (void)hypr_performClose:(id)sender;
+- (void)hypr_performMiniaturize:(id)sender;
 - (void)hypr_setOpaque:(BOOL)opaque;
 - (void)hypr_setBackgroundColor:(NSColor *)color;
 - (BOOL)hypr_performKeyEquivalent:(NSEvent *)event;
@@ -728,6 +730,11 @@ static void strip_window_decorations(NSWindow *window) {
 - (void)hypr_sendEvent:(NSEvent *)event;
 - (BOOL)hypr_canBecomeKeyWindow;
 - (BOOL)hypr_canBecomeMainWindow;
+- (BOOL)hypr_accessibilityIsMinimizedAttributeSettable;
+- (void)hypr_accessibilitySetMinimizedAttribute:(id)value;
+- (BOOL)hypr_accessibilityIsAttributeSettable:(NSString *)attribute;
+- (void)hypr_accessibilitySetValue:(id)value forAttribute:(NSString *)attribute;
+- (void)hypr_setAccessibilityMinimized:(BOOL)minimized;
 @end
 
 @implementation NSWindow (HyprClientSwizzle)
@@ -778,6 +785,18 @@ static void strip_window_decorations(NSWindow *window) {
     [self hypr_performClose:sender];
 }
 
+- (void)hypr_performMiniaturize:(id)sender {
+    if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+        NSButton *minBtn = [self standardWindowButton:NSWindowMiniaturizeButton];
+        if (minBtn && minBtn.alphaValue <= 0.0) {
+            minBtn.alphaValue = 1.0;
+        }
+        [self miniaturize:sender];
+        return;
+    }
+    [self hypr_performMiniaturize:sender];
+}
+
 - (BOOL)hypr_performKeyEquivalent:(NSEvent *)event {
     NSEventModifierFlags flags = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
     NSString *chars = [event charactersIgnoringModifiers];
@@ -789,6 +808,14 @@ static void strip_window_decorations(NSWindow *window) {
         if (is_standard_window(self)) {
             [self close];
             return YES;
+        }
+    }
+    if ((isCmd || isAlt) && ([chars isEqualToString:@"m"] || [chars isEqualToString:@"M"])) {
+        if (is_standard_window(self) || (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0)) {
+            if (![self isMiniaturized]) {
+                [self performMiniaturize:nil];
+                return YES;
+            }
         }
     }
 
@@ -824,6 +851,14 @@ static void strip_window_decorations(NSWindow *window) {
             if (is_standard_window(self)) {
                 [self close];
                 return;
+            }
+        }
+        if ((isCmd || isAlt) && ([chars isEqualToString:@"m"] || [chars isEqualToString:@"M"])) {
+            if (is_standard_window(self) || (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0)) {
+                if (![self isMiniaturized]) {
+                    [self performMiniaturize:nil];
+                    return;
+                }
             }
         }
 
@@ -864,6 +899,11 @@ static void strip_window_decorations(NSWindow *window) {
     if ([menuItem action] == @selector(performClose:)) {
         return YES;
     }
+    if ([menuItem action] == @selector(performMiniaturize:) || [menuItem action] == @selector(miniaturize:)) {
+        if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+            return ![self isMiniaturized];
+        }
+    }
     return [self hypr_validateMenuItem:menuItem];
 }
 
@@ -871,7 +911,86 @@ static void strip_window_decorations(NSWindow *window) {
     if ([item action] == @selector(performClose:)) {
         return YES;
     }
+    if ([item action] == @selector(performMiniaturize:) || [item action] == @selector(miniaturize:)) {
+        if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+            return ![self isMiniaturized];
+        }
+    }
     return [self hypr_validateUserInterfaceItem:item];
+}
+
+- (BOOL)hypr_accessibilityIsMinimizedAttributeSettable {
+    if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+        return YES;
+    }
+    return [self hypr_accessibilityIsMinimizedAttributeSettable];
+}
+
+- (void)hypr_accessibilitySetMinimizedAttribute:(id)value {
+    if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+        BOOL shouldMin = YES;
+        if ([value respondsToSelector:@selector(boolValue)]) {
+            shouldMin = [value boolValue];
+        }
+        if (shouldMin) {
+            NSButton *minBtn = [self standardWindowButton:NSWindowMiniaturizeButton];
+            if (minBtn && minBtn.alphaValue <= 0.0) {
+                minBtn.alphaValue = 1.0;
+            }
+            [self miniaturize:nil];
+        } else {
+            [self deminiaturize:nil];
+        }
+        return;
+    }
+    [self hypr_accessibilitySetMinimizedAttribute:value];
+}
+
+- (BOOL)hypr_accessibilityIsAttributeSettable:(NSString *)attribute {
+    if ([attribute isEqualToString:NSAccessibilityMinimizedAttribute]) {
+        if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+            return YES;
+        }
+    }
+    return [self hypr_accessibilityIsAttributeSettable:attribute];
+}
+
+- (void)hypr_accessibilitySetValue:(id)value forAttribute:(NSString *)attribute {
+    if ([attribute isEqualToString:NSAccessibilityMinimizedAttribute]) {
+        if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+            BOOL shouldMin = YES;
+            if ([value respondsToSelector:@selector(boolValue)]) {
+                shouldMin = [value boolValue];
+            }
+            if (shouldMin) {
+                NSButton *minBtn = [self standardWindowButton:NSWindowMiniaturizeButton];
+                if (minBtn && minBtn.alphaValue <= 0.0) {
+                    minBtn.alphaValue = 1.0;
+                }
+                [self miniaturize:nil];
+            } else {
+                [self deminiaturize:nil];
+            }
+            return;
+        }
+    }
+    [self hypr_accessibilitySetValue:value forAttribute:attribute];
+}
+
+- (void)hypr_setAccessibilityMinimized:(BOOL)minimized {
+    if (([self styleMask] & NSWindowStyleMaskMiniaturizable) != 0 || is_standard_window(self)) {
+        if (minimized) {
+            NSButton *minBtn = [self standardWindowButton:NSWindowMiniaturizeButton];
+            if (minBtn && minBtn.alphaValue <= 0.0) {
+                minBtn.alphaValue = 1.0;
+            }
+            [self miniaturize:nil];
+        } else {
+            [self deminiaturize:nil];
+        }
+        return;
+    }
+    [self hypr_setAccessibilityMinimized:minimized];
 }
 
 @end
@@ -1038,6 +1157,20 @@ static void (*s_orig_widget_setAlphaValue)(id, SEL, double) = NULL;
 static void hypr_widget_setAlphaValue(id self, SEL _cmd, double alpha) {
     (void)alpha;
     if (s_orig_widget_setAlphaValue) {
+        // NSWindowMiniaturizeButton MUST maintain alpha > 0.0 so AppKit dock minimize animation succeeds
+        if ([self isKindOfClass:[NSButton class]]) {
+            NSButton *btn = (NSButton *)self;
+            SEL act = [btn action];
+            if (act == @selector(miniaturize:) || act == @selector(performMiniaturize:) || [btn tag] == 1) {
+                s_orig_widget_setAlphaValue(self, _cmd, 1.0);
+                return;
+            }
+            NSWindow *win = [btn window];
+            if (win && [win standardWindowButton:NSWindowMiniaturizeButton] == btn) {
+                s_orig_widget_setAlphaValue(self, _cmd, 1.0);
+                return;
+            }
+        }
         s_orig_widget_setAlphaValue(self, _cmd, 0.0);
     }
 }
@@ -1098,12 +1231,18 @@ static void hypr_client_entry(void) {
         hypr_swizzle(windowClass, @selector(setOpaque:), @selector(hypr_setOpaque));
         hypr_swizzle(windowClass, @selector(setBackgroundColor:), @selector(hypr_setBackgroundColor:));
         hypr_swizzle(windowClass, @selector(performClose:), @selector(hypr_performClose:));
+        hypr_swizzle(windowClass, @selector(performMiniaturize:), @selector(hypr_performMiniaturize:));
         hypr_swizzle(windowClass, @selector(performKeyEquivalent:), @selector(hypr_performKeyEquivalent:));
         hypr_swizzle(windowClass, @selector(validateMenuItem:), @selector(hypr_validateMenuItem:));
         hypr_swizzle(windowClass, @selector(validateUserInterfaceItem:), @selector(hypr_validateUserInterfaceItem:));
         hypr_swizzle(windowClass, @selector(sendEvent:), @selector(hypr_sendEvent:));
         hypr_swizzle(windowClass, @selector(canBecomeKeyWindow), @selector(hypr_canBecomeKeyWindow));
         hypr_swizzle(windowClass, @selector(canBecomeMainWindow), @selector(hypr_canBecomeMainWindow));
+        hypr_swizzle(windowClass, sel_registerName("accessibilityIsMinimizedAttributeSettable"), @selector(hypr_accessibilityIsMinimizedAttributeSettable));
+        hypr_swizzle(windowClass, sel_registerName("accessibilitySetMinimizedAttribute:"), @selector(hypr_accessibilitySetMinimizedAttribute:));
+        hypr_swizzle(windowClass, sel_registerName("accessibilityIsAttributeSettable:"), @selector(hypr_accessibilityIsAttributeSettable:));
+        hypr_swizzle(windowClass, sel_registerName("accessibilitySetValue:forAttribute:"), @selector(hypr_accessibilitySetValue:forAttribute:));
+        hypr_swizzle(windowClass, sel_registerName("setAccessibilityMinimized:"), @selector(hypr_setAccessibilityMinimized:));
 
         Class splitViewClass = [NSSplitView class];
         if (splitViewClass) {
@@ -1243,7 +1382,7 @@ static void hypr_client_entry(void) {
             }
         });
 
-        // Observe window updates to ensure decorations stay stripped across dynamic relayouts
+        // Observe window updates to ensure new windows get stripped without re-processing stripped ones
         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowDidUpdateNotification
                                                           object:nil
                                                            queue:[NSOperationQueue mainQueue]
@@ -1251,7 +1390,7 @@ static void hypr_client_entry(void) {
             id obj = note.object;
             if ([obj isKindOfClass:[NSWindow class]]) {
                 NSWindow *win = (NSWindow *)obj;
-                if (![objc_getAssociatedObject(win, kHyprWindowStrippedKey) boolValue] || win.hasShadow) {
+                if (![objc_getAssociatedObject(win, kHyprWindowStrippedKey) boolValue]) {
                     strip_window_decorations(win);
                 }
             }

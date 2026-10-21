@@ -64,6 +64,48 @@ public final class WallpaperThumbnailLoader: @unchecked Sendable {
         try? FileManager.default.createDirectory(atPath: cacheDir, withIntermediateDirectories: true)
     }
 
+    /// Synchronously retrieves a thumbnail from memory cache if available
+    public func cachedImage(for path: String, targetSize: NSSize = NSSize(width: 250, height: 145)) -> NSImage? {
+        let cacheKey = "\(path)@\(Int(targetSize.width))x\(Int(targetSize.height))"
+        return memoryCache.object(forKey: cacheKey as NSString)
+    }
+
+    /// Synchronously retrieves a thumbnail from memory cache for a URL if available
+    public func cachedImage(for url: URL, targetSize: NSSize = NSSize(width: 250, height: 145)) -> NSImage? {
+        cachedImage(for: url.path, targetSize: targetSize)
+    }
+
+    /// Loads or generates a downsampled thumbnail asynchronously for a URL
+    @discardableResult
+    public func loadThumbnail(
+        for url: URL,
+        targetSize: NSSize = NSSize(width: 250, height: 145),
+        completion: @escaping CompletionHandler
+    ) -> ThumbnailCancellationToken? {
+        loadThumbnail(for: url.path, targetSize: targetSize, completion: completion)
+    }
+
+    /// Loads or generates a downsampled thumbnail constrained by maxPixelSize
+    @discardableResult
+    public func loadThumbnail(
+        for path: String,
+        maxPixelSize: Int,
+        completion: @escaping CompletionHandler
+    ) -> ThumbnailCancellationToken? {
+        let size = NSSize(width: maxPixelSize, height: maxPixelSize)
+        return loadThumbnail(for: path, targetSize: size, completion: completion)
+    }
+
+    /// Loads or generates a downsampled thumbnail constrained by maxPixelSize for a URL
+    @discardableResult
+    public func loadThumbnail(
+        for url: URL,
+        maxPixelSize: Int,
+        completion: @escaping CompletionHandler
+    ) -> ThumbnailCancellationToken? {
+        loadThumbnail(for: url.path, maxPixelSize: maxPixelSize, completion: completion)
+    }
+
     /// Loads or generates a downsampled thumbnail asynchronously with bounded concurrency,
     /// in-flight deduplication, and persistent disk cache fallback.
     @discardableResult

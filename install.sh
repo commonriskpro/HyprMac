@@ -77,7 +77,7 @@ sudo ln -sf /Applications/HyprMac.app/Contents/MacOS/HyprMac /usr/local/bin/Hypr
 sudo ln -sf /Applications/HyprMac.app/Contents/MacOS/HyprMac /usr/local/bin/hyprmac
 
 # Clean any stale IPC state
-sudo rm -f /tmp/hyprmac-ipc.shm /tmp/hyprserver.ready
+sudo rm -f /tmp/hyprmac-ipc.shm /tmp/hyprmac-ipc.trigger /tmp/hyprmac-inject.sock /tmp/hyprserver.ready
 
 # 4. Install LaunchDaemon (Root hook)
 echo -e "${BOLD}[3/4] Registering WindowServer LaunchDaemon...${NC}"

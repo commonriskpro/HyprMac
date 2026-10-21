@@ -11,6 +11,14 @@ public struct FuzzyMatchResult<T>: @unchecked Sendable {
 }
 
 public enum FuzzyMatcher {
+    private static let nonAlphanumericSet = CharacterSet.alphanumerics.inverted
+
+    private struct ScoredCandidate<T> {
+        let item: T
+        let target: String
+        let score: Int
+    }
+
     /// Filters and scores candidates according to the priority:
     /// exact full match > exact prefix > word boundary match > consecutive character match > substring match.
     /// Case-insensitive.
@@ -24,11 +32,12 @@ public enum FuzzyMatcher {
             return candidates
         }
 
-        var scored: [FuzzyMatchResult<T>] = []
+        var scored: [ScoredCandidate<T>] = []
+        scored.reserveCapacity(candidates.count)
         for candidate in candidates {
             let target = extractTarget(candidate)
             if let s = score(query: trimmed, target: target) {
-                scored.append(FuzzyMatchResult(item: candidate, score: s))
+                scored.append(ScoredCandidate(item: candidate, target: target, score: s))
             }
         }
 
@@ -36,7 +45,7 @@ public enum FuzzyMatcher {
             if a.score != b.score {
                 return a.score > b.score
             }
-            return extractTarget(a.item).localizedCaseInsensitiveCompare(extractTarget(b.item)) == .orderedAscending
+            return a.target.localizedCaseInsensitiveCompare(b.target) == .orderedAscending
         }
 
         return scored.map { $0.item }
@@ -61,7 +70,7 @@ public enum FuzzyMatcher {
         }
 
         // 3. Word boundary matches: (30,000 tier)
-        let words = target.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        let words = target.components(separatedBy: nonAlphanumericSet).filter { !$0.isEmpty }
 
         // 3a. Any individual word prefix
         for (i, word) in words.enumerated() {
@@ -100,10 +109,13 @@ public enum FuzzyMatcher {
                 qIndex = q.index(after: qIndex)
                 var charScore = 100
 
-                let isWordStart = (tIndex == t.startIndex) ||
-                    CharacterSet.alphanumerics.inverted.contains(
-                        UnicodeScalar(t[t.index(before: tIndex)].unicodeScalars.first!.value)!
-                    )
+                let isWordStart: Bool
+                if tIndex == t.startIndex {
+                    isWordStart = true
+                } else {
+                    let prevChar = t[t.index(before: tIndex)]
+                    isWordStart = prevChar.unicodeScalars.first.map { nonAlphanumericSet.contains($0) } ?? false
+                }
                 if isWordStart {
                     charScore += 250
                 }

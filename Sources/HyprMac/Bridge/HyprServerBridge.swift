@@ -355,6 +355,17 @@ public final class HyprServerBridge: @unchecked Sendable {
     private var _isAvailable: Bool = false
     private var authToken: Data?
     private var sequenceCounter: UInt32 = 0
+    private var triggerFd: Int32 = -1
+
+    private func notifyTrigger() {
+        if triggerFd < 0 {
+            triggerFd = open("/tmp/hyprmac-ipc.trigger", O_WRONLY | O_CREAT | O_TRUNC, 0o666)
+        }
+        if triggerFd >= 0 {
+            var b: UInt8 = 1
+            _ = pwrite(triggerFd, &b, 1, 0)
+        }
+    }
 
     public let ringBuffer = CommandRingBuffer()
     public var replayQueue: CommandRingBuffer { ringBuffer }
@@ -394,7 +405,18 @@ public final class HyprServerBridge: @unchecked Sendable {
 
     private func isHookReadyDirect() -> Bool {
         guard let ptr = hookReadyPtr else { return false }
-        return atomicLoad(ptr) == 1
+        if atomicLoad(ptr) != 1 { return false }
+        if let pPtr = hookPidPtr {
+            let pid = atomicLoad(pPtr)
+            if pid > 0 {
+                if kill(pid_t(pid), 0) != 0 {
+                    return false
+                }
+            } else {
+                return false
+            }
+        }
+        return true
     }
 
     public var isHookReady: Bool {
@@ -685,6 +707,7 @@ public final class HyprServerBridge: @unchecked Sendable {
                         newW = 0
                     }
                     atomicStore(wPtr, newW)
+                    notifyTrigger()
                     return
                 }
             } else {
@@ -705,6 +728,7 @@ public final class HyprServerBridge: @unchecked Sendable {
                     OSMemoryBarrier()
                     let newW = UInt32(totalBytes)
                     atomicStore(wPtr, newW)
+                    notifyTrigger()
                     return
                 }
             }
@@ -819,6 +843,10 @@ public final class HyprServerBridge: @unchecked Sendable {
                 guard self.setupSharedMemory() else {
                     throw HyprBridgeError.notConnected
                 }
+            }
+
+            guard self.isHookReadyDirect() else {
+                throw HyprBridgeError.notConnected
             }
 
             let message = self.buildMessage(command: command, windowId: windowId, payload: payload)

@@ -31,6 +31,8 @@
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <libproc.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 /* ---- Output helpers ------------------------------------------------------- */
 
@@ -50,6 +52,7 @@
 #define LAUNCHDAEMON_PLIST "/Library/LaunchDaemons/com.hyprmac.inject.plist"
 #define STAGED_DYLIB_DIR   "/Library/GPUBundles"
 #define STAGED_DYLIB_PATH  "/Library/GPUBundles/libhyprserver.dylib"
+#define HYPR_INJECT_SOCKET_PATH "/tmp/hyprmac-inject.sock"
 
 /* Private kernel function loaded via dlsym at runtime. */
 typedef kern_return_t (*thread_convert_fn)(
@@ -1124,6 +1127,78 @@ fail:
     return -1;
 }
 
+static void run_helper_daemon(void)
+{
+    unlink(HYPR_INJECT_SOCKET_PATH);
+    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd < 0) {
+        LOG_ERR("Failed to create helper socket: %s", strerror(errno));
+        return;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strlcpy(addr.sun_path, HYPR_INJECT_SOCKET_PATH, sizeof(addr.sun_path));
+
+    if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        LOG_ERR("Failed to bind helper socket: %s", strerror(errno));
+        close(sfd);
+        return;
+    }
+
+    chmod(HYPR_INJECT_SOCKET_PATH, 0666);
+
+    if (listen(sfd, 16) != 0) {
+        LOG_ERR("Failed to listen on helper socket: %s", strerror(errno));
+        close(sfd);
+        return;
+    }
+
+    LOG_OK("Privileged injector helper daemon active on %s", HYPR_INJECT_SOCKET_PATH);
+
+    while (1) {
+        int client_fd = accept(sfd, NULL, NULL);
+        if (client_fd < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        char buf[PATH_MAX + 64];
+        ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            pid_t pid = 0;
+            char path[PATH_MAX];
+            int suspend = 1;
+            char cmd[16];
+            if (sscanf(buf, "%15s %d %s %d", cmd, &pid, path, &suspend) >= 3) {
+                if (strcmp(cmd, "INJECT") == 0 && pid > 0) {
+                    LOG_INFO("Helper request: inject PID %d with %s (suspend=%d)", pid, path, suspend);
+                    int res = load_library_into_process(pid, path, 0, suspend);
+                    if (res == 0) {
+                        const char *ok = "OK\n";
+                        (void)write(client_fd, ok, strlen(ok));
+                        LOG_OK("Helper injected %s into PID %d", path, pid);
+                    } else {
+                        char err_msg[64];
+                        snprintf(err_msg, sizeof(err_msg), "ERR %d\n", res);
+                        (void)write(client_fd, err_msg, strlen(err_msg));
+                        LOG_ERR("Helper failed to inject PID %d (code %d)", pid, res);
+                    }
+                } else {
+                    const char *bad = "ERR invalid command\n";
+                    (void)write(client_fd, bad, strlen(bad));
+                }
+            }
+        }
+        close(client_fd);
+    }
+
+    close(sfd);
+    unlink(HYPR_INJECT_SOCKET_PATH);
+}
+
 /* ===========================================================================
  * main
  */
@@ -1133,9 +1208,11 @@ int main(int argc, char *argv[])
     pid_t target_pid = 0;
     const char *explicit_lib = NULL;
     int suspend = 0;
+    int daemon_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--uninstall") == 0) uninstall = 1;
+        else if (strcmp(argv[i], "--daemon") == 0 || strcmp(argv[i], "--helper") == 0) daemon_mode = 1;
         else if (strcmp(argv[i], "--suspend") == 0) suspend = 1;
         else if (isdigit((unsigned char)argv[i][0]) && target_pid == 0) target_pid = (pid_t)atoi(argv[i]);
         else if (argv[i][0] != '-') explicit_lib = argv[i];
@@ -1144,7 +1221,7 @@ int main(int argc, char *argv[])
     if (uninstall) { handle_uninstall(); return 0; }
 
     if (target_pid == 0 && geteuid() != 0) {
-        LOG_ERR("Must run as root to target WindowServer.");
+        LOG_ERR("Must run as root to target WindowServer or run helper daemon.");
         return 1;
     }
 
@@ -1160,6 +1237,20 @@ int main(int argc, char *argv[])
     }
     if (arm64e == 1) LOG_OK("-arm64e_preview_abi confirmed.");
     else LOG_WARN("Could not verify boot args -- proceeding.");
+
+    if (daemon_mode) {
+        if (!check_hook_loaded()) {
+            pid_t ws_pid = find_windowserver_pid();
+            if (ws_pid > 0) {
+                const char *dylib_path = resolve_dylib_path(argv[0], explicit_lib);
+                if (dylib_path && stage_dylib_for_windowserver(dylib_path, STAGED_DYLIB_PATH) == 0) {
+                    (void)load_library_into_process(ws_pid, STAGED_DYLIB_PATH, 1, 0);
+                }
+            }
+        }
+        run_helper_daemon();
+        return 0;
+    }
 
     if (target_pid > 0) {
         const char *dylib_path = explicit_lib ? explicit_lib : "build/libhyprclient.dylib";

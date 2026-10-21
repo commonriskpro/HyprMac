@@ -163,6 +163,9 @@ typedef struct {
 #define HYPR_SHM_PATH "/tmp/hyprmac-ipc.shm"
 #define HYPR_SHM_SIZE (64 * 1024)  // 64KB total
 
+// Event trigger file path for instantaneous kqueue wake-up of hook
+#define HYPR_TRIGGER_PATH "/tmp/hyprmac-ipc.trigger"
+
 // Ring buffer sizes
 #define HYPR_CMD_RING_SIZE  (28 * 1024)  // 28KB: Swift -> Hook commands
 #define HYPR_RSP_RING_SIZE  (28 * 1024)  // 28KB: Hook -> Swift responses

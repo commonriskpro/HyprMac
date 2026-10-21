@@ -16,9 +16,20 @@ public final class AXEventObserver: @unchecked Sendable {
     public var onTitleChanged: (@MainActor () -> Void)?
     public var onWindowMiniaturized: (@MainActor () -> Void)?
     public var onWindowDeminiaturized: (@MainActor () -> Void)?
+    public var onWindowMiniaturizedWithWindow: (@MainActor (pid_t, CGWindowID?) -> Void)?
+    public var onWindowDeminiaturizedWithWindow: (@MainActor (pid_t, CGWindowID?) -> Void)?
+    public var onWindowCreated: (@MainActor (pid_t) -> Void)?
+    public var onWindowDestroyed: (@MainActor (pid_t) -> Void)?
+    public var onAnyEvent: (@MainActor (pid_t, String) -> Void)?
+
+    public var isObserving: Bool {
+        return observer != nil && observedPID > 0
+    }
 
     private var monitoredNotifications: [CFString] {
         return [
+            kAXWindowCreatedNotification as CFString,
+            kAXUIElementDestroyedNotification as CFString,
             kAXWindowMovedNotification as CFString,
             kAXWindowResizedNotification as CFString,
             kAXFocusedWindowChangedNotification as CFString,
@@ -41,14 +52,20 @@ public final class AXEventObserver: @unchecked Sendable {
         stop()
 
         var axObs: AXObserver?
-        let callback: AXObserverCallback = { _, _, notification, refcon in
+        let callback: AXObserverCallback = { _, element, notification, refcon in
             guard let refcon = refcon else { return }
             let watcher = Unmanaged<AXEventObserver>.fromOpaque(refcon).takeUnretainedValue()
             let notifName = notification as String
 
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if notifName == (kAXWindowMovedNotification as String) {
+                    let pid = watcher.observedPID
+                    watcher.onAnyEvent?(pid, notifName)
+                    if notifName == (kAXWindowCreatedNotification as String) {
+                        watcher.onWindowCreated?(pid)
+                    } else if notifName == (kAXUIElementDestroyedNotification as String) {
+                        watcher.onWindowDestroyed?(pid)
+                    } else if notifName == (kAXWindowMovedNotification as String) {
                         watcher.onWindowMoved?()
                     } else if notifName == (kAXWindowResizedNotification as String) {
                         watcher.onWindowResized?()
@@ -57,8 +74,12 @@ public final class AXEventObserver: @unchecked Sendable {
                     } else if notifName == (kAXTitleChangedNotification as String) {
                         watcher.onTitleChanged?()
                     } else if notifName == (kAXWindowMiniaturizedNotification as String) {
+                        let wid = WindowDetector.shared.getWindowID(for: element)
+                        watcher.onWindowMiniaturizedWithWindow?(pid, wid)
                         watcher.onWindowMiniaturized?()
                     } else if notifName == (kAXWindowDeminiaturizedNotification as String) {
+                        let wid = WindowDetector.shared.getWindowID(for: element)
+                        watcher.onWindowDeminiaturizedWithWindow?(pid, wid)
                         watcher.onWindowDeminiaturized?()
                     }
                 }
@@ -71,6 +92,7 @@ public final class AXEventObserver: @unchecked Sendable {
         }
 
         let appElem = AXUIElementCreateApplication(pid)
+        _ = AXUIElementSetMessagingTimeout(appElem, 0.150)
         self.appElement = appElem
 
         for notif in monitoredNotifications {

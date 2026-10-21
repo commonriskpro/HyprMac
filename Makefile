@@ -7,7 +7,7 @@ AS = clang
 
 ARCH_FLAGS = -arch arm64e -target arm64e-apple-macos27.0
 PAC_FLAGS = -fptrauth-calls -fptrauth-intrinsics
-CFLAGS = $(ARCH_FLAGS) $(PAC_FLAGS) -std=c11 -Wall -Wextra -Werror -O2 -fvisibility=hidden
+CFLAGS = $(ARCH_FLAGS) $(PAC_FLAGS) -std=c11 -Wall -Wextra -Werror -O2 -fvisibility=hidden -DNDEBUG -Wl,-dead_strip
 DYLIB_FLAGS = -dynamiclib -install_name @rpath/libhyprserver.dylib
 
 # Code signing identity
@@ -26,7 +26,7 @@ endif
 
 BUILD_DIR = build
 
-.PHONY: all clean hook injector client install install-daemon uninstall-daemon app install-app install-agent uninstall package
+.PHONY: all clean hook injector client build-hooks install install-daemon uninstall-daemon app install-app install-agent uninstall package
 
 install: install-daemon install-agent
 
@@ -58,9 +58,13 @@ package: all
 
 all: hook injector client app
 
+build-hooks: hook client injector
+
 app: client
 	swift build -c release
 	@mkdir -p /Applications/HyprMac.app/Contents/MacOS
+	rm -f /Applications/HyprMac.app/Contents/MacOS/HyprMac
+	rm -f /Applications/HyprMac.app/Contents/MacOS/libhyprclient.dylib
 	@cp .build/release/HyprMac /Applications/HyprMac.app/Contents/MacOS/HyprMac
 	@cp $(BUILD_DIR)/libhyprclient.dylib /Applications/HyprMac.app/Contents/MacOS/libhyprclient.dylib
 	codesign -s "$(SIGN_IDENTITY)" $(CODESIGN_FLAGS) /Applications/HyprMac.app/Contents/MacOS/libhyprclient.dylib
@@ -80,7 +84,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/libhyprclient.dylib: native/client_hook/client.m | $(BUILD_DIR)
-	$(CC) -arch arm64e -target arm64e-apple-macos27.0 -fobjc-arc -O2 -dynamiclib \
+	$(CC) $(ARCH_FLAGS) -fobjc-arc -O2 -fvisibility=hidden -DNDEBUG -Wl,-dead_strip -dynamiclib \
 		-framework AppKit -framework Foundation -framework QuartzCore \
 		-o $@ native/client_hook/client.m
 	codesign -s "$(SIGN_IDENTITY)" $(CODESIGN_FLAGS) $@

@@ -810,14 +810,18 @@ public final class WorkspaceManager {
     }
 
     /// Determines the target workspace for an external or Dock activation of a window.
-    /// Returns the window's designated workspace if known, or falls back to looking up
+    /// If the window is currently minimized, returns the currently active workspace so it
+    /// restores in the caller's active context. Otherwise returns the window's designated workspace,
     /// by owning process ID if the window is unassigned.
     public func targetWorkspaceForActivation(windowID wid: CGWindowID, pid: pid_t? = nil) -> Int? {
+        if isMinimized(wid) {
+            return activeWorkspace
+        }
         if let ws = workspace(for: wid) {
             return ws
         }
         if let pid = pid ?? getPID(for: wid) {
-            if let assignedWid = windowOrder.last(where: { windowPIDs[$0] == pid && windowWorkspaces[$0] != nil }) {
+            if let assignedWid = windowOrder.last(where: { windowPIDs[$0] == pid && windowWorkspaces[$0] != nil && !isMinimized($0) }) {
                 return windowWorkspaces[assignedWid]
             }
         }
@@ -1025,7 +1029,12 @@ public final class WorkspaceManager {
         }
 
         // Step 2: Inactive windows belonging to other workspaces
-        let otherWindows = windowOrder.filter { windowWorkspaces[$0] != activeWorkspace && !isPinned($0) && !(isInSpecialWorkspace($0) && activeSpecialWorkspaces.contains(specialWorkspaceName(for: $0) ?? "")) }
+        let otherWindows = windowOrder.filter {
+            windowWorkspaces[$0] != activeWorkspace &&
+            !minimizedWindowIDs.contains($0) &&
+            !isPinned($0) &&
+            !(isInSpecialWorkspace($0) && activeSpecialWorkspaces.contains(specialWorkspaceName(for: $0) ?? ""))
+        }
         let targetFocusWid = lastFocusedPerWorkspace[activeWorkspace] ?? activeIDs.first
 
         let allScreens = HiddenWindowPlacement.allCGScreens()

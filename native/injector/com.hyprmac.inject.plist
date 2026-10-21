@@ -7,14 +7,12 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/hypr-inject</string>
+        <string>--daemon</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
     <key>StandardOutPath</key>
     <string>/var/log/hyprmac-inject.log</string>
     <key>StandardErrorPath</key>

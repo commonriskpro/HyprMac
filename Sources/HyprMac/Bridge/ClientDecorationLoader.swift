@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import Darwin
 
 public final class ClientDecorationLoader: @unchecked Sendable {
     public static let shared = ClientDecorationLoader()
@@ -112,6 +113,16 @@ public final class ClientDecorationLoader: @unchecked Sendable {
         if let a = app {
             attachIfNeeded(app: a, delay: 0.05)
         } else {
+            var pathBuf = [CChar](repeating: 0, count: 4096)
+            let ret = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
+            let procPath = ret > 0 ? String(cString: pathBuf) : ""
+            let procName = URL(fileURLWithPath: procPath).lastPathComponent.lowercased()
+            if !procName.isEmpty && isIgnored(appName: procName, bundleId: "") {
+                print("[HyprMac] Skipping client attachment for ignored PID \(pid): \(procName)")
+                fflush(stdout)
+                return
+            }
+
             lock.lock()
             if attachedPIDs.contains(pid) {
                 lock.unlock()
@@ -122,9 +133,23 @@ public final class ClientDecorationLoader: @unchecked Sendable {
 
             queue.async { [weak self] in
                 guard let self = self else { return }
-                self.performAttachment(pid: pid, appName: "PID \(pid)", bundleId: "")
+                self.performAttachment(pid: pid, appName: procName.isEmpty ? "PID \(pid)" : procName, bundleId: "")
             }
         }
+    }
+
+    public func isIgnored(appName: String, bundleId: String) -> Bool {
+        let appLower = appName.lowercased()
+        let bundleLower = bundleId.lowercased()
+        lock.lock()
+        defer { lock.unlock() }
+        for ignored in ignoredApps {
+            let ig = ignored.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !ig.isEmpty && (appLower.contains(ig) || bundleLower.contains(ig)) {
+                return true
+            }
+        }
+        return false
     }
 
     public func attachIfNeeded(app: NSRunningApplication, delay: TimeInterval = 0.05) {
@@ -132,29 +157,21 @@ public final class ClientDecorationLoader: @unchecked Sendable {
         let pid = app.processIdentifier
         guard pid > 0 && pid != getpid() else { return }
 
+        let appName = app.localizedName ?? "App"
+        let bundleId = app.bundleIdentifier ?? ""
+
+        if isIgnored(appName: appName, bundleId: bundleId) {
+            print("[HyprMac] Skipping client attachment for self-theming app: \(appName) (\(bundleId))")
+            fflush(stdout)
+            return
+        }
+
         lock.lock()
         if attachedPIDs.contains(pid) {
             lock.unlock()
             return
         }
         attachedPIDs.insert(pid)
-        lock.unlock()
-
-        let appName = app.localizedName ?? "App"
-        let bundleId = app.bundleIdentifier ?? ""
-        let appLower = appName.lowercased()
-        let bundleLower = bundleId.lowercased()
-
-        lock.lock()
-        for ignored in ignoredApps {
-            let ig = ignored.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if !ig.isEmpty && (appLower.contains(ig) || bundleLower.contains(ig)) {
-                lock.unlock()
-                print("[HyprMac] Skipping client attachment for self-theming app: \(appName) (\(bundleId))")
-                fflush(stdout)
-                return
-            }
-        }
         lock.unlock()
 
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -168,12 +185,6 @@ public final class ClientDecorationLoader: @unchecked Sendable {
             lock.lock()
             attachedPIDs.remove(pid)
             lock.unlock()
-            return
-        }
-
-        guard let injectBin = resolveBinary(name: "hypr-inject") else {
-            print("[HyprMac] hypr-inject binary not found. Skipping client attachment.")
-            fflush(stdout)
             return
         }
 
@@ -200,9 +211,23 @@ public final class ClientDecorationLoader: @unchecked Sendable {
             }
         }
 
+        // 1. Try instantaneous privileged helper socket (zero fork/exec subprocesses)
+        if injectViaHelperSocket(pid: pid, dylibPath: targetDylib) {
+            print("[HyprMac] Successfully attached client decoration stripper via helper daemon to " + appName + " (PID: " + String(pid) + ")")
+            fflush(stdout)
+            return
+        }
+
+        // 2. Fallback to CLI process execution if helper socket is unavailable
+        guard let injectBin = resolveBinary(name: "hypr-inject") else {
+            print("[HyprMac] hypr-inject binary not found. Skipping client attachment.")
+            fflush(stdout)
+            return
+        }
+
         let task = Process()
         task.executableURL = URL(fileURLWithPath: injectBin)
-        task.arguments = [String(pid), targetDylib, "--suspend"]
+        task.arguments = [String(pid), targetDylib]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
 
@@ -220,6 +245,52 @@ public final class ClientDecorationLoader: @unchecked Sendable {
             print("[HyprMac] Error invoking hypr-inject for " + appName + " (PID: " + String(pid) + "): " + error.localizedDescription)
             fflush(stdout)
         }
+    }
+
+    private func injectViaHelperSocket(pid: pid_t, dylibPath: String) -> Bool {
+        let sockPath = "/tmp/hyprmac-inject.sock"
+        guard FileManager.default.fileExists(atPath: sockPath) else { return false }
+
+        let sfd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard sfd >= 0 else { return false }
+        defer { close(sfd) }
+
+        var timeout = timeval(tv_sec: 0, tv_usec: 200_000) // 200ms timeout
+        setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(sfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let maxLen = MemoryLayout.size(ofValue: addr.sun_path)
+        withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+            _ = sockPath.withCString { cstr in
+                strncpy(ptr, cstr, maxLen - 1)
+            }
+        }
+
+        let addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let connectRes = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
+                connect(sfd, saPtr, addrLen)
+            }
+        }
+
+        guard connectRes == 0 else { return false }
+
+        let cmdStr = "INJECT \(pid) \(dylibPath) 0\n"
+        guard let data = cmdStr.data(using: .utf8) else { return false }
+
+        let writeRes = data.withUnsafeBytes { raw in
+            write(sfd, raw.baseAddress!, data.count)
+        }
+        guard writeRes == data.count else { return false }
+
+        var respBuf = [UInt8](repeating: 0, count: 64)
+        let n = read(sfd, &respBuf, 63)
+        guard n > 0 else { return false }
+
+        let resp = String(decoding: respBuf.prefix(n), as: UTF8.self)
+        return resp.hasPrefix("OK")
     }
 
     private func resolveBinary(name: String) -> String? {

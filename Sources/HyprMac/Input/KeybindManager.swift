@@ -669,16 +669,38 @@ public final class KeybindManager: @unchecked Sendable {
             let bounds = WindowDetector.shared.getWindowBounds(windowID: wid) ?? info.bounds
 
             let performDirectMin = {
-                let appElement = AXUIElementCreateApplication(info.processID)
-                var winVal: AnyObject?
-                if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winVal) == .success,
-                   let win = winVal {
-                    let axWindow = win as! AXUIElement
-                    _ = AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+                var minimized = WindowDetector.shared.setWindowMinimized(windowID: wid, minimized: true, pid: info.processID)
+                if !minimized {
+                    let appElement = AXUIElementCreateApplication(info.processID)
+                    var winVal: AnyObject?
+                    if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &winVal) == .success,
+                       let win = winVal {
+                        let axWindow = win as! AXUIElement
+                        minimized = (AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success)
+                    }
+                }
+                if !minimized {
+                    let p = Process()
+                    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    let script = """
+                    tell application "System Events"
+                        set procList to (every application process whose unix id is \(info.processID))
+                        if (count of procList) > 0 then
+                            set targetProc to item 1 of procList
+                            try
+                                click menu item "Minimize" of menu "Window" of menu bar 1 of targetProc
+                                return
+                            end try
+                        end if
+                        keystroke "m" using command down
+                    end tell
+                    """
+                    p.arguments = ["-e", script]
+                    try? p.run()
                 }
                 self?.onWindowMinimize?(wid)
                 MainActor.assumeIsolated {
-                    WorkspaceManager.shared.removeWindow(wid: wid)
+                    WorkspaceManager.shared.setWindowMinimized(wid, minimized: true)
                 }
             }
 

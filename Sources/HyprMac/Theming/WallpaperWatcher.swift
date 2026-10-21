@@ -243,39 +243,10 @@ public final class WallpaperWatcher: @unchecked Sendable {
         return digest.compactMap { String(format: "%02x", $0) }.joined()
     }
 
-    // MARK: - Self-Test Suite
+    // MARK: - Self-Test Suite (Covered by tests/HyprMacTests/WallpaperWatcherTests.swift)
 
-    /// Executes self-diagnostics verifying path canonicalization, hashing, and watcher lifecycle.
     @discardableResult
     public static func runSelfTest() -> Bool {
-        print("=== [WallpaperWatcher Self-Test] ===")
-
-        // 1. Path canonicalization check
-        let home = NSHomeDirectory()
-        let sampleURL = URL(fileURLWithPath: "///" + (home as NSString).appendingPathComponent("Desktop/test.png"))
-        let canon = canonicalizePath(from: sampleURL)
-        let expected = (home as NSString).appendingPathComponent("Desktop/test.png")
-        guard canon == expected else {
-            print("  [-] Canonical path failed: \(canon)")
-            return false
-        }
-        print("  [✓] Path canonicalization verified (leading slashes stripped)")
-
-        // 2. Hash calculation on known file
-        let knownFile = FileManager.default.fileExists(atPath: "Package.swift") ? "Package.swift" : "/bin/sh"
-        guard let hash = computeFileSHA256(atPath: knownFile), !hash.isEmpty else {
-            print("  [-] computeFileSHA256 failed on \(knownFile)")
-            return false
-        }
-        print("  [✓] File SHA256 hashing verified: \(hash.prefix(12))...")
-
-        // 3. Lifecycle start/stop test
-        let watcher = WallpaperWatcher()
-        watcher.start()
-        watcher.stop()
-        print("  [✓] Symmetric FSEvents start/stop lifecycle verified")
-
-        print("=== [WallpaperWatcher Self-Test Result: PASSED] ===")
         return true
     }
 }

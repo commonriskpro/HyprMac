@@ -50,19 +50,22 @@ public final class AppScanner: @unchecked Sendable {
     private let lock = NSLock()
     private var cachedApps: [AppItem] = []
     private var lastScanTime: TimeInterval = 0
+    private var recordedModificationDates: [String: Date] = [:]
 
     public init() {}
+
+    /// Asynchronously warms the application cache and icons on a background queue
+    public func preloadAsync() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            _ = self?.scan(forceRefresh: false)
+        }
+    }
 
     /// Scans applications from standard system and user directories.
     /// Returns cached results if available and within cache TTL (60s), unless forceRefresh is true.
     public func scan(forceRefresh: Bool = false) -> [AppItem] {
         lock.lock()
         defer { lock.unlock() }
-
-        let now = ProcessInfo.processInfo.systemUptime
-        if !forceRefresh && !cachedApps.isEmpty && (now - lastScanTime < 60.0) {
-            return cachedApps
-        }
 
         let directoriesToScan: [URL] = [
             URL(fileURLWithPath: "/Applications"),
@@ -72,6 +75,31 @@ public final class AppScanner: @unchecked Sendable {
         ]
 
         let fileManager = FileManager.default
+        let now = ProcessInfo.processInfo.systemUptime
+        if !forceRefresh && !cachedApps.isEmpty {
+            if now - lastScanTime < 60.0 {
+                return cachedApps
+            }
+            var directoriesUnchanged = true
+            for root in directoriesToScan {
+                guard fileManager.fileExists(atPath: root.path) else { continue }
+                let currentMod = (try? root.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                if let recorded = recordedModificationDates[root.path] {
+                    if currentMod != recorded {
+                        directoriesUnchanged = false
+                        break
+                    }
+                } else {
+                    directoriesUnchanged = false
+                    break
+                }
+            }
+            if directoriesUnchanged {
+                lastScanTime = now
+                return cachedApps
+            }
+        }
+
         let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey]
         var discovered: [URL] = []
         var seenPaths = Set<String>()
@@ -129,6 +157,14 @@ public final class AppScanner: @unchecked Sendable {
         }
 
         appItems.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        var newDates: [String: Date] = [:]
+        for root in directoriesToScan {
+            guard fileManager.fileExists(atPath: root.path) else { continue }
+            if let modDate = (try? root.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate {
+                newDates[root.path] = modDate
+            }
+        }
+        recordedModificationDates = newDates
         cachedApps = appItems
         lastScanTime = now
         return appItems
@@ -163,6 +199,7 @@ public final class AppScanner: @unchecked Sendable {
     public func clearCache() {
         lock.lock()
         cachedApps.removeAll()
+        recordedModificationDates.removeAll()
         lastScanTime = 0
         lock.unlock()
     }

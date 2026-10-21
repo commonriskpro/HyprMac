@@ -511,6 +511,26 @@ final class WorkspaceManagerTests: XCTestCase {
         XCTAssertEqual(targetWS101, manager.activeWorkspace, "Activating window 101 on WS 1 must not trigger workspace switch")
     }
 
+    func testMinimizedWindowActivationTargetsActiveWorkspace() {
+        let manager = WorkspaceManager()
+        manager.assignWindow(wid: 101, to: 1, pid: 1001)
+        manager.assignWindow(wid: 201, to: 2, pid: 2002)
+
+        XCTAssertEqual(manager.activeWorkspace, 1)
+
+        // When window 201 is minimized while on workspace 2:
+        manager.setWindowMinimized(201, minimized: true)
+        XCTAssertTrue(manager.isMinimized(201))
+
+        // Activation lookup for minimized window must target the currently active workspace (1), not 2
+        XCTAssertEqual(manager.targetWorkspaceForActivation(windowID: 201), 1)
+
+        // Unminimizing window 201 reassigns to active workspace 1
+        manager.unminimizeWindow(wid: 201)
+        XCTAssertEqual(manager.workspace(for: 201), 1)
+        XCTAssertFalse(manager.isMinimized(201))
+    }
+
     func testManualSwitchInProgressAndCooldown() {
         let manager = WorkspaceManager()
         let dwindle = DwindleEngine()
