@@ -285,6 +285,7 @@ static fn_SLSNewWindow          g_orig_SLSNewWindow = NULL;
 static fn_CGSOrderWindow        g_orig_SLSOrderWindow = NULL;
 static fn_SLSMoveWindow         g_orig_SLSMoveWindow = NULL;
 static fn_SLSSetWindowAlpha     g_orig_SLSSetWindowAlpha = NULL;
+static fn_CGSReleaseWindow      g_orig_SLSReleaseWindow = NULL;
 
 static void *safe_resolve_symbol(const char *name);
 
@@ -495,64 +496,88 @@ static void draw_border_fill(CGSConnectionID cid, uint32_t bwid, CGSize size, ui
     CGContextRelease_p(ctx);
 }
 
-static void destroy_border_overlay(CGSConnectionID cid, HyprManagedWindow *win) {
-    if (!win) return;
-    if (win->border_wid != 0) {
-        uint32_t bwid = win->border_wid;
-        win->border_wid = 0;
-        unmark_border_wid(bwid);
-        CGSConnectionID conn = cid ? cid : _CGSDefaultConnection();
-        CGSOrderWindow(conn, bwid, 0 /* kCGSOrderOut */, 0);
-        CGSReleaseWindow(conn, bwid);
-        hypr_log("destroy_border_overlay: released border overlay wid=%u for window wid=%u", bwid, win->wid);
-    }
+static HyprManagedWindow *managed_window_find(uint32_t wid);
+
+static void destroy_border_overlay_wid(CGSConnectionID cid, uint32_t bwid, uint32_t wid) {
+    if (bwid == 0) return;
+    unmark_border_wid(bwid);
+    CGSConnectionID conn = cid ? cid : _CGSDefaultConnection();
+    CGSOrderWindow(conn, bwid, 0 /* kCGSOrderOut */, 0);
+    CGSReleaseWindow(conn, bwid);
+    hypr_log("destroy_border_overlay: released border overlay wid=%u for window wid=%u", bwid, wid);
 }
 
-static void create_or_update_border_overlay(CGSConnectionID cid, HyprManagedWindow *win) {
-    if (!win || !win->active || win->wid == 0) return;
-    if (is_border_wid(win->wid)) return;
+static void create_or_update_border_overlay(CGSConnectionID cid, uint32_t wid) {
+    if (wid == 0 || is_border_wid(wid)) return;
+
+    os_unfair_lock_lock(&g_state_lock);
+    HyprManagedWindow *win = managed_window_find(wid);
+    if (!win || !win->active) {
+        os_unfair_lock_unlock(&g_state_lock);
+        return;
+    }
+
+    float border_width = win->border_width;
+    uint32_t border_wid = win->border_wid;
+    bool is_focused = win->is_focused;
+    uint32_t color = is_focused ? win->color_active : win->color_inactive;
+    os_unfair_lock_unlock(&g_state_lock);
+
     CGSConnectionID conn = cid ? cid : _CGSDefaultConnection();
 
-    if (win->border_width <= 0.0f) {
-        destroy_border_overlay(conn, win);
+    if (border_width <= 0.0f) {
+        if (border_wid != 0) {
+            destroy_border_overlay_wid(conn, border_wid, wid);
+            os_unfair_lock_lock(&g_state_lock);
+            HyprManagedWindow *w = managed_window_find(wid);
+            if (w && w->border_wid == border_wid) {
+                w->border_wid = 0;
+            }
+            os_unfair_lock_unlock(&g_state_lock);
+        }
         return;
     }
 
     CGRect targetBounds;
     memset(&targetBounds, 0, sizeof(targetBounds));
-    CGError b_err = CGSGetWindowBounds(conn, win->wid, &targetBounds);
+    CGError b_err = CGSGetWindowBounds(conn, wid, &targetBounds);
     if (b_err != 0 || targetBounds.size.width <= 0.0 || targetBounds.size.height <= 0.0) {
-        hypr_log("create_or_update_border_overlay: GetWindowBounds failed for wid=%u (err=%d)", win->wid, b_err);
+        hypr_log("create_or_update_border_overlay: GetWindowBounds failed for wid=%u (err=%d)", wid, b_err);
         return;
     }
 
-    float bw = win->border_width;
     CGRect borderBounds = CGRectMake(
-        targetBounds.origin.x - bw,
-        targetBounds.origin.y - bw,
-        targetBounds.size.width + bw * 2.0f,
-        targetBounds.size.height + bw * 2.0f
+        targetBounds.origin.x - border_width,
+        targetBounds.origin.y - border_width,
+        targetBounds.size.width + border_width * 2.0f,
+        targetBounds.size.height + border_width * 2.0f
     );
 
-    uint32_t color = win->is_focused ? win->color_active : win->color_inactive;
-
-    if (win->border_wid != 0) {
+    if (border_wid != 0) {
         CGRect existingBounds;
         memset(&existingBounds, 0, sizeof(existingBounds));
-        CGError eb_err = CGSGetWindowBounds(conn, win->border_wid, &existingBounds);
+        CGError eb_err = CGSGetWindowBounds(conn, border_wid, &existingBounds);
         if (eb_err != 0 ||
             existingBounds.size.width != borderBounds.size.width ||
             existingBounds.size.height != borderBounds.size.height) {
-            destroy_border_overlay(conn, win);
+            destroy_border_overlay_wid(conn, border_wid, wid);
+            uint32_t old_bwid = border_wid;
+            border_wid = 0;
+            os_unfair_lock_lock(&g_state_lock);
+            HyprManagedWindow *w = managed_window_find(wid);
+            if (w && w->border_wid == old_bwid) {
+                w->border_wid = 0;
+            }
+            os_unfair_lock_unlock(&g_state_lock);
         }
     }
 
-    if (win->border_wid == 0) {
+    if (border_wid == 0) {
         CGRect shapeRect = CGRectMake(0, 0, borderBounds.size.width, borderBounds.size.height);
         CGSRegion region = NULL;
         CGError r_err = CGSNewRegionWithRect(&shapeRect, &region);
         if (r_err != 0 || !region) {
-            hypr_log("create_or_update_border_overlay: CGSNewRegionWithRect failed for wid=%u (err=%d)", win->wid, r_err);
+            hypr_log("create_or_update_border_overlay: CGSNewRegionWithRect failed for wid=%u (err=%d)", wid, r_err);
             return;
         }
 
@@ -565,29 +590,45 @@ static void create_or_update_border_overlay(CGSConnectionID cid, HyprManagedWind
         CGSReleaseRegion(region);
 
         if (w_err != 0 || bwid == 0) {
-            hypr_log("create_or_update_border_overlay: CGSNewWindow failed for wid=%u (err=%d)", win->wid, w_err);
+            hypr_log("create_or_update_border_overlay: CGSNewWindow failed for wid=%u (err=%d)", wid, w_err);
             return;
         }
 
-        win->border_wid = bwid;
         mark_as_border_wid(bwid);
 
-        int32_t level = 0;
-        if (CGSGetWindowLevel(conn, win->wid, &level) == 0) {
-            CGSSetWindowLevel(conn, bwid, level);
+        uint32_t orphan_bwid = 0;
+        os_unfair_lock_lock(&g_state_lock);
+        HyprManagedWindow *w = managed_window_find(wid);
+        if (w && w->active) {
+            w->border_wid = bwid;
+        } else {
+            orphan_bwid = bwid;
+        }
+        os_unfair_lock_unlock(&g_state_lock);
+
+        if (orphan_bwid != 0) {
+            destroy_border_overlay_wid(conn, orphan_bwid, wid);
+            return;
         }
 
-        CGSOrderWindow(conn, bwid, -1 /* kCGSOrderBelow */, win->wid);
-    } else {
-        CGSMoveWindow(conn, win->border_wid, &borderBounds.origin);
+        border_wid = bwid;
+
         int32_t level = 0;
-        if (CGSGetWindowLevel(conn, win->wid, &level) == 0) {
-            CGSSetWindowLevel(conn, win->border_wid, level);
+        if (CGSGetWindowLevel(conn, wid, &level) == 0) {
+            CGSSetWindowLevel(conn, border_wid, level);
         }
-        CGSOrderWindow(conn, win->border_wid, -1 /* kCGSOrderBelow */, win->wid);
+
+        CGSOrderWindow(conn, border_wid, -1 /* kCGSOrderBelow */, wid);
+    } else {
+        CGSMoveWindow(conn, border_wid, &borderBounds.origin);
+        int32_t level = 0;
+        if (CGSGetWindowLevel(conn, wid, &level) == 0) {
+            CGSSetWindowLevel(conn, border_wid, level);
+        }
+        CGSOrderWindow(conn, border_wid, -1 /* kCGSOrderBelow */, wid);
     }
 
-    draw_border_fill(conn, win->border_wid, borderBounds.size, color);
+    draw_border_fill(conn, border_wid, borderBounds.size, color);
 }
 
 static HyprManagedWindow *managed_window_find(uint32_t wid) {
@@ -607,31 +648,57 @@ static HyprManagedWindow *managed_window_find(uint32_t wid) {
 
 static HyprManagedWindow *managed_window_get_or_create(uint32_t wid) {
     if (wid == 0) return NULL;
-    HyprManagedWindow *existing = managed_window_find(wid);
-    if (existing) return existing;
-
     uint32_t idx = hash_wid(wid);
+    int first_inactive_slot = -1;
+
     for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
         uint32_t slot = (idx + i) & (HYPR_MANAGED_WINDOWS_CAPACITY - 1);
-        if (!g_managed_windows[slot].active) {
-            memset(&g_managed_windows[slot], 0, sizeof(HyprManagedWindow));
-            g_managed_windows[slot].wid = wid;
-            g_managed_windows[slot].active = true;
-            g_managed_window_count++;
-            return &g_managed_windows[slot];
+        if (g_managed_windows[slot].active) {
+            if (g_managed_windows[slot].wid == wid) {
+                return &g_managed_windows[slot];
+            }
+        } else {
+            if (first_inactive_slot < 0) {
+                first_inactive_slot = (int)slot;
+            }
+            if (g_managed_windows[slot].wid == 0) {
+                break;
+            }
         }
+    }
+
+    if (first_inactive_slot >= 0) {
+        uint32_t slot = (uint32_t)first_inactive_slot;
+        memset(&g_managed_windows[slot], 0, sizeof(HyprManagedWindow));
+        g_managed_windows[slot].wid = wid;
+        g_managed_windows[slot].active = true;
+        g_managed_window_count++;
+        return &g_managed_windows[slot];
     }
     return NULL;
 }
 
-static void managed_window_evict(uint32_t wid) {
+static uint32_t managed_window_evict_locked(uint32_t wid) {
     HyprManagedWindow *win = managed_window_find(wid);
+    uint32_t border_wid = 0;
     if (win && win->active) {
-        destroy_border_overlay(_CGSDefaultConnection(), win);
+        border_wid = win->border_wid;
+        win->border_wid = 0;
         win->active = false;
         if (g_managed_window_count > 0) {
             g_managed_window_count--;
         }
+    }
+    return border_wid;
+}
+
+static void managed_window_evict(uint32_t wid) {
+    os_unfair_lock_lock(&g_state_lock);
+    uint32_t border_wid = managed_window_evict_locked(wid);
+    os_unfair_lock_unlock(&g_state_lock);
+
+    if (border_wid != 0) {
+        destroy_border_overlay_wid(_CGSDefaultConnection(), border_wid, wid);
     }
 }
 
@@ -760,12 +827,7 @@ static void apply_global_policy_to_window(CGSConnectionID cid, uint32_t wid) {
     }
 
     if (auto_border) {
-        os_unfair_lock_lock(&g_state_lock);
-        HyprManagedWindow *w = managed_window_find(wid);
-        if (w) {
-            create_or_update_border_overlay(cid ? cid : _CGSDefaultConnection(), w);
-        }
-        os_unfair_lock_unlock(&g_state_lock);
+        create_or_update_border_overlay(cid ? cid : _CGSDefaultConnection(), wid);
     }
 
     invalidate_window(cid, wid);
@@ -798,10 +860,15 @@ static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
     if (is_fullscreen) {
         os_unfair_lock_lock(&g_state_lock);
         HyprManagedWindow *w = managed_window_find(wid);
+        uint32_t bwid = 0;
         if (w) {
-            destroy_border_overlay(cid ? cid : _CGSDefaultConnection(), w);
+            bwid = w->border_wid;
+            w->border_wid = 0;
         }
         os_unfair_lock_unlock(&g_state_lock);
+        if (bwid != 0) {
+            destroy_border_overlay_wid(cid ? cid : _CGSDefaultConnection(), bwid, wid);
+        }
         hypr_log("Window wid=%u is native fullscreen; skipping decoration", wid);
         return;
     }
@@ -838,12 +905,7 @@ static void reapply_decorations_to_window(CGSConnectionID cid, uint32_t wid) {
         }
     }
 
-    os_unfair_lock_lock(&g_state_lock);
-    HyprManagedWindow *w = managed_window_find(wid);
-    if (w && w->active) {
-        create_or_update_border_overlay(cid ? cid : _CGSDefaultConnection(), w);
-    }
-    os_unfair_lock_unlock(&g_state_lock);
+    create_or_update_border_overlay(cid ? cid : _CGSDefaultConnection(), wid);
 
     invalidate_window(cid, wid);
     if (is_sticky) {
@@ -997,9 +1059,7 @@ static void handle_display_reconfiguration_settled(void) {
 
             // Display disconnect safety: probe with is_window_alive (uses SLSGetWindowBounds)
             if (!is_window_alive(cid, wid)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(wid);
-                os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("Display disconnect safety: window wid=%u no longer valid, evicted", wid);
                 continue;
             }
@@ -1085,9 +1145,7 @@ static void handle_space_transition_settled(void) {
         for (size_t i = 0; i < count; i++) {
             uint32_t wid = batch[i];
             if (!is_window_alive(cid, wid)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(wid);
-                os_unfair_lock_unlock(&g_state_lock);
                 continue;
             }
             reapply_decorations_to_window(cid, wid);
@@ -1326,11 +1384,14 @@ static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const 
     }
 
     if (suppress) {
-        if (g_symbols.TransactionCreate && g_symbols.TransactionCommit && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
+        if (g_symbols.TransactionCreate && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
             void *tx = g_symbols.TransactionCreate(conn);
             if (tx) {
                 g_symbols.TransactionSetMenuBarOverrideMaximumReveal(tx, 0.0);
-                g_symbols.TransactionCommit(tx, 0);
+                if (g_symbols.TransactionCommit) {
+                    g_symbols.TransactionCommit(tx, 0);
+                }
+                CFRelease(tx);
             }
         }
         if (g_symbols.SetMenuBarSystemOverrideAlpha) {
@@ -1456,11 +1517,14 @@ static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const 
         g_menubar_suppressed = false;
         os_unfair_lock_unlock(&g_menubar_lock);
 
-        if (g_symbols.TransactionCreate && g_symbols.TransactionCommit && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
+        if (g_symbols.TransactionCreate && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
             void *tx = g_symbols.TransactionCreate(conn);
             if (tx) {
                 g_symbols.TransactionSetMenuBarOverrideMaximumReveal(tx, 1.0);
-                g_symbols.TransactionCommit(tx, 0);
+                if (g_symbols.TransactionCommit) {
+                    g_symbols.TransactionCommit(tx, 0);
+                }
+                CFRelease(tx);
             }
         }
         if (g_symbols.ResetMenuBarSystemOverrideAlphas) {
@@ -1483,15 +1547,19 @@ static CGError my_SLSOrderWindow(CGSConnectionID cid, uint32_t wid, int op, uint
     return orig ? orig(cid, wid, op, rel) : -1;
 }
 
-static CGError my_SLSMoveWindow(CGSConnectionID cid, uint32_t wid, CGPoint *point) {
+static CGError my_SLSMoveWindow(CGSConnectionID cid, uint32_t wid, const CGPoint *point) {
+    const CGPoint *target_point = point;
+    CGPoint clamped;
     if (g_menubar_suppressed && is_menubar_wid(wid)) {
         if (point && point->y >= -30.0) {
-            point->y = -200.0;
+            clamped = *point;
+            clamped.y = -200.0;
+            target_point = &clamped;
             hypr_log("my_SLSMoveWindow: clamped menubar wid=%u to offscreen y=-200", wid);
         }
     }
     fn_SLSMoveWindow orig = g_orig_SLSMoveWindow ? g_orig_SLSMoveWindow : g_symbols.MoveWindow;
-    return orig ? orig(cid, wid, point) : -1;
+    return orig ? orig(cid, wid, target_point) : -1;
 }
 
 static CGSError my_SLSSetWindowAlpha(CGSConnectionID cid, uint32_t wid, float alpha) {
@@ -1527,12 +1595,21 @@ static CGError my_SLSNewWindow(CGSConnectionID cid, int type, float x, float y, 
     return err;
 }
 
+static CGError my_SLSReleaseWindow(CGSConnectionID cid, uint32_t wid) {
+    if (wid != 0 && !is_border_wid(wid)) {
+        managed_window_evict(wid);
+    }
+    fn_CGSReleaseWindow orig = g_orig_SLSReleaseWindow ? g_orig_SLSReleaseWindow : g_symbols.ReleaseWindow;
+    return orig ? orig(cid, wid) : 0;
+}
+
 static void rebind_section(intptr_t slide, const struct section_64 *sect,
                            const uint32_t *indirect_symtab, const struct nlist_64 *symtab,
                            const char *strtab, uint32_t strsize, uint32_t nsyms) {
     const uint32_t *indirect_symbol_indices = indirect_symtab + sect->reserved1;
     void **indirect_symbol_bindings = (void **)(slide + sect->addr);
     size_t count = sect->size / sizeof(void *);
+    bool is_auth_section = (strcmp(sect->sectname, "__auth_got") == 0 || strcmp(sect->sectname, "__auth_ptr") == 0);
 
     for (size_t i = 0; i < count; i++) {
         uint32_t symtab_index = indirect_symbol_indices[i];
@@ -1552,6 +1629,8 @@ static void rebind_section(intptr_t slide, const struct section_64 *sect,
             replacement = (void *)my_SLSMoveWindow;
         } else if (strcmp(name, "_SLSSetWindowAlpha") == 0 || strcmp(name, "_CGSSetWindowAlpha") == 0) {
             replacement = (void *)my_SLSSetWindowAlpha;
+        } else if (strcmp(name, "_SLSReleaseWindow") == 0 || strcmp(name, "_CGSReleaseWindow") == 0) {
+            replacement = (void *)my_SLSReleaseWindow;
         }
 
         if (replacement) {
@@ -1566,8 +1645,12 @@ static void rebind_section(intptr_t slide, const struct section_64 *sect,
             }
 #if __has_feature(ptrauth_calls)
             void *raw_target = ptrauth_strip(replacement, ptrauth_key_function_pointer);
-            void *target = ptrauth_sign_unauthenticated(raw_target, ptrauth_key_asia, (uintptr_t)&indirect_symbol_bindings[i]);
-            indirect_symbol_bindings[i] = target;
+            if (is_auth_section) {
+                void *target = ptrauth_sign_unauthenticated(raw_target, ptrauth_key_asia, (uintptr_t)&indirect_symbol_bindings[i]);
+                indirect_symbol_bindings[i] = target;
+            } else {
+                indirect_symbol_bindings[i] = raw_target;
+            }
 #else
             indirect_symbol_bindings[i] = replacement;
 #endif
@@ -1658,6 +1741,11 @@ static void install_interposition(void) {
         if (!sym) sym = safe_resolve_symbol("CGSSetWindowAlpha");
         g_orig_SLSSetWindowAlpha = (fn_SLSSetWindowAlpha)sym;
     }
+    if (!g_orig_SLSReleaseWindow) {
+        void *sym = safe_resolve_symbol("SLSReleaseWindow");
+        if (!sym) sym = safe_resolve_symbol("CGSReleaseWindow");
+        g_orig_SLSReleaseWindow = (fn_CGSReleaseWindow)sym;
+    }
 
     struct dyld_interpose_tuple {
         const void *replacement;
@@ -1667,7 +1755,7 @@ static void install_interposition(void) {
     fn_dyld_dynamic_interpose dyld_interpose = (fn_dyld_dynamic_interpose)safe_resolve_symbol("dyld_dynamic_interpose");
     if (dyld_interpose) {
         extern struct mach_header __dso_handle;
-        struct dyld_interpose_tuple t[4];
+        struct dyld_interpose_tuple t[8];
         size_t count = 0;
         if (g_orig_SLSNewWindow) {
             t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSNewWindow, (const void *)g_orig_SLSNewWindow };
@@ -1680,6 +1768,9 @@ static void install_interposition(void) {
         }
         if (g_orig_SLSSetWindowAlpha) {
             t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSSetWindowAlpha, (const void *)g_orig_SLSSetWindowAlpha };
+        }
+        if (g_orig_SLSReleaseWindow) {
+            t[count++] = (struct dyld_interpose_tuple){ (const void *)my_SLSReleaseWindow, (const void *)g_orig_SLSReleaseWindow };
         }
         if (count > 0) {
             dyld_interpose(&__dso_handle, t, count);
@@ -1695,32 +1786,14 @@ static void install_interposition(void) {
     }
 
     _dyld_register_func_for_add_image(on_dyld_image_added);
-    hypr_log("Interposition: window creation and menubar suppression hooks registered (origNew=%p, origOrder=%p, origMove=%p, origAlpha=%p)",
-             (void *)g_orig_SLSNewWindow, (void *)g_orig_SLSOrderWindow, (void *)g_orig_SLSMoveWindow, (void *)g_orig_SLSSetWindowAlpha);
+    hypr_log("Interposition: window creation, release, and menubar suppression hooks registered (origNew=%p, origOrder=%p, origMove=%p, origAlpha=%p, origRel=%p)",
+             (void *)g_orig_SLSNewWindow, (void *)g_orig_SLSOrderWindow, (void *)g_orig_SLSMoveWindow, (void *)g_orig_SLSSetWindowAlpha, (void *)g_orig_SLSReleaseWindow);
 }
 
-/* ---- Signal-Safe Symbol Sandbox (Task 3.1) -------------------------------- */
-
-static sigjmp_buf g_probe_jmp;
-static volatile sig_atomic_t g_probe_active = 0;
-
-static void probe_signal_handler(int sig) {
-    if (g_probe_active) {
-        siglongjmp(g_probe_jmp, sig);
-    }
-}
+/* ---- Symbol Resolution --------------------------------------------------- */
 
 static void *safe_resolve_symbol(const char *name) {
-    void *sym = NULL;
-    g_probe_active = 1;
-    if (sigsetjmp(g_probe_jmp, 1) == 0) {
-        sym = dlsym(RTLD_DEFAULT, name);
-    } else {
-        hypr_log("Signal caught while resolving '%s'", name);
-        sym = NULL;
-    }
-    g_probe_active = 0;
-    return sym;
+    return dlsym(RTLD_DEFAULT, name);
 }
 
 static void *safe_resolve_variants(const char *category, const char * const *variants, size_t count, const char **out_name) {
@@ -1746,21 +1819,15 @@ static void probe_internal_state(void) {
         hypr_log("Probe: MainConnectionID unresolved, skipping state probe");
         return;
     }
-    g_probe_active = 1;
-    if (sigsetjmp(g_probe_jmp, 1) == 0) {
-        CGSConnectionID cid = g_symbols.MainConnectionID();
-        hypr_log("Probe: Server CGSConnectionID = %d (0x%x)", cid, (uint32_t)cid);
-        if (g_symbols.GetWindowCount) {
-            int32_t count = 0;
-            CGError err = g_symbols.GetWindowCount(cid, 0, &count);
-            hypr_log("Probe: SLSGetWindowCount(cid=%d, 0, &count) -> err=%d, count=%d", cid, err, count);
-        } else {
-            hypr_log("Probe: SLSGetWindowCount unresolved");
-        }
+    CGSConnectionID cid = g_symbols.MainConnectionID();
+    hypr_log("Probe: Server CGSConnectionID = %d (0x%x)", cid, (uint32_t)cid);
+    if (g_symbols.GetWindowCount) {
+        int32_t count = 0;
+        CGError err = g_symbols.GetWindowCount(cid, 0, &count);
+        hypr_log("Probe: SLSGetWindowCount(cid=%d, 0, &count) -> err=%d, count=%d", cid, err, count);
     } else {
-        hypr_log("Signal caught during internal state probe");
+        hypr_log("Probe: SLSGetWindowCount unresolved");
     }
-    g_probe_active = 0;
 }
 
 static void validate_server_authority(void) {
@@ -1768,50 +1835,32 @@ static void validate_server_authority(void) {
         hypr_log("Validate authority: MainConnectionID unresolved");
         return;
     }
-    g_probe_active = 1;
-    if (sigsetjmp(g_probe_jmp, 1) == 0) {
-        CGSConnectionID cid = g_symbols.MainConnectionID();
-        if (g_symbols.GetWindowList && g_symbols.GetWindowTags) {
-            uint32_t wids[16];
-            int32_t actual = 0;
-            CGError list_err = g_symbols.GetWindowList(cid, 0, 16, wids, &actual);
-            if (list_err == 0 && actual > 0) {
-                uint32_t tags[2] = {0, 0};
-                CGError tag_err = g_symbols.GetWindowTags(cid, wids[0], tags, 64);
-                hypr_log("Validate authority: wid=%u current tags=[0x%08x, 0x%08x] (err=%d)",
-                         wids[0], tags[0], tags[1], tag_err);
-            } else {
-                hypr_log("Validate authority: SLSGetWindowList returned err=%d, actual=%d",
-                         list_err, actual);
-            }
+    CGSConnectionID cid = g_symbols.MainConnectionID();
+    if (g_symbols.GetWindowList && g_symbols.GetWindowTags) {
+        uint32_t wids[16];
+        int32_t actual = 0;
+        CGError list_err = g_symbols.GetWindowList(cid, 0, 16, wids, &actual);
+        if (list_err == 0 && actual > 0) {
+            uint32_t tags[2] = {0, 0};
+            CGError tag_err = g_symbols.GetWindowTags(cid, wids[0], tags, 64);
+            hypr_log("Validate authority: wid=%u current tags=[0x%08x, 0x%08x] (err=%d)",
+                     wids[0], tags[0], tags[1], tag_err);
         } else {
-            hypr_log("Validate authority: GetWindowList or GetWindowTags unresolved");
-        }
-        if (g_symbols.SetWindowProperty) {
-            hypr_log("Validate authority: SLSSetWindowProperty is available for server properties");
+            hypr_log("Validate authority: SLSGetWindowList returned err=%d, actual=%d",
+                     list_err, actual);
         }
     } else {
-        hypr_log("Signal caught during server authority validation");
+        hypr_log("Validate authority: GetWindowList or GetWindowTags unresolved");
     }
-    g_probe_active = 0;
+    if (g_symbols.SetWindowProperty) {
+        hypr_log("Validate authority: SLSSetWindowProperty is available for server properties");
+    }
 }
 
 static void resolve_symbols_and_probe(void) {
-    struct sigaction sa, old_segv, old_bus;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = probe_signal_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_GLOBAL);
+    dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_GLOBAL);
 
-    sigaction(SIGSEGV, &sa, &old_segv);
-    sigaction(SIGBUS, &sa, &old_bus);
-
-    g_probe_active = 1;
-    if (sigsetjmp(g_probe_jmp, 1) == 0) {
-        dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY | RTLD_GLOBAL);
-        dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY | RTLD_GLOBAL);
-    }
-    g_probe_active = 0;
 
     static const char * const v_main_conn[] = { "SLSMainConnectionID", "CGSMainConnectionID" };
     g_SLSMainConnectionID = (fn_SLSMainConnectionID)safe_resolve_variants("SLSMainConnectionID", v_main_conn, 2, NULL);
@@ -2056,9 +2105,6 @@ static void resolve_symbols_and_probe(void) {
         probe_internal_state();
         validate_server_authority();
     }
-
-    sigaction(SIGSEGV, &old_segv, NULL);
-    sigaction(SIGBUS, &old_bus, NULL);
 }
 
 static uint8_t *g_shm_base = NULL;
@@ -2312,9 +2358,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
             if (!is_window_alive(cid, hdr->window_id)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(hdr->window_id);
-                os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("SET_CORNER_RADIUS wid=%u: invalid or destroyed window", hdr->window_id);
                 send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
@@ -2324,8 +2368,8 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             if (win) {
                 win->corner_radius = p.corner_radius;
             }
-            set_corner_radius_transaction(cid, hdr->window_id, p.corner_radius);
             os_unfair_lock_unlock(&g_state_lock);
+            set_corner_radius_transaction(cid, hdr->window_id, p.corner_radius);
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("SET_CORNER_RADIUS wid=%u r=%.2f: OK", hdr->window_id, p.corner_radius);
@@ -2346,9 +2390,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
             if (!is_window_alive(cid, hdr->window_id)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(hdr->window_id);
-                os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("SET_SHADOW wid=%u: invalid or destroyed window", hdr->window_id);
                 send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
@@ -2358,6 +2400,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             if (win) {
                 win->shadow_enabled = p.shadow_enabled;
             }
+            os_unfair_lock_unlock(&g_state_lock);
             uint32_t tags[2] = { 1 << 3, 0 };
             if (p.shadow_enabled == 0) {
                 if (g_symbols.SetWindowTags) {
@@ -2374,7 +2417,6 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                     hypr_log("ClearWindowTags wid=%u tag=0x%x err=%d", hdr->window_id, tags[0], err);
                 }
             }
-            os_unfair_lock_unlock(&g_state_lock);
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("SET_SHADOW wid=%u en=%u: OK", hdr->window_id, p.shadow_enabled);
@@ -2395,9 +2437,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
             if (!is_window_alive(cid, hdr->window_id)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(hdr->window_id);
-                os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("SET_BORDER wid=%u: invalid or destroyed window", hdr->window_id);
                 send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
@@ -2408,9 +2448,9 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                 win->border_width = p.border_width;
                 win->color_active = p.color_active;
                 win->color_inactive = p.color_inactive;
-                create_or_update_border_overlay(_CGSDefaultConnection(), win);
             }
             os_unfair_lock_unlock(&g_state_lock);
+            create_or_update_border_overlay(_CGSDefaultConnection(), hdr->window_id);
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("SET_BORDER wid=%u w=%.2f a=0x%08x i=0x%08x",
@@ -2432,9 +2472,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
             if (!is_window_alive(cid, hdr->window_id)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(hdr->window_id);
-                os_unfair_lock_unlock(&g_state_lock);
                 hypr_log("STRIP_TITLEBAR wid=%u: invalid or destroyed window", hdr->window_id);
                 send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Invalid window ID");
                 return;
@@ -2444,6 +2482,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             if (win) {
                 win->titlebar_stripped = p.strip;
             }
+            os_unfair_lock_unlock(&g_state_lock);
             uint32_t tags[2] = { (1 << 9) | (1 << 18), 0 };
             if (p.strip != 0) {
                 if (g_symbols.SetWindowTags) {
@@ -2454,7 +2493,6 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                     g_symbols.ClearWindowTags(cid, hdr->window_id, tags, 64);
                 }
             }
-            os_unfair_lock_unlock(&g_state_lock);
 
             invalidate_window(cid, hdr->window_id);
             hypr_log("STRIP_TITLEBAR wid=%u s=%u: OK", hdr->window_id, p.strip);
@@ -2468,9 +2506,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
             if (!is_window_alive(cid, hdr->window_id)) {
-                os_unfair_lock_lock(&g_state_lock);
                 managed_window_evict(hdr->window_id);
-                os_unfair_lock_unlock(&g_state_lock);
                 send_ack(hdr->sequence, HYPR_ERR_INVALID_WID, "Window not found");
                 return;
             }
@@ -2511,6 +2547,8 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
+            uint32_t wids_to_update[HYPR_MANAGED_WINDOWS_CAPACITY];
+            size_t update_count = 0;
             os_unfair_lock_lock(&g_state_lock);
             for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
                 if (g_managed_windows[i].active) {
@@ -2518,11 +2556,17 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                     bool now_focused = (g_managed_windows[i].wid == target_wid);
                     g_managed_windows[i].is_focused = now_focused;
                     if (was_focused != now_focused || (now_focused && g_managed_windows[i].border_wid == 0)) {
-                        create_or_update_border_overlay(_CGSDefaultConnection(), &g_managed_windows[i]);
+                        if (update_count < HYPR_MANAGED_WINDOWS_CAPACITY) {
+                            wids_to_update[update_count++] = g_managed_windows[i].wid;
+                        }
                     }
                 }
             }
             os_unfair_lock_unlock(&g_state_lock);
+
+            for (size_t i = 0; i < update_count; i++) {
+                create_or_update_border_overlay(_CGSDefaultConnection(), wids_to_update[i]);
+            }
 
             if (target_wid != 0) {
                 invalidate_window(cid, target_wid);
@@ -2589,7 +2633,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
         }
         case HYPR_CMD_SET_WORKSPACE_TRANSFORM: {
             if (hdr->payload_size != sizeof(HyprPayloadWorkspaceTransform)) {
-                hypr_log("HYPR_CMD_SET_WORKSPACE_TRANSFORM fd=%d bad payload size %u expected %zu",
+                hypr_log("HYPR_CMD_SET_WORKSPACE_TRANSFORM bad payload size %u expected %zu",
                          hdr->payload_size, sizeof(HyprPayloadWorkspaceTransform));
                 send_ack(hdr->sequence, HYPR_ERR_INTERNAL, "Bad payload size");
                 return;
@@ -2628,8 +2672,11 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                 }
             }
 
-            if (tx && g_symbols.TransactionCommit) {
-                g_symbols.TransactionCommit(tx, 1);
+            if (tx) {
+                if (g_symbols.TransactionCommit) {
+                    g_symbols.TransactionCommit(tx, 1);
+                }
+                CFRelease(tx);
             }
 
             send_ack(hdr->sequence, HYPR_ERR_SUCCESS, "OK");
@@ -2646,11 +2693,13 @@ static void shm_poll_loop(void *shm_base) {
     HyprShmHeader *hdr = (HyprShmHeader *)shm_base;
     uint8_t *cmd_ring_base = g_shm_base + HYPR_SHM_CMD_RING_OFF;
 
-    int kq = kqueue();
-    if (kq < 0) {
-        hypr_log("shm_poll_loop: kqueue() failed: %s", strerror(errno));
+    if (g_kq < 0) {
+        g_kq = kqueue();
+        if (g_kq < 0) {
+            hypr_log("shm_poll_loop: kqueue() failed: %s", strerror(errno));
+        }
     }
-    g_kq = kq;
+    int kq = g_kq;
 
     // Register trigger file for event-driven wake-up via kqueue EVFILT_VNODE
     int trigger_fd = open(HYPR_TRIGGER_PATH, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -2694,24 +2743,18 @@ static void shm_poll_loop(void *shm_base) {
                 // When work was just processed, do a non-blocking check for pending timers
                 ts.tv_sec = 0;
                 ts.tv_nsec = 0;
+            } else if (idle_ticks <= 5) {
+                // Short fast poll immediately after work completes (2ms)
+                ts.tv_sec = 0;
+                ts.tv_nsec = 2000000;
+            } else if (idle_ticks <= 10) {
+                // Brief transition poll (20ms)
+                ts.tv_sec = 0;
+                ts.tv_nsec = 20000000;
             } else {
-                // Adaptive backoff timeout for kevent wait
-                if (idle_ticks > 300) {
-                    ts.tv_sec = 0;
-                    ts.tv_nsec = 250000000; // 250ms (~4Hz check when deeply idle)
-                } else if (idle_ticks > 100) {
-                    ts.tv_sec = 0;
-                    ts.tv_nsec = 100000000; // 100ms
-                } else if (idle_ticks > 20) {
-                    ts.tv_sec = 0;
-                    ts.tv_nsec = 20000000;  // 20ms
-                } else if (idle_ticks > 5) {
-                    ts.tv_sec = 0;
-                    ts.tv_nsec = 5000000;   // 5ms
-                } else {
-                    ts.tv_sec = 0;
-                    ts.tv_nsec = 1000000;   // 1ms
-                }
+                // Deep idle: wake on trigger_fd EVFILT_VNODE or EVFILT_TIMER; sleep up to 2s
+                ts.tv_sec = 2;
+                ts.tv_nsec = 0;
             }
 
             struct kevent events[16];
@@ -2722,16 +2765,20 @@ static void shm_poll_loop(void *shm_base) {
                 } else if (events[i].filter == EVFILT_TIMER) {
                     work_done = 1;
                     if (events[i].ident == HYPR_TIMER_SPACE_DEBOUNCE) {
-                        handle_space_transition_settled();
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            handle_space_transition_settled();
+                        });
                     } else if (events[i].ident == HYPR_TIMER_DISPLAY_DEBOUNCE) {
-                        handle_display_reconfiguration_settled();
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            handle_display_reconfiguration_settled();
+                        });
                     }
                 }
             }
         } else {
             // Fallback if kqueue failed
             if (!work_done) {
-                useconds_t sleep_us = (idle_ticks > 100) ? 50000 : 2000;
+                useconds_t sleep_us = (idle_ticks > 10) ? 500000 : 2000;
                 usleep(sleep_us);
             }
         }
@@ -2779,6 +2826,15 @@ static void *deferred_init(void *arg) {
     diag_log("DIAG: calling install_interposition");
     install_interposition();
     diag_log("DIAG: install_interposition completed");
+
+    /* Initialize kqueue early so space and display callbacks registered below
+     * can reliably enqueue timers into g_kq from the main thread. */
+    if (g_kq < 0) {
+        g_kq = kqueue();
+        if (g_kq < 0) {
+            hypr_log("deferred_init: kqueue() failed: %s", strerror(errno));
+        }
+    }
 
     /* SkyLight APIs (SLSRegisterNotifyProc, SLSRegisterConnectionNotifyProc,
      * SLSGetActiveDisplayList) assert main-thread context inside WindowServer.
@@ -2883,13 +2939,24 @@ static void hypr_server_init(void) {
 /* Destructor: release Mach bootstrap port and clean up ephemeral artifacts. */
 __attribute__((destructor))
 static void hypr_server_fini(void) {
+    uint32_t border_wids[HYPR_MANAGED_WINDOWS_CAPACITY];
+    uint32_t wids[HYPR_MANAGED_WINDOWS_CAPACITY];
+    size_t count = 0;
+
     os_unfair_lock_lock(&g_state_lock);
     for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
         if (g_managed_windows[i].active && g_managed_windows[i].border_wid != 0) {
-            destroy_border_overlay(_CGSDefaultConnection(), &g_managed_windows[i]);
+            border_wids[count] = g_managed_windows[i].border_wid;
+            wids[count] = g_managed_windows[i].wid;
+            g_managed_windows[i].border_wid = 0;
+            count++;
         }
     }
     os_unfair_lock_unlock(&g_state_lock);
+
+    for (size_t i = 0; i < count; i++) {
+        destroy_border_overlay_wid(_CGSDefaultConnection(), border_wids[i], wids[i]);
+    }
 
     if (g_bootstrap_service_port != MACH_PORT_NULL) {
         mach_port_deallocate(mach_task_self(), g_bootstrap_service_port);
