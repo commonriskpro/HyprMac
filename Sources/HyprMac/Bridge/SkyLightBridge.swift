@@ -81,7 +81,11 @@ public final class SkyLightBridge: @unchecked Sendable {
     private typealias SLSGetWindowTransformFunc = @convention(c) (CGSConnectionID, CGWindowID, UnsafeMutablePointer<CGAffineTransform>) -> CGError
     private typealias SLSTransactionCreateFunc = @convention(c) (CGSConnectionID) -> SLSTransactionRef?
     private typealias SLSTransactionSetWindowTransformFunc = @convention(c) (SLSTransactionRef, CGWindowID, Int32, Int32, UnsafePointer<CGAffineTransform>) -> Void
-    private typealias SLSTransactionCommitFunc = @convention(c) (SLSTransactionRef, Int32) -> Void
+    private typealias SLSTransactionCommitFunc = @convention(c) (SLSTransactionRef, Int32) -> CGError
+    private typealias SLSSetMenuBarSystemOverrideAlphaFunc = @convention(c) (CGSConnectionID, Int32, Float) -> CGError
+    private typealias SLSSetMenuBarVisibilityOverrideOnDisplayFunc = @convention(c) (CGSConnectionID, UInt32, Bool) -> CGError
+    private typealias SLSInterruptMenuBarRevealFunc = @convention(c) (CGSConnectionID, Int32) -> CGError
+    private typealias SLSTransactionSetMenuBarOverrideMaximumRevealFunc = @convention(c) (UnsafeMutableRawPointer, Double) -> CGError
     private typealias GetProcessForPIDFunc = @convention(c) (pid_t, UnsafeMutableRawPointer) -> OSStatus
     private typealias SLPSSetFrontProcessWithOptionsFunc = @convention(c) (UnsafeMutableRawPointer, UInt32, UInt32) -> Int32
     private typealias SLPSPostEventRecordToFunc = @convention(c) (UnsafeMutableRawPointer, UnsafeRawPointer) -> Int32
@@ -105,6 +109,10 @@ public final class SkyLightBridge: @unchecked Sendable {
     private let _transactionCreate: SLSTransactionCreateFunc?
     private let _transactionSetWindowTransform: SLSTransactionSetWindowTransformFunc?
     private let _transactionCommit: SLSTransactionCommitFunc?
+    private let _setMenuBarSystemOverrideAlpha: SLSSetMenuBarSystemOverrideAlphaFunc?
+    private let _setMenuBarVisibilityOverrideOnDisplay: SLSSetMenuBarVisibilityOverrideOnDisplayFunc?
+    private let _interruptMenuBarReveal: SLSInterruptMenuBarRevealFunc?
+    private let _transactionSetMenuBarOverrideMaximumReveal: SLSTransactionSetMenuBarOverrideMaximumRevealFunc?
     private let _getProcessForPID: GetProcessForPIDFunc?
     private let _slpsSetFrontProcessWithOptions: SLPSSetFrontProcessWithOptionsFunc?
     private let _slpsPostEventRecordTo: SLPSPostEventRecordToFunc?
@@ -145,6 +153,10 @@ public final class SkyLightBridge: @unchecked Sendable {
         self._transactionCreate = resolve(["SLSTransactionCreate", "CGSTransactionCreate"])
         self._transactionSetWindowTransform = resolve(["SLSTransactionSetWindowTransform", "CGSTransactionSetWindowTransform"])
         self._transactionCommit = resolve(["SLSTransactionCommit", "CGSTransactionCommit"])
+        self._setMenuBarSystemOverrideAlpha = resolve(["SLSSetMenuBarSystemOverrideAlpha", "CGSSetMenuBarSystemOverrideAlpha"])
+        self._setMenuBarVisibilityOverrideOnDisplay = resolve(["SLSSetMenuBarVisibilityOverrideOnDisplay", "CGSSetMenuBarVisibilityOverrideOnDisplay"])
+        self._interruptMenuBarReveal = resolve(["SLSInterruptMenuBarReveal", "CGSInterruptMenuBarReveal"])
+        self._transactionSetMenuBarOverrideMaximumReveal = resolve(["SLSTransactionSetMenuBarOverrideMaximumReveal", "CGSTransactionSetMenuBarOverrideMaximumReveal"])
         self._getProcessForPID = resolve(["GetProcessForPID"])
         self._slpsSetFrontProcessWithOptions = resolve(["_SLPSSetFrontProcessWithOptions"])
         self._slpsPostEventRecordTo = resolve(["SLPSPostEventRecordTo"])
@@ -335,7 +347,47 @@ public final class SkyLightBridge: @unchecked Sendable {
     @discardableResult
     public func transactionCommit(transaction: SLSTransactionRef, sync: Bool = false) -> Bool {
         guard let fn = _transactionCommit else { return false }
-        fn(transaction, sync ? 1 : 0)
+        _ = fn(transaction, sync ? 1 : 0)
+        return true
+    }
+
+    // MARK: - Native macOS Menubar Overlay Suppression
+
+    @discardableResult
+    public func setMenuBarSuppressed(_ suppressed: Bool) -> Bool {
+        let cid = mainConnectionID
+        guard cid != 0 else { return false }
+
+        if let create = _transactionCreate,
+           let commit = _transactionCommit,
+           let setReveal = _transactionSetMenuBarOverrideMaximumReveal,
+           let transaction = create(cid) {
+            _ = setReveal(transaction, suppressed ? 0.0 : 1.0)
+            _ = commit(transaction, 0)
+        }
+
+        _ = _setMenuBarSystemOverrideAlpha?(cid, 0, suppressed ? 0.0 : 1.0)
+        _ = _setMenuBarVisibilityOverrideOnDisplay?(cid, 0, !suppressed)
+
+        if suppressed {
+            _ = _interruptMenuBarReveal?(cid, 0)
+
+            if let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] {
+                let myPid = getpid()
+                for dict in list {
+                    let ownerName = dict[kCGWindowOwnerName as String] as? String ?? ""
+                    let windowName = dict[kCGWindowName as String] as? String ?? ""
+                    let layer = (dict[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1
+                    let pid = (dict[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value ?? 0
+                    let wid = (dict[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0
+
+                    if pid != myPid && ownerName == "Window Server" && (windowName == "Menubar" || layer == 24) {
+                        _ = setWindowAlpha(windowID: wid, alpha: 0.0)
+                    }
+                }
+            }
+        }
+
         return true
     }
 

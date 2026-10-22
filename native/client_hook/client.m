@@ -51,6 +51,10 @@ static BOOL is_standard_window(NSWindow *window) {
         "NSCandidateListWindow",
         "TUINSWindow",
         "MOZCellDrawWindow",
+        "Completion",
+        "RoundedWindow",
+        "NSPopover",
+        "Popover",
         NULL
     };
 
@@ -59,6 +63,10 @@ static BOOL is_standard_window(NSWindow *window) {
         if (strncmp(cls, ignored_prefixes[i], strlen(ignored_prefixes[i])) == 0) {
             return NO;
         }
+    }
+
+    if (strstr(cls, "Completion") != NULL || strstr(cls, "Popover") != NULL) {
+        return NO;
     }
 
     Class panelClass = objc_getClass("NSPanel");
@@ -72,6 +80,55 @@ static BOOL is_standard_window(NSWindow *window) {
     }
 
     return YES;
+}
+
+static BOOL is_finder(void) {
+    static int s_is_finder = -1;
+    if (s_is_finder < 0) {
+        NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+        s_is_finder = (bundleId && [bundleId isEqualToString:@"com.apple.finder"]) ? 1 : 0;
+    }
+    return s_is_finder == 1;
+}
+
+static BOOL is_safari(void) {
+    static int s_is_safari = -1;
+    if (s_is_safari < 0) {
+        NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+        s_is_safari = (bundleId && [bundleId isEqualToString:@"com.apple.Safari"]) ? 1 : 0;
+    }
+    return s_is_safari == 1;
+}
+
+static BOOL is_descendant_of_view(NSView *child, NSView *ancestor) {
+    if (!child || !ancestor) return NO;
+    NSView *v = child;
+    while (v) {
+        if (v == ancestor) return YES;
+        v = v.superview;
+    }
+    return NO;
+}
+
+static void hide_traffic_lights_in_view(NSView *view) {
+    if (!view) return;
+    if ([view isKindOfClass:[NSButton class]]) {
+        NSButton *b = (NSButton *)view;
+        SEL act = [b action];
+        if (act == @selector(performClose:) || act == @selector(closeWindow:) ||
+            act == @selector(performMiniaturize:) || act == @selector(miniaturize:) ||
+            act == @selector(performZoom:) || act == @selector(zoom:)) {
+            b.hidden = YES;
+            b.alphaValue = 0.0;
+        }
+    }
+    if ([NSStringFromClass([view class]) containsString:@"ThemeWidget"]) {
+        view.hidden = YES;
+        view.alphaValue = 0.0;
+    }
+    for (NSView *sub in view.subviews) {
+        hide_traffic_lights_in_view(sub);
+    }
 }
 
 static const char *kHyprWindowStrippedKey = "kHyprWindowStrippedKey";
@@ -134,6 +191,7 @@ __attribute__((visibility("default")))
 @property (nonatomic, weak) NSView *sidebarWrapper;
 @property (nonatomic, weak) NSView *contentWrapper;
 @property (nonatomic, weak) NSView *shadowView;
+@property (nonatomic, weak) NSView *titlebarContainer;
 @property (nonatomic, strong) HyprDrawerTriggerView *triggerView;
 @property (nonatomic, assign) BOOL isOpen;
 @property (nonatomic, assign) BOOL inLayout;
@@ -141,8 +199,10 @@ __attribute__((visibility("default")))
 @property (nonatomic, assign) uint64_t closeGeneration;
 @property (nonatomic, strong) id mouseMoveMonitor;
 @property (nonatomic, strong) id mouseDownMonitor;
-- (void)attachToWindow:(NSWindow *)win sidebar:(NSView *)sidebar shadow:(NSView *)shadow;
+- (void)attachToWindow:(NSWindow *)win sidebar:(NSView *)sidebar shadow:(NSView *)shadow titlebarContainer:(NSView *)titlebarContainer;
+- (BOOL)isFocusInDrawer;
 - (void)layoutSplitView;
+- (void)layoutSafariTopSearchBar;
 - (void)openDrawer;
 - (void)closeDrawer;
 - (void)scheduleClose;
@@ -151,12 +211,17 @@ __attribute__((visibility("default")))
 
 @implementation HyprZenDrawer
 
-- (void)attachToWindow:(NSWindow *)win sidebar:(NSView *)sidebar shadow:(NSView *)shadow {
+- (void)attachToWindow:(NSWindow *)win sidebar:(NSView *)sidebar shadow:(NSView *)shadow titlebarContainer:(NSView *)titlebarContainer {
     if (!win || !sidebar) return;
     self.window = win;
     self.sidebarWrapper = sidebar;
     self.shadowView = shadow;
-    self.sidebarWidth = sidebar.frame.size.width > 50.0 ? sidebar.frame.size.width : 196.0;
+    self.titlebarContainer = titlebarContainer;
+    if (is_safari()) {
+        self.sidebarWidth = 280.0;
+    } else {
+        self.sidebarWidth = sidebar.frame.size.width > 50.0 ? sidebar.frame.size.width : 196.0;
+    }
 
     if ([sidebar.superview isKindOfClass:[NSSplitView class]]) {
         self.splitView = (NSSplitView *)sidebar.superview;
@@ -197,8 +262,28 @@ __attribute__((visibility("default")))
         sidebar.hidden = YES;
     }
 
+    if (titlebarContainer) {
+        titlebarContainer.wantsLayer = YES;
+        titlebarContainer.layer.zPosition = 1001.0;
+        titlebarContainer.layer.masksToBounds = NO;
+        CALayer *mask = [CALayer layer];
+        mask.frame = CGRectMake(0.0, 0.0, self.sidebarWidth, 52.0);
+        mask.backgroundColor = [NSColor blackColor].CGColor;
+        titlebarContainer.layer.mask = mask;
+        if (!self.isOpen) {
+            titlebarContainer.layer.transform = CATransform3DMakeTranslation(-self.sidebarWidth, 0.0, 0.0);
+            titlebarContainer.alphaValue = 0.0;
+            titlebarContainer.hidden = YES;
+        }
+    }
+
     // Force edge-to-edge layout so content view spans the full width immediately
     [self layoutSplitView];
+    [self layoutSafariTopSearchBar];
+
+    if (is_safari() && [self isFocusInDrawer]) {
+        [self openDrawer];
+    }
 
     NSView *contentView = win.contentView;
     if (contentView) {
@@ -222,7 +307,16 @@ __attribute__((visibility("default")))
             if (!strongSelf || !strongSelf.window) return event;
 
             if (event.window != strongSelf.window) {
-                if (strongSelf.isOpen) {
+                BOOL isChild = NO;
+                for (NSWindow *child in strongSelf.window.childWindows) {
+                    if (event.window == child) {
+                        isChild = YES;
+                        break;
+                    }
+                }
+                if (isChild) {
+                    [strongSelf cancelCloseTimer];
+                } else if (strongSelf.isOpen && ![strongSelf isFocusInDrawer]) {
                     [strongSelf scheduleClose];
                 }
                 return event;
@@ -238,7 +332,9 @@ __attribute__((visibility("default")))
                 }
             } else {
                 if (pt.x > (w + 15.0) || pt.x < 0.0 || pt.y < 0.0 || pt.y > h) {
-                    [strongSelf scheduleClose];
+                    if (![strongSelf isFocusInDrawer]) {
+                        [strongSelf scheduleClose];
+                    }
                 } else {
                     [strongSelf cancelCloseTimer];
                 }
@@ -255,11 +351,118 @@ __attribute__((visibility("default")))
             if (event.window != strongSelf.window) return event;
 
             if (strongSelf.isOpen && event.locationInWindow.x > strongSelf.sidebarWidth) {
+                if ([strongSelf isFocusInDrawer]) {
+                    [strongSelf.window makeFirstResponder:strongSelf.window.contentView];
+                }
                 [strongSelf closeDrawer];
             }
             return event;
         }];
     }
+}
+
+- (BOOL)isFocusInDrawer {
+    NSWindow *win = self.window;
+    if (!win) return NO;
+    NSResponder *resp = [win firstResponder];
+    if ([resp isKindOfClass:[NSView class]]) {
+        NSView *rv = (NSView *)resp;
+        if (self.sidebarWrapper && is_descendant_of_view(rv, self.sidebarWrapper)) return YES;
+        if (self.titlebarContainer && is_descendant_of_view(rv, self.titlebarContainer)) return YES;
+    }
+    return NO;
+}
+
+- (void)layoutSafariTopSearchBar {
+    if (!is_safari() || !self.window || !self.titlebarContainer) return;
+    NSView *container = self.titlebarContainer;
+    NSRect winFrame = self.window.frame;
+    CGFloat sbW = self.sidebarWidth > 100.0 ? self.sidebarWidth : 280.0;
+    CGFloat fullW = winFrame.size.width > sbW ? winFrame.size.width : sbW;
+    CGFloat bh = 52.0;
+
+    NSRect desiredContainer = NSMakeRect(0.0, winFrame.size.height - bh, fullW, bh);
+    if (!NSEqualRects(container.frame, desiredContainer)) {
+        container.frame = desiredContainer;
+    }
+    if (container.layer) {
+        if (!container.layer.mask) {
+            CALayer *mask = [CALayer layer];
+            mask.backgroundColor = [NSColor blackColor].CGColor;
+            container.layer.mask = mask;
+        }
+        CGRect desiredMask = CGRectMake(0.0, 0.0, sbW, bh);
+        if (!CGRectEqualToRect(container.layer.mask.frame, desiredMask)) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            container.layer.mask.frame = desiredMask;
+            [CATransaction commit];
+        }
+    }
+
+    void (^contains_search)(NSView *, BOOL *, void (^)(NSView *, BOOL *, id)) = ^(NSView *v, BOOL *found, void (^selfBlock)(NSView *, BOOL *, id)) {
+        if (*found || !v) return;
+        NSString *cls = NSStringFromClass([v class]);
+        if ([cls containsString:@"UnifiedTabBar"] || [cls containsString:@"UnifiedField"]) {
+            *found = YES;
+            return;
+        }
+        for (NSView *sub in v.subviews) {
+            selfBlock(sub, found, selfBlock);
+            if (*found) return;
+        }
+    };
+
+    void (^style_titlebar_tree)(NSView *, void (^)(NSView *, id)) = ^(NSView *v, void (^selfBlock)(NSView *, id)) {
+        if (!v) return;
+        NSString *cls = NSStringFromClass([v class]);
+        if ([cls containsString:@"TitlebarDecorationView"]) {
+            v.hidden = YES;
+            v.alphaValue = 0.0;
+            return;
+        }
+        if ([cls isEqualToString:@"NSTitlebarView"] || [cls isEqualToString:@"NSToolbarView"] || [cls isEqualToString:@"NSGlassContainerView"]) {
+            NSRect r = NSMakeRect(0.0, 0.0, fullW, bh);
+            if (!NSEqualRects(v.frame, r)) {
+                v.frame = r;
+            }
+        }
+        if ([cls isEqualToString:@"NSToolbarItemViewer"] || [cls containsString:@"ToolbarPlatterView"]) {
+            BOOL hasSearch = NO;
+            contains_search(v, &hasSearch, contains_search);
+            if (hasSearch) {
+                v.hidden = NO;
+                v.alphaValue = 1.0;
+                NSRect itemRect = NSMakeRect(8.0, 0.0, sbW - 16.0, bh);
+                if (!NSEqualRects(v.frame, itemRect)) {
+                    v.frame = itemRect;
+                }
+                for (NSView *sub in v.subviews) {
+                    if ([NSStringFromClass([sub class]) containsString:@"UnifiedTabBar"]) {
+                        NSRect barRect = NSMakeRect(0.0, 8.0, sbW - 16.0, 36.0);
+                        SEL selSetCenter = sel_registerName("setUnpinnedTabCenteringFrame:");
+                        if ([sub respondsToSelector:selSetCenter]) {
+                            void (*setCenterFn)(id, SEL, NSRect) = (void (*)(id, SEL, NSRect))objc_msgSend;
+                            setCenterFn(sub, selSetCenter, NSMakeRect(0.0, 0.0, sbW - 16.0, 36.0));
+                        }
+                        if (!NSEqualRects(sub.frame, barRect)) {
+                            sub.frame = barRect;
+                            [sub setNeedsLayout:YES];
+                            [sub layoutSubtreeIfNeeded];
+                        }
+                    }
+                }
+            } else {
+                v.hidden = YES;
+                v.alphaValue = 0.0;
+            }
+            return;
+        }
+        for (NSView *sub in v.subviews) {
+            selfBlock(sub, selfBlock);
+        }
+    };
+    style_titlebar_tree(container, style_titlebar_tree);
 }
 
 - (void)layoutSplitView {
@@ -310,13 +513,20 @@ __attribute__((visibility("default")))
             self.shadowView.hidden = YES;
             self.shadowView.alphaValue = 0.0;
         }
+
+        if (is_safari()) {
+            [self layoutSafariTopSearchBar];
+        }
     } @finally {
         self.inLayout = NO;
     }
 }
 
 - (void)openDrawer {
-    if (self.isOpen) return;
+    if (self.isOpen) {
+        [self cancelCloseTimer];
+        return;
+    }
     self.isOpen = YES;
     [self cancelCloseTimer];
 
@@ -324,25 +534,69 @@ __attribute__((visibility("default")))
     if (!sidebar) return;
 
     sidebar.hidden = NO;
-    sidebar.alphaValue = 1.0;
 
-    [CATransaction begin];
-    [CATransaction setAnimationDuration:0.10];
-    [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut]];
+    NSView *tb = self.titlebarContainer;
+    if (tb) {
+        tb.hidden = NO;
+    }
 
-    sidebar.layer.transform = CATransform3DIdentity;
+    CAMediaTimingFunction *springCurve = [CAMediaTimingFunction functionWithControlPoints:0.16 :1.0 :0.3 :1.0];
 
-    [CATransaction commit];
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.24;
+        context.timingFunction = springCurve;
+        context.allowsImplicitAnimation = YES;
+
+        [CATransaction begin];
+        [CATransaction setAnimationDuration:0.24];
+        [CATransaction setAnimationTimingFunction:springCurve];
+
+        CALayer *sbPres = sidebar.layer.presentationLayer;
+        if (sbPres) {
+            sidebar.layer.transform = sbPres.transform;
+        }
+        sidebar.layer.transform = CATransform3DIdentity;
+        sidebar.alphaValue = 1.0;
+
+        if (tb) {
+            CALayer *tbPres = tb.layer.presentationLayer;
+            if (tbPres) {
+                tb.layer.transform = tbPres.transform;
+            }
+            tb.layer.transform = CATransform3DIdentity;
+            tb.alphaValue = 1.0;
+        }
+
+        [CATransaction commit];
+    } completionHandler:nil];
 }
 
 - (void)scheduleClose {
     if (!self.isOpen) return;
+    if ([self isFocusInDrawer]) return;
+    if (self.window.attachedSheet != nil) return;
+    if (self.window.childWindows.count > 0) {
+        for (NSWindow *child in self.window.childWindows) {
+            if ([child isVisible]) return;
+        }
+    }
     uint64_t gen = ++self.closeGeneration;
     __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.18 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (strongSelf && strongSelf.closeGeneration == gen && strongSelf.isOpen) {
-            [strongSelf closeDrawer];
+            if (![strongSelf isFocusInDrawer] && strongSelf.window.attachedSheet == nil) {
+                BOOL hasVisibleChild = NO;
+                for (NSWindow *child in strongSelf.window.childWindows) {
+                    if (child.isVisible) {
+                        hasVisibleChild = YES;
+                        break;
+                    }
+                }
+                if (!hasVisibleChild) {
+                    [strongSelf closeDrawer];
+                }
+            }
         }
     });
 }
@@ -353,28 +607,58 @@ __attribute__((visibility("default")))
 
 - (void)closeDrawer {
     if (!self.isOpen) return;
+    if ([self isFocusInDrawer]) return;
+    if (self.window.attachedSheet != nil) return;
+    if (self.window.childWindows.count > 0) {
+        for (NSWindow *child in self.window.childWindows) {
+            if (child.isVisible) return;
+        }
+    }
     self.isOpen = NO;
     [self cancelCloseTimer];
 
     NSView *sidebar = self.sidebarWrapper;
     if (!sidebar) return;
 
+    NSView *tb = self.titlebarContainer;
     CGFloat w = self.sidebarWidth;
     CATransform3D offscreen = CATransform3DMakeTranslation(-w, 0.0, 0.0);
+    CAMediaTimingFunction *closeCurve = [CAMediaTimingFunction functionWithControlPoints:0.22 :1.0 :0.36 :1.0];
 
-    [CATransaction begin];
-    [CATransaction setAnimationDuration:0.10];
-    [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseIn]];
-    [CATransaction setCompletionBlock:^{
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.22;
+        context.timingFunction = closeCurve;
+        context.allowsImplicitAnimation = YES;
+
+        [CATransaction begin];
+        [CATransaction setAnimationDuration:0.22];
+        [CATransaction setAnimationTimingFunction:closeCurve];
+
+        CALayer *sbPres = sidebar.layer.presentationLayer;
+        if (sbPres) {
+            sidebar.layer.transform = sbPres.transform;
+        }
+        sidebar.layer.transform = offscreen;
+        sidebar.alphaValue = 0.0;
+
+        if (tb) {
+            CALayer *tbPres = tb.layer.presentationLayer;
+            if (tbPres) {
+                tb.layer.transform = tbPres.transform;
+            }
+            tb.layer.transform = offscreen;
+            tb.alphaValue = 0.0;
+        }
+
+        [CATransaction commit];
+    } completionHandler:^{
         if (!self.isOpen) {
-            sidebar.alphaValue = 0.0;
             sidebar.hidden = YES;
+            if (tb) {
+                tb.hidden = YES;
+            }
         }
     }];
-
-    sidebar.layer.transform = offscreen;
-
-    [CATransaction commit];
 }
 
 - (void)dealloc {
@@ -386,6 +670,10 @@ __attribute__((visibility("default")))
     if (self.mouseDownMonitor) {
         [NSEvent removeMonitor:self.mouseDownMonitor];
         self.mouseDownMonitor = nil;
+    }
+    if (self.triggerView) {
+        [self.triggerView removeFromSuperview];
+        self.triggerView = nil;
     }
 }
 
@@ -404,6 +692,24 @@ static NSView *hypr_wrapper_hitTest(id self, SEL _cmd, NSPoint pt) {
     }
     if (s_orig_wrapper_hitTest) {
         return s_orig_wrapper_hitTest(self, _cmd, pt);
+    }
+    return nil;
+}
+
+static NSView *(*s_orig_titlebarContainer_hitTest)(id, SEL, NSPoint) = NULL;
+static NSView *hypr_titlebarContainer_hitTest(id self, SEL _cmd, NSPoint pt) {
+    NSWindow *win = [self window];
+    if (win) {
+        HyprZenDrawer *drawer = hypr_get_drawer(win);
+        if (drawer && drawer.titlebarContainer == self) {
+            NSPoint localPt = [(NSView *)self convertPoint:pt fromView:[(NSView *)self superview]];
+            if (!drawer.isOpen || localPt.x > drawer.sidebarWidth) {
+                return nil; // Pass straight through to WKWebView / StartPage underneath!
+            }
+        }
+    }
+    if (s_orig_titlebarContainer_hitTest) {
+        return s_orig_titlebarContainer_hitTest(self, _cmd, pt);
     }
     return nil;
 }
@@ -477,6 +783,140 @@ static void hypr_accessory_layout(id self, SEL _cmd) {
     }
 }
 
+static BOOL ensure_zen_drawer_attached(NSWindow *window) {
+    if (!window || !is_standard_window(window)) return NO;
+    HyprZenDrawer *existingDrawer = objc_getAssociatedObject(window, kHyprZenDrawerKey);
+    if (existingDrawer) {
+        return YES;
+    }
+    NSView *contentView = window.contentView;
+    if (!contentView) return NO;
+
+    NSView *titlebarContainer = nil;
+    if (is_safari()) {
+        id wc = [window windowController];
+        SEL selSetTabBar = sel_registerName("setTabBarVisible:");
+        if (wc && [wc respondsToSelector:selSetTabBar]) {
+            void (*fn)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+            fn(wc, selSetTabBar, NO);
+        }
+
+        // Ensure Safari's native vertical tab sidebar is uncollapsed so LibraryOutlineView is mounted
+        void (^uncollapse_safari_sidebar)(NSView *, void (^)(NSView *, id)) = ^(NSView *v, void (^selfBlock)(NSView *, id)) {
+            if ([v isKindOfClass:[NSSplitView class]]) {
+                NSSplitView *sv = (NSSplitView *)v;
+                id del = [sv delegate];
+                SEL selItems = sel_registerName("splitViewItems");
+                if (del && [del respondsToSelector:selItems]) {
+                    id (*itemsFn)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+                    NSArray *items = itemsFn(del, selItems);
+                    if ([items isKindOfClass:[NSArray class]] && items.count > 0) {
+                        id firstItem = items[0];
+                        SEL selIsCollapsed = sel_registerName("isCollapsed");
+                        SEL selSetCollapsed = sel_registerName("setCollapsed:");
+                        if ([firstItem respondsToSelector:selIsCollapsed] && [firstItem respondsToSelector:selSetCollapsed]) {
+                            BOOL (*getCol)(id, SEL) = (BOOL (*)(id, SEL))objc_msgSend;
+                            if (getCol(firstItem, selIsCollapsed)) {
+                                void (*setCol)(id, SEL, BOOL) = (void (*)(id, SEL, BOOL))objc_msgSend;
+                                setCol(firstItem, selSetCollapsed, NO);
+                                [sv layoutSubtreeIfNeeded];
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            for (NSView *sub in v.subviews) {
+                selfBlock(sub, selfBlock);
+            }
+        };
+        uncollapse_safari_sidebar(contentView, uncollapse_safari_sidebar);
+
+        NSView *themeFrame = contentView.superview;
+        if (themeFrame) {
+            Class containerClass = objc_getClass("NSTitlebarContainerView");
+            for (NSView *sub in themeFrame.subviews) {
+                if (containerClass && [sub isKindOfClass:containerClass]) {
+                    titlebarContainer = sub;
+                    hide_traffic_lights_in_view(titlebarContainer);
+                    break;
+                }
+            }
+        }
+    }
+
+    __block BOOL attached = NO;
+    void (^findSidebarAndSetupDrawer)(NSView *, void (^)(NSView *, id)) = ^(NSView *v, void (^selfBlock)(NSView *, id)) {
+        if ([v.className isEqualToString:@"NSKVONotifying_TSidebarScrollView"] ||
+            [v.className containsString:@"TSidebarScrollView"] ||
+            [v.className containsString:@"LibraryOutlineView"]) {
+            NSView *wrapper = v.superview;
+            while (wrapper && ![wrapper.className containsString:@"NSSplitViewItemViewWrapper"]) {
+                wrapper = wrapper.superview;
+            }
+            if (wrapper) {
+                NSView *shadow = nil;
+                if (wrapper.superview) {
+                    for (NSView *sib in wrapper.superview.subviews) {
+                        if ([sib.className containsString:@"ShadowView"]) {
+                            shadow = sib;
+                            break;
+                        }
+                    }
+                }
+                HyprZenDrawer *drawer = [[HyprZenDrawer alloc] init];
+                objc_setAssociatedObject(window, kHyprZenDrawerKey, drawer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [drawer attachToWindow:window sidebar:wrapper shadow:shadow titlebarContainer:titlebarContainer];
+                attached = YES;
+            }
+            return;
+        }
+        for (NSView *sub in v.subviews) {
+            selfBlock(sub, selfBlock);
+        }
+    };
+    findSidebarAndSetupDrawer(contentView, findSidebarAndSetupDrawer);
+
+    if (attached) {
+        if (is_finder()) {
+            void (^configure_scroll_views)(NSView *, void (^)(NSView *, id)) = ^(NSView *view, void (^selfBlock)(NSView *, id)) {
+                if (!view) return;
+                if ([view isKindOfClass:[NSScrollView class]]) {
+                    NSScrollView *sv = (NSScrollView *)view;
+                    sv.automaticallyAdjustsContentInsets = NO;
+                    NSEdgeInsets insets = sv.contentInsets;
+                    insets.top = 12.0;
+                    if (![view.className containsString:@"TSidebar"]) {
+                        insets.left = 0.0;
+                        sv.hasVerticalScroller = YES;
+                        sv.autohidesScrollers = NO;
+                    }
+                    CGFloat accH = hypr_find_accessory_height(view);
+                    if (accH > 0.0) {
+                        insets.bottom = accH;
+                    }
+                    sv.contentInsets = insets;
+                }
+                for (NSView *sub in view.subviews) {
+                    selfBlock(sub, selfBlock);
+                }
+            };
+            configure_scroll_views(contentView, configure_scroll_views);
+            [contentView setNeedsLayout:YES];
+        }
+
+        HyprZenDrawer *drawer = objc_getAssociatedObject(window, kHyprZenDrawerKey);
+        if (drawer) {
+            if (drawer.splitView) {
+                [drawer.splitView setNeedsLayout:YES];
+                [drawer.splitView layoutSubtreeIfNeeded];
+            }
+            [drawer layoutSplitView];
+        }
+    }
+    return attached;
+}
+
 static void strip_window_decorations(NSWindow *window) {
     if (!window || !is_standard_window(window)) {
         return;
@@ -498,6 +938,7 @@ static void strip_window_decorations(NSWindow *window) {
     @try {
         BOOL alreadyStripped = [objc_getAssociatedObject(window, kHyprWindowStrippedKey) boolValue];
         if (alreadyStripped) {
+            ensure_zen_drawer_attached(window);
             return;
         }
 
@@ -629,12 +1070,14 @@ static void strip_window_decorations(NSWindow *window) {
                     if (sub != contentView) {
                         Class containerClass = objc_getClass("NSTitlebarContainerView");
                         if (containerClass && [sub isKindOfClass:containerClass]) {
-                            sub.translatesAutoresizingMaskIntoConstraints = NO;
-                            sub.hidden = YES;
-                            sub.alphaValue = 0.0;
-                            if (sub.layer) {
-                                sub.layer.backgroundColor = nil;
-                                sub.layer.opaque = NO;
+                            if (!is_safari()) {
+                                sub.translatesAutoresizingMaskIntoConstraints = NO;
+                                sub.hidden = YES;
+                                sub.alphaValue = 0.0;
+                                if (sub.layer) {
+                                    sub.layer.backgroundColor = nil;
+                                    sub.layer.opaque = NO;
+                                }
                             }
                         }
                     }
@@ -644,8 +1087,8 @@ static void strip_window_decorations(NSWindow *window) {
             // Style accessory wrappers (Path Bar and Status Bar) with solid opaque backing
             configure_accessory_wrappers(contentView);
 
-            // Adjust scroll view insets for edge-to-edge layout & keep scrollbars visible
-            if (!alreadyStripped) {
+            // Adjust scroll view insets for edge-to-edge layout & keep scrollbars visible (Finder only)
+            if (!alreadyStripped && !is_safari() && is_finder()) {
                 void (^configure_scroll_views)(NSView *, void (^)(NSView *, id)) = ^(NSView *view, void (^selfBlock)(NSView *, id)) {
                     if (!view) return;
                     if ([view isKindOfClass:[NSScrollView class]]) {
@@ -673,34 +1116,21 @@ static void strip_window_decorations(NSWindow *window) {
                 [contentView setNeedsLayout:YES];
             }
 
-            // Configure Zen-style hover drawer for Finder sidebar
-            if (!objc_getAssociatedObject(window, kHyprZenDrawerKey)) {
-                void (^findSidebarAndSetupDrawer)(NSView *, void (^)(NSView *, id)) = ^(NSView *v, void (^selfBlock)(NSView *, id)) {
-                    if ([v.className isEqualToString:@"NSKVONotifying_TSidebarScrollView"] || [v.className containsString:@"TSidebarScrollView"]) {
-                        NSView *wrapper = v.superview;
-                        while (wrapper && ![wrapper.className containsString:@"NSSplitViewItemViewWrapper"]) {
-                            wrapper = wrapper.superview;
-                        }
-                        if (wrapper) {
-                            NSView *shadow = nil;
-                            for (NSView *sib in wrapper.superview.subviews) {
-                                if ([sib.className containsString:@"ShadowView"]) {
-                                    shadow = sib;
-                                    break;
-                                }
-                            }
-                            HyprZenDrawer *drawer = [[HyprZenDrawer alloc] init];
-                            objc_setAssociatedObject(window, kHyprZenDrawerKey, drawer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                            [drawer attachToWindow:window sidebar:wrapper shadow:shadow];
-                        }
-                        return;
+            // Hide any WebKit scroll pockets in Safari
+            if (is_safari()) {
+                void (^hide_pockets)(NSView *, void (^)(NSView *, id)) = ^(NSView *v, void (^selfBlock)(NSView *, id)) {
+                    if ([v.className containsString:@"ScrollPocket"] || [v.className containsString:@"Pocket"]) {
+                        v.alphaValue = 0.0;
                     }
                     for (NSView *sub in v.subviews) {
                         selfBlock(sub, selfBlock);
                     }
                 };
-                findSidebarAndSetupDrawer(contentView, findSidebarAndSetupDrawer);
+                hide_pockets(contentView, hide_pockets);
             }
+
+            // Configure unified Zen-style hover drawer (Finder sidebar & Safari sidebar + top search bar)
+            ensure_zen_drawer_attached(window);
         }
 
         if (!alreadyStripped) {
@@ -730,6 +1160,8 @@ static void strip_window_decorations(NSWindow *window) {
 - (void)hypr_sendEvent:(NSEvent *)event;
 - (BOOL)hypr_canBecomeKeyWindow;
 - (BOOL)hypr_canBecomeMainWindow;
+- (NSRect)hypr_contentLayoutRect;
+- (BOOL)hypr_makeFirstResponder:(NSResponder *)responder;
 - (BOOL)hypr_accessibilityIsMinimizedAttributeSettable;
 - (void)hypr_accessibilitySetMinimizedAttribute:(id)value;
 - (BOOL)hypr_accessibilityIsAttributeSettable:(NSString *)attribute;
@@ -797,6 +1229,33 @@ static void strip_window_decorations(NSWindow *window) {
     [self hypr_performMiniaturize:sender];
 }
 
+- (NSRect)hypr_contentLayoutRect {
+    if (is_standard_window(self)) {
+        NSRect frame = [self frame];
+        return NSMakeRect(0.0, 0.0, frame.size.width, frame.size.height);
+    }
+    return [self hypr_contentLayoutRect];
+}
+
+- (BOOL)hypr_makeFirstResponder:(NSResponder *)responder {
+    BOOL ret = [self hypr_makeFirstResponder:responder];
+    if (is_safari() && is_standard_window(self)) {
+        HyprZenDrawer *drawer = hypr_get_drawer(self);
+        if (drawer) {
+            if ([responder isKindOfClass:[NSView class]]) {
+                NSView *rv = (NSView *)responder;
+                if ((drawer.titlebarContainer && is_descendant_of_view(rv, drawer.titlebarContainer)) ||
+                    (drawer.sidebarWrapper && is_descendant_of_view(rv, drawer.sidebarWrapper))) {
+                    [drawer openDrawer];
+                } else if (drawer.isOpen) {
+                    [drawer scheduleClose];
+                }
+            }
+        }
+    }
+    return ret;
+}
+
 - (BOOL)hypr_performKeyEquivalent:(NSEvent *)event {
     NSEventModifierFlags flags = [event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
     NSString *chars = [event charactersIgnoringModifiers];
@@ -821,6 +1280,16 @@ static void strip_window_decorations(NSWindow *window) {
 
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
     BOOL isFinder = [bundleId isEqualToString:@"com.apple.finder"];
+
+    if (is_safari()) {
+        if (isCmd && ([chars isEqualToString:@"l"] || [chars isEqualToString:@"L"] ||
+                      [chars isEqualToString:@"t"] || [chars isEqualToString:@"T"])) {
+            HyprZenDrawer *drawer = hypr_get_drawer(self);
+            if (drawer) {
+                [drawer openDrawer];
+            }
+        }
+    }
 
     if (isFinder) {
         if ((isCmd || isAlt) && ([chars isEqualToString:@"q"] || [chars isEqualToString:@"Q"])) {
@@ -858,6 +1327,16 @@ static void strip_window_decorations(NSWindow *window) {
                 if (![self isMiniaturized]) {
                     [self performMiniaturize:nil];
                     return;
+                }
+            }
+        }
+
+        if (is_safari()) {
+            if (isCmd && ([chars isEqualToString:@"l"] || [chars isEqualToString:@"L"] ||
+                          [chars isEqualToString:@"t"] || [chars isEqualToString:@"T"])) {
+                HyprZenDrawer *drawer = hypr_get_drawer(self);
+                if (drawer) {
+                    [drawer openDrawer];
                 }
             }
         }
@@ -1069,7 +1548,7 @@ static void strip_window_decorations(NSWindow *window) {
 @implementation NSScrollView (HyprEdgeToEdge)
 
 - (void)hypr_setContentInsets:(NSEdgeInsets)insets {
-    if (![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
+    if (!is_safari() && is_finder() && ![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
         insets.left = 0.0;
         insets.top = 12.0;
         CGFloat accH = hypr_find_accessory_height(self);
@@ -1082,7 +1561,7 @@ static void strip_window_decorations(NSWindow *window) {
 
 - (NSEdgeInsets)hypr_adjustedContentInsets {
     NSEdgeInsets insets = [self hypr_adjustedContentInsets];
-    if (![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
+    if (!is_safari() && is_finder() && ![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
         insets.left = 0.0;
         insets.top = 12.0;
         CGFloat accH = hypr_find_accessory_height(self);
@@ -1094,7 +1573,7 @@ static void strip_window_decorations(NSWindow *window) {
 }
 
 - (BOOL)hypr_automaticallyAdjustsContentInsets {
-    if (![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
+    if (!is_safari() && is_finder() && ![NSStringFromClass([self class]) containsString:@"Sidebar"]) {
         return NO;
     }
     return [self hypr_automaticallyAdjustsContentInsets];
@@ -1103,13 +1582,143 @@ static void strip_window_decorations(NSWindow *window) {
 @end
 
 
+#pragma mark - View Safe Area Insets Swizzle (Safari)
+
+@interface NSView (HyprSafariSafeArea)
+- (NSEdgeInsets)hypr_safeAreaInsets;
+@end
+
+@implementation NSView (HyprSafariSafeArea)
+
+- (NSEdgeInsets)hypr_safeAreaInsets {
+    if (is_safari()) {
+        NSWindow *win = [self window];
+        if (win && is_standard_window(win)) {
+            NSString *cls = NSStringFromClass([self class]);
+            if ([cls containsString:@"WK"] || [cls containsString:@"Browser"] || [cls containsString:@"Pocket"]) {
+                return NSEdgeInsetsZero;
+            }
+        }
+    }
+    return [self hypr_safeAreaInsets];
+}
+
+@end
+
 static BOOL hypr_return_NO(id self, SEL _cmd) {
     (void)self; (void)_cmd;
     return NO;
 }
 
+static BOOL hypr_return_YES(id self, SEL _cmd) {
+    (void)self; (void)_cmd;
+    return YES;
+}
+
+static BOOL hypr_unifiedTabBarShouldOnlyShowActiveTab(id self, SEL _cmd, id tabBar) {
+    (void)self; (void)_cmd; (void)tabBar;
+    return YES;
+}
+
+static NSRect hypr_unifiedTabBar_computeTitlebarMainContentLayoutFrameForCentering(id self, SEL _cmd) {
+    (void)_cmd;
+    return [(NSView *)self bounds];
+}
+
+static void (*s_orig_toolbarView_layout)(id, SEL) = NULL;
+static void hypr_toolbarView_layout(id self, SEL _cmd) {
+    if (s_orig_toolbarView_layout) {
+        s_orig_toolbarView_layout(self, _cmd);
+    }
+    if (is_safari()) {
+        static __thread BOOL s_in_tb_layout = NO;
+        if (s_in_tb_layout) return;
+        s_in_tb_layout = YES;
+        NSWindow *win = [(NSView *)self window];
+        if (win) {
+            HyprZenDrawer *drawer = hypr_get_drawer(win);
+            if (drawer) {
+                [drawer layoutSafariTopSearchBar];
+            }
+        }
+        s_in_tb_layout = NO;
+    }
+}
+
 static double hypr_zero_double(id self, SEL _cmd) {
     (void)self; (void)_cmd;
+    return 0.0;
+}
+
+static id hypr_zero_cornerRadii(id self, SEL _cmd);
+
+static double (*s_orig_window_cornerRadius)(id, SEL) = NULL;
+static double hypr_window_cornerRadius(id self, SEL _cmd) {
+    if (is_standard_window(self)) {
+        return 0.0;
+    }
+    if (s_orig_window_cornerRadius) {
+        return s_orig_window_cornerRadius(self, _cmd);
+    }
+    return 0.0;
+}
+
+static id (*s_orig_window_cornerRadii)(id, SEL) = NULL;
+static id hypr_window_cornerRadii(id self, SEL _cmd) {
+    if (is_standard_window(self)) {
+        return hypr_zero_cornerRadii(self, _cmd);
+    }
+    if (s_orig_window_cornerRadii) {
+        return s_orig_window_cornerRadii(self, _cmd);
+    }
+    return nil;
+}
+
+static double (*s_orig_titlebarHeight)(id, SEL) = NULL;
+static double hypr_themeFrame_titlebarHeight(id self, SEL _cmd) {
+    NSWindow *win = [(NSView *)self window];
+    if (win && !is_standard_window(win)) {
+        return s_orig_titlebarHeight ? s_orig_titlebarHeight(self, _cmd) : 0.0;
+    }
+    if (is_safari()) {
+        return s_orig_titlebarHeight ? s_orig_titlebarHeight(self, _cmd) : 0.0;
+    }
+    return 0.0;
+}
+
+static double (*s_orig_titlebarHeightInline)(id, SEL) = NULL;
+static double hypr_themeFrame_titlebarHeightInline(id self, SEL _cmd) {
+    NSWindow *win = [(NSView *)self window];
+    if (win && !is_standard_window(win)) {
+        return s_orig_titlebarHeightInline ? s_orig_titlebarHeightInline(self, _cmd) : 0.0;
+    }
+    if (is_safari()) {
+        return s_orig_titlebarHeightInline ? s_orig_titlebarHeightInline(self, _cmd) : 0.0;
+    }
+    return 0.0;
+}
+
+static BOOL (*s_orig_hasToolbarReservedSpace)(id, SEL) = NULL;
+static BOOL hypr_themeFrame_hasToolbarReservedSpace(id self, SEL _cmd) {
+    NSWindow *win = [(NSView *)self window];
+    if (win && !is_standard_window(win)) {
+        return s_orig_hasToolbarReservedSpace ? s_orig_hasToolbarReservedSpace(self, _cmd) : NO;
+    }
+    if (is_safari()) {
+        return s_orig_hasToolbarReservedSpace ? s_orig_hasToolbarReservedSpace(self, _cmd) : NO;
+    }
+    return NO;
+}
+
+static double (*s_orig_customTitlebarHeight)(id, SEL) = NULL;
+static double hypr_themeFrame_customTitlebarHeight(id self, SEL _cmd) {
+    NSWindow *win = [(NSView *)self window];
+    if (win && !is_standard_window(win)) {
+        return s_orig_customTitlebarHeight ? s_orig_customTitlebarHeight(self, _cmd) : 0.0;
+    }
+    if (is_safari()) {
+        return s_orig_customTitlebarHeight ? s_orig_customTitlebarHeight(self, _cmd) : 0.0;
+    }
     return 0.0;
 }
 
@@ -1238,6 +1847,8 @@ static void hypr_client_entry(void) {
         hypr_swizzle(windowClass, @selector(sendEvent:), @selector(hypr_sendEvent:));
         hypr_swizzle(windowClass, @selector(canBecomeKeyWindow), @selector(hypr_canBecomeKeyWindow));
         hypr_swizzle(windowClass, @selector(canBecomeMainWindow), @selector(hypr_canBecomeMainWindow));
+        hypr_swizzle(windowClass, @selector(contentLayoutRect), @selector(hypr_contentLayoutRect));
+        hypr_swizzle(windowClass, @selector(makeFirstResponder:), @selector(hypr_makeFirstResponder:));
         hypr_swizzle(windowClass, sel_registerName("accessibilityIsMinimizedAttributeSettable"), @selector(hypr_accessibilityIsMinimizedAttributeSettable));
         hypr_swizzle(windowClass, sel_registerName("accessibilitySetMinimizedAttribute:"), @selector(hypr_accessibilitySetMinimizedAttribute:));
         hypr_swizzle(windowClass, sel_registerName("accessibilityIsAttributeSettable:"), @selector(hypr_accessibilityIsAttributeSettable:));
@@ -1259,12 +1870,23 @@ static void hypr_client_entry(void) {
             hypr_swizzle(scrollViewClass, @selector(automaticallyAdjustsContentInsets), @selector(hypr_automaticallyAdjustsContentInsets));
         }
 
+        Class viewClass = [NSView class];
+        if (viewClass) {
+            hypr_swizzle(viewClass, @selector(safeAreaInsets), @selector(hypr_safeAreaInsets));
+        }
+
         // Swizzle NSWindow corner methods
         Method mWinRadius = class_getInstanceMethod(windowClass, sel_registerName("_cornerRadius"));
-        if (mWinRadius) method_setImplementation(mWinRadius, (IMP)hypr_zero_double);
+        if (mWinRadius) {
+            s_orig_window_cornerRadius = (double (*)(id, SEL))method_getImplementation(mWinRadius);
+            method_setImplementation(mWinRadius, (IMP)hypr_window_cornerRadius);
+        }
 
         Method mWinRadii = class_getInstanceMethod(windowClass, sel_registerName("_cornerRadii"));
-        if (mWinRadii) method_setImplementation(mWinRadii, (IMP)hypr_zero_cornerRadii);
+        if (mWinRadii) {
+            s_orig_window_cornerRadii = (id (*)(id, SEL))method_getImplementation(mWinRadii);
+            method_setImplementation(mWinRadii, (IMP)hypr_window_cornerRadii);
+        }
 
         // Swizzle NSThemeFrame surface rounding and corner calculation methods
         Class themeFrameClass = objc_getClass("NSThemeFrame");
@@ -1288,16 +1910,28 @@ static void hypr_client_entry(void) {
             if (mCornerMask) method_setImplementation(mCornerMask, (IMP)hypr_nil_cornerMask);
 
             Method mTitlebarHeight = class_getInstanceMethod(themeFrameClass, sel_registerName("_titlebarHeight"));
-            if (mTitlebarHeight) method_setImplementation(mTitlebarHeight, (IMP)hypr_zero_double);
+            if (mTitlebarHeight) {
+                s_orig_titlebarHeight = (double (*)(id, SEL))method_getImplementation(mTitlebarHeight);
+                method_setImplementation(mTitlebarHeight, (IMP)hypr_themeFrame_titlebarHeight);
+            }
 
             Method mTitlebarHeightInline = class_getInstanceMethod(themeFrameClass, sel_registerName("_titlebarHeightIncludingInlineToolbar"));
-            if (mTitlebarHeightInline) method_setImplementation(mTitlebarHeightInline, (IMP)hypr_zero_double);
+            if (mTitlebarHeightInline) {
+                s_orig_titlebarHeightInline = (double (*)(id, SEL))method_getImplementation(mTitlebarHeightInline);
+                method_setImplementation(mTitlebarHeightInline, (IMP)hypr_themeFrame_titlebarHeightInline);
+            }
 
             Method mToolbarReserved = class_getInstanceMethod(themeFrameClass, sel_registerName("_hasToolbarReservedSpace"));
-            if (mToolbarReserved) method_setImplementation(mToolbarReserved, (IMP)hypr_return_NO);
+            if (mToolbarReserved) {
+                s_orig_hasToolbarReservedSpace = (BOOL (*)(id, SEL))method_getImplementation(mToolbarReserved);
+                method_setImplementation(mToolbarReserved, (IMP)hypr_themeFrame_hasToolbarReservedSpace);
+            }
 
             Method mCustomTitlebarHeight = class_getInstanceMethod(themeFrameClass, sel_registerName("customTitlebarHeight"));
-            if (mCustomTitlebarHeight) method_setImplementation(mCustomTitlebarHeight, (IMP)hypr_zero_double);
+            if (mCustomTitlebarHeight) {
+                s_orig_customTitlebarHeight = (double (*)(id, SEL))method_getImplementation(mCustomTitlebarHeight);
+                method_setImplementation(mCustomTitlebarHeight, (IMP)hypr_themeFrame_customTitlebarHeight);
+            }
 
             Method mApplySafeArea = class_getInstanceMethod(themeFrameClass, sel_registerName("applySafeAreaInsetsForTransparentTitlebar"));
             if (mApplySafeArea) method_setImplementation(mApplySafeArea, (IMP)hypr_return_NO);
@@ -1313,6 +1947,20 @@ static void hypr_client_entry(void) {
                     // Added cleanly
                 } else {
                     method_setImplementation(mHit, (IMP)hypr_wrapper_hitTest);
+                }
+            }
+        }
+
+        // Swizzle NSTitlebarContainerView hitTest: to pass clicks through when top bar is closed
+        Class containerClass = objc_getClass("NSTitlebarContainerView");
+        if (containerClass) {
+            Method mHit = class_getInstanceMethod(containerClass, @selector(hitTest:));
+            if (mHit) {
+                s_orig_titlebarContainer_hitTest = (NSView *(*)(id, SEL, NSPoint))method_getImplementation(mHit);
+                if (class_addMethod(containerClass, @selector(hitTest:), (IMP)hypr_titlebarContainer_hitTest, method_getTypeEncoding(mHit))) {
+                    // Added cleanly
+                } else {
+                    method_setImplementation(mHit, (IMP)hypr_titlebarContainer_hitTest);
                 }
             }
         }
@@ -1372,6 +2020,45 @@ static void hypr_client_entry(void) {
             Method mTitlebarMouseEntered = class_getInstanceMethod(titlebarViewClass, @selector(mouseEntered:));
             if (mTitlebarMouseEntered) {
                 method_setImplementation(mTitlebarMouseEntered, (IMP)hypr_noop_event);
+            }
+        }
+
+        // Swizzle NSToolbarView layout and Safari ToolbarController to dock single search bar in left sidebar header
+        if (is_safari()) {
+            Class toolbarViewClass = objc_getClass("NSToolbarView");
+            if (toolbarViewClass) {
+                Method mToolbarLayout = class_getInstanceMethod(toolbarViewClass, @selector(layout));
+                if (mToolbarLayout) {
+                    s_orig_toolbarView_layout = (void (*)(id, SEL))method_getImplementation(mToolbarLayout);
+                    method_setImplementation(mToolbarLayout, (IMP)hypr_toolbarView_layout);
+                }
+            }
+
+            Class toolbarControllerClass = objc_getClass("ToolbarController");
+            if (toolbarControllerClass) {
+                SEL selOnlyActive = sel_registerName("unifiedTabBarShouldOnlyShowActiveTab:");
+                Method mOnlyActive = class_getInstanceMethod(toolbarControllerClass, selOnlyActive);
+                if (mOnlyActive) {
+                    method_setImplementation(mOnlyActive, (IMP)hypr_unifiedTabBarShouldOnlyShowActiveTab);
+                }
+            }
+
+            Class browserWCClass = objc_getClass("BrowserWindowController");
+            if (browserWCClass) {
+                SEL selOnlyActive = sel_registerName("unifiedTabBarShouldOnlyShowActiveTab:");
+                Method mOnlyActive = class_getInstanceMethod(browserWCClass, selOnlyActive);
+                if (mOnlyActive) {
+                    method_setImplementation(mOnlyActive, (IMP)hypr_unifiedTabBarShouldOnlyShowActiveTab);
+                }
+            }
+
+            Class unifiedTabBarClass = objc_getClass("UnifiedTabBar");
+            if (unifiedTabBarClass) {
+                SEL selCenterFrame = sel_registerName("_computeTitlebarMainContentLayoutFrameForCentering");
+                Method mCenterFrame = class_getInstanceMethod(unifiedTabBarClass, selCenterFrame);
+                if (mCenterFrame) {
+                    method_setImplementation(mCenterFrame, (IMP)hypr_unifiedTabBar_computeTitlebarMainContentLayoutFrameForCentering);
+                }
             }
         }
 

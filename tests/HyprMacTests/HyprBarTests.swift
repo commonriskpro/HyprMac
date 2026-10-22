@@ -40,6 +40,7 @@ final class HyprBarTests: XCTestCase {
             window.close()
         }
         XCTAssertEqual(window.barHeight, 32.0)
+        XCTAssertEqual(window.level, .statusBar)
         XCTAssertFalse(window.canBecomeKey)
         XCTAssertFalse(window.canBecomeMain)
     }
@@ -288,5 +289,68 @@ final class HyprBarTests: XCTestCase {
         let text = barView.clockLabel.stringValue
         XCTAssertFalse(text.isEmpty)
         XCTAssertTrue(text.contains("AM") || text.contains("PM") || text.contains("am") || text.contains("pm") || text.contains("m."), "Clock string '\(text)' must contain 12-hour AM/PM period indicator")
+    }
+
+    func testFullscreenAutoHideAndHoverReveal() {
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let window = HyprBarWindow(
+            screen: screen,
+            height: 32.0,
+            style: .floatingPill(horizontalMargin: 8.0, topMargin: 5.0),
+            workspaceCount: 6
+        )
+        defer {
+            window.setFullscreenAutoHide(false, animated: false)
+            window.hideBar()
+            window.close()
+        }
+
+        let screenFrame = screen.frame
+        let resting = window.restingFrame(for: screenFrame)
+        let hidden = window.hiddenFullscreenFrame(for: screenFrame)
+
+        // 1. setFullscreenAutoHide(true, animated: false) moves HyprBarWindow to hiddenFullscreenFrame, alphaValue == 0.0, ignoresMouseEvents == true
+        window.setFullscreenAutoHide(true, animated: false)
+        XCTAssertTrue(window.isFullscreenAutoHide)
+        XCTAssertFalse(window.isRevealedInFullscreen)
+        XCTAssertEqual(window.frame, hidden)
+        XCTAssertEqual(window.alphaValue, 0.0)
+        XCTAssertTrue(window.ignoresMouseEvents)
+
+        // 2. handleCursorLocation at top edge (y = screenFrame.maxY - 1.0) reveals the bar
+        let topEdgeLocation = NSPoint(x: screenFrame.midX, y: screenFrame.maxY - 1.0)
+        window.handleCursorLocation(topEdgeLocation, animated: false)
+        XCTAssertTrue(window.isRevealedInFullscreen)
+        XCTAssertEqual(window.frame, resting)
+        XCTAssertEqual(window.alphaValue, 1.0)
+        XCTAssertFalse(window.ignoresMouseEvents)
+
+        // 3. handleCursorLocation while inside the bar (y = screenFrame.maxY - 20.0) keeps isRevealedInFullscreen == true
+        let insideBarLocation = NSPoint(x: screenFrame.midX, y: screenFrame.maxY - 20.0)
+        window.handleCursorLocation(insideBarLocation, animated: false)
+        XCTAssertTrue(window.isRevealedInFullscreen)
+        XCTAssertEqual(window.frame, resting)
+        XCTAssertEqual(window.alphaValue, 1.0)
+        XCTAssertFalse(window.ignoresMouseEvents)
+
+        // 4. handleCursorLocation below the bar (y = screenFrame.maxY - 80.0, immediateHide: true) conceals the bar back to hiddenFullscreenFrame
+        let belowBarLocation = NSPoint(x: screenFrame.midX, y: screenFrame.maxY - 80.0)
+        window.handleCursorLocation(belowBarLocation, animated: false, immediateHide: true)
+        XCTAssertFalse(window.isRevealedInFullscreen)
+        XCTAssertEqual(window.frame, hidden)
+        XCTAssertEqual(window.alphaValue, 0.0)
+        XCTAssertTrue(window.ignoresMouseEvents)
+
+        // 5. setFullscreenAutoHide(false, animated: false) restores the bar to restingFrame
+        window.setFullscreenAutoHide(false, animated: false)
+        XCTAssertFalse(window.isFullscreenAutoHide)
+        XCTAssertFalse(window.isRevealedInFullscreen)
+        XCTAssertEqual(window.frame, resting)
+        XCTAssertEqual(window.alphaValue, 1.0)
+        XCTAssertFalse(window.ignoresMouseEvents)
+    }
+
+    func testNotificationCenterDrawerWindowLevel() {
+        XCTAssertEqual(NotificationCenterDrawer.shared.level, .popUpMenu)
     }
 }

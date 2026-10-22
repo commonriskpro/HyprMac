@@ -5,10 +5,11 @@ import Foundation
 /// 350.0 pt width, Matugen glassmorphism, 10px rounded corners, 48x48 icons, DND, volume slider, clear-all.
 @MainActor
 public final class NotificationCenterDrawer: NSPanel {
+    public static let shared = NotificationCenterDrawer()
     public static let drawerWidth: CGFloat = 350.0
     public static let drawerMarginRight: CGFloat = 10.0
 
-    private let capsuleView = FloatingCapsuleView(cornerRadius: 10.0, surfaceAlpha: 0.75)
+    private let capsuleView = FloatingCapsuleView(cornerRadius: 10.0, surfaceAlpha: 0.65)
 
     // Header
     private let titleLabel = NSTextField(labelWithString: "󰂚  :: Notifications")
@@ -16,9 +17,17 @@ public final class NotificationCenterDrawer: NSPanel {
     private let clearAllLabel = NSTextField(labelWithString: "󰎟  Clear")
 
     // Widgets
+    private let dndPill = NSView()
+    private let dndLabel = NSTextField(labelWithString: "Do Not Disturb")
     private let dndSwitch = NSSwitch()
+    private let volPill = NSView()
+    private let volIconLabel = NSTextField(labelWithString: "󰕾 ")
     private let volumeSlider = NSSlider()
     private let volumeValueLabel = NSTextField(labelWithString: "80%")
+    private let devicesPill = NSView()
+    private let devicesHeaderLabel = NSTextField(labelWithString: "󰓃  Output Devices")
+    private let devicesStackView = NSStackView()
+    private var volumeObserver: Any?
 
     // Notification History List
     private let scrollView = NSScrollView()
@@ -49,7 +58,7 @@ public final class NotificationCenterDrawer: NSPanel {
             defer: false
         )
 
-        level = .mainMenu
+        level = .popUpMenu
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
@@ -92,7 +101,7 @@ public final class NotificationCenterDrawer: NSPanel {
         clearAllButton.translatesAutoresizingMaskIntoConstraints = false
         clearAllButton.wantsLayer = true
         clearAllButton.layer?.cornerRadius = 10.0
-        clearAllButton.layer?.backgroundColor = theme.surface.withAlphaComponent(0.60).cgColor
+        clearAllButton.layer?.backgroundColor = theme.surface.withAlphaComponent(0.65 * 0.75).cgColor
         clearAllButton.layer?.borderWidth = 1.0
         clearAllButton.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
         clearAllButton.onClick = {
@@ -122,16 +131,14 @@ public final class NotificationCenterDrawer: NSPanel {
         ])
 
         // 2. DND Toggle Widget
-        let dndPill = NSView()
         dndPill.translatesAutoresizingMaskIntoConstraints = false
         dndPill.wantsLayer = true
         dndPill.layer?.cornerRadius = 8.0
-        dndPill.layer?.backgroundColor = theme.surface.withAlphaComponent(0.60).cgColor
+        dndPill.layer?.backgroundColor = theme.surface.withAlphaComponent(0.65 * 0.75).cgColor
         dndPill.layer?.borderWidth = 1.0
         dndPill.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
         container.addSubview(dndPill)
 
-        let dndLabel = NSTextField(labelWithString: "Do Not Disturb")
         dndLabel.translatesAutoresizingMaskIntoConstraints = false
         dndLabel.isEditable = false
         dndLabel.isSelectable = false
@@ -153,16 +160,14 @@ public final class NotificationCenterDrawer: NSPanel {
         ])
 
         // 3. Volume Slider Widget
-        let volPill = NSView()
         volPill.translatesAutoresizingMaskIntoConstraints = false
         volPill.wantsLayer = true
         volPill.layer?.cornerRadius = 8.0
-        volPill.layer?.backgroundColor = theme.surface.withAlphaComponent(0.60).cgColor
+        volPill.layer?.backgroundColor = theme.surface.withAlphaComponent(0.65 * 0.75).cgColor
         volPill.layer?.borderWidth = 1.0
         volPill.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
         container.addSubview(volPill)
 
-        let volIconLabel = NSTextField(labelWithString: "󰕾 ")
         volIconLabel.translatesAutoresizingMaskIntoConstraints = false
         volIconLabel.isEditable = false
         volIconLabel.isSelectable = false
@@ -201,6 +206,39 @@ public final class NotificationCenterDrawer: NSPanel {
             volumeSlider.leadingAnchor.constraint(equalTo: volIconLabel.trailingAnchor, constant: 4.0),
             volumeSlider.trailingAnchor.constraint(equalTo: volumeValueLabel.leadingAnchor, constant: -6.0),
             volumeSlider.centerYAnchor.constraint(equalTo: volPill.centerYAnchor)
+        ])
+
+        // 3.1 Audio Output Devices Widget
+        devicesPill.translatesAutoresizingMaskIntoConstraints = false
+        devicesPill.wantsLayer = true
+        devicesPill.layer?.cornerRadius = 8.0
+        devicesPill.layer?.backgroundColor = theme.surface.withAlphaComponent(0.65 * 0.75).cgColor
+        devicesPill.layer?.borderWidth = 1.0
+        devicesPill.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        container.addSubview(devicesPill)
+
+        devicesHeaderLabel.translatesAutoresizingMaskIntoConstraints = false
+        devicesHeaderLabel.isEditable = false
+        devicesHeaderLabel.isSelectable = false
+        devicesHeaderLabel.font = .barFont(ofSize: 10.5, weight: .bold)
+        devicesHeaderLabel.textColor = theme.onSurface.withAlphaComponent(0.60)
+        devicesPill.addSubview(devicesHeaderLabel)
+
+        devicesStackView.translatesAutoresizingMaskIntoConstraints = false
+        devicesStackView.orientation = .vertical
+        devicesStackView.alignment = .leading
+        devicesStackView.spacing = 4.0
+        devicesPill.addSubview(devicesStackView)
+
+        NSLayoutConstraint.activate([
+            devicesHeaderLabel.topAnchor.constraint(equalTo: devicesPill.topAnchor, constant: 8.0),
+            devicesHeaderLabel.leadingAnchor.constraint(equalTo: devicesPill.leadingAnchor, constant: 12.0),
+            devicesHeaderLabel.trailingAnchor.constraint(equalTo: devicesPill.trailingAnchor, constant: -12.0),
+
+            devicesStackView.topAnchor.constraint(equalTo: devicesHeaderLabel.bottomAnchor, constant: 6.0),
+            devicesStackView.leadingAnchor.constraint(equalTo: devicesPill.leadingAnchor, constant: 8.0),
+            devicesStackView.trailingAnchor.constraint(equalTo: devicesPill.trailingAnchor, constant: -8.0),
+            devicesStackView.bottomAnchor.constraint(equalTo: devicesPill.bottomAnchor, constant: -8.0)
         ])
 
         // 4. Scrollable History List
@@ -243,7 +281,11 @@ public final class NotificationCenterDrawer: NSPanel {
             volPill.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14.0),
             volPill.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14.0),
 
-            scrollView.topAnchor.constraint(equalTo: volPill.bottomAnchor, constant: 12.0),
+            devicesPill.topAnchor.constraint(equalTo: volPill.bottomAnchor, constant: 8.0),
+            devicesPill.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14.0),
+            devicesPill.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14.0),
+
+            scrollView.topAnchor.constraint(equalTo: devicesPill.bottomAnchor, constant: 10.0),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12.0),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12.0),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12.0),
@@ -263,16 +305,137 @@ public final class NotificationCenterDrawer: NSPanel {
         ])
 
         reloadHistory()
+        reloadAudioDevices()
     }
 
     @objc private func dndToggled(_ sender: NSSwitch) {
         NotificationCenterManager.shared.isDoNotDisturb = (sender.state == .on)
     }
 
+    public func applyTheme() {
+        let theme = HyprTheme.shared
+        let capsuleAlpha = HyprBarWindow.shared?.barView.capsuleAlpha ?? 0.65
+        capsuleView.theme = theme
+        capsuleView.surfaceAlpha = capsuleAlpha
+        capsuleView.updateTheme()
+
+        titleLabel.textColor = theme.primary
+        clearAllButton.layer?.backgroundColor = theme.surface.withAlphaComponent(capsuleAlpha * 0.75).cgColor
+        clearAllButton.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        clearAllLabel.textColor = theme.tertiary
+
+        dndPill.layer?.backgroundColor = theme.surface.withAlphaComponent(capsuleAlpha * 0.75).cgColor
+        dndPill.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        dndLabel.textColor = theme.onSurface
+
+        volPill.layer?.backgroundColor = theme.surface.withAlphaComponent(capsuleAlpha * 0.75).cgColor
+        volPill.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        volIconLabel.textColor = theme.tertiary
+        volumeValueLabel.textColor = theme.onSurface
+
+        devicesPill.layer?.backgroundColor = theme.surface.withAlphaComponent(capsuleAlpha * 0.75).cgColor
+        devicesPill.layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        devicesHeaderLabel.textColor = theme.onSurface.withAlphaComponent(0.60)
+
+        emptyLabel.textColor = theme.onSurface.withAlphaComponent(0.50)
+
+        reloadAudioDevices()
+        for subview in cardsStackView.arrangedSubviews {
+            if let card = subview as? NotificationCardView {
+                card.applyTheme()
+            }
+        }
+    }
+
     @objc private func volumeChanged(_ sender: NSSlider) {
         let vol = Int(sender.doubleValue)
         VolumeMonitor.setVolume(vol)
         volumeValueLabel.stringValue = "\(vol)%"
+    }
+
+    public func updateVolumeUI() {
+        let vol = VolumeMonitor.currentVolume()
+        if abs(volumeSlider.doubleValue - Double(vol)) >= 1.0 {
+            volumeSlider.doubleValue = Double(vol)
+        }
+        volumeValueLabel.stringValue = "\(vol)%"
+    }
+
+    public func reloadAudioDevices() {
+        for sub in devicesStackView.arrangedSubviews {
+            devicesStackView.removeArrangedSubview(sub)
+            sub.removeFromSuperview()
+        }
+
+        let devices = VolumeMonitor.outputDevices()
+        let theme = HyprTheme.shared
+
+        for dev in devices {
+            let row = ClickablePill()
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.wantsLayer = true
+            row.layer?.cornerRadius = 6.0
+            row.heightAnchor.constraint(equalToConstant: 26.0).isActive = true
+
+            if dev.isDefault {
+                row.layer?.backgroundColor = theme.primary.withAlphaComponent(0.20).cgColor
+                row.layer?.borderWidth = 1.0
+                row.layer?.borderColor = theme.primary.withAlphaComponent(0.40).cgColor
+            } else {
+                row.layer?.backgroundColor = NSColor.clear.cgColor
+                row.layer?.borderWidth = 1.0
+                row.layer?.borderColor = NSColor(white: 1.0, alpha: 0.05).cgColor
+            }
+
+            let iconLabel = NSTextField(labelWithString: dev.icon)
+            iconLabel.translatesAutoresizingMaskIntoConstraints = false
+            iconLabel.isEditable = false
+            iconLabel.isSelectable = false
+            iconLabel.font = .barFont(ofSize: 11.5, weight: .bold)
+            iconLabel.textColor = dev.isDefault ? theme.primary : theme.onSurface.withAlphaComponent(0.80)
+            row.addSubview(iconLabel)
+
+            let nameLabel = NSTextField(labelWithString: dev.name)
+            nameLabel.translatesAutoresizingMaskIntoConstraints = false
+            nameLabel.isEditable = false
+            nameLabel.isSelectable = false
+            nameLabel.font = .barFont(ofSize: 11.0, weight: dev.isDefault ? .bold : .medium)
+            nameLabel.textColor = dev.isDefault ? theme.onSurface : theme.onSurface.withAlphaComponent(0.85)
+            nameLabel.lineBreakMode = .byTruncatingTail
+            nameLabel.maximumNumberOfLines = 1
+            nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            row.addSubview(nameLabel)
+
+            let checkLabel = NSTextField(labelWithString: dev.isDefault ? "✓" : "")
+            checkLabel.translatesAutoresizingMaskIntoConstraints = false
+            checkLabel.isEditable = false
+            checkLabel.isSelectable = false
+            checkLabel.font = .barFont(ofSize: 11.0, weight: .bold)
+            checkLabel.textColor = theme.primary
+            row.addSubview(checkLabel)
+
+            NSLayoutConstraint.activate([
+                iconLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8.0),
+                iconLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                iconLabel.widthAnchor.constraint(equalToConstant: 18.0),
+
+                checkLabel.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8.0),
+                checkLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+
+                nameLabel.leadingAnchor.constraint(equalTo: iconLabel.trailingAnchor, constant: 6.0),
+                nameLabel.trailingAnchor.constraint(equalTo: checkLabel.leadingAnchor, constant: -6.0),
+                nameLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+            ])
+
+            row.onClick = { [weak self] in
+                VolumeMonitor.setOutputDevice(dev.id)
+                self?.reloadAudioDevices()
+            }
+
+            devicesStackView.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: devicesStackView.widthAnchor).isActive = true
+        }
     }
 
     /// Re-renders the list of notification cards from NotificationCenterManager history.
@@ -322,6 +485,21 @@ public final class NotificationCenterDrawer: NSPanel {
         isOpen = true
 
         reloadHistory()
+        updateVolumeUI()
+        reloadAudioDevices()
+
+        if volumeObserver == nil {
+            volumeObserver = NotificationCenter.default.addObserver(
+                forName: VolumeMonitor.didChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.updateVolumeUI()
+                    self?.reloadAudioDevices()
+                }
+            }
+        }
 
         let (targetFrame, startFrame) = calculateFrames()
 
@@ -361,6 +539,10 @@ public final class NotificationCenterDrawer: NSPanel {
             NSEvent.removeMonitor(monitor)
             outsideClickMonitor = nil
         }
+        if let obs = volumeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            volumeObserver = nil
+        }
 
         let (_, closedFrame) = calculateFrames()
 
@@ -396,6 +578,17 @@ public final class NotificationCenterDrawer: NSPanel {
         }
         super.keyDown(with: event)
     }
+
+    deinit {
+        MainActor.assumeIsolated {
+            if let obs = self.volumeObserver {
+                NotificationCenter.default.removeObserver(obs)
+            }
+            if let monitor = self.outsideClickMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+    }
 }
 
 /// Flipped coordinate container for top-down scroll layout
@@ -405,9 +598,13 @@ private final class FlippedClipView: NSView {
 
 /// Individual notification card in the NotificationCenterDrawer history list.
 @MainActor
-private final class NotificationCardView: NSView {
+public final class NotificationCardView: NSView {
     public let notification: HyprNotification
     private let dismissButton = ClickablePill()
+    private let dismissLabel = NSTextField(labelWithString: "✕")
+    private let summaryLabel = NSTextField()
+    private let timeLabel = NSTextField()
+    private let bodyLabel = NSTextField()
 
     public init(notification: HyprNotification) {
         self.notification = notification
@@ -423,7 +620,7 @@ private final class NotificationCardView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 10.0
         let theme = HyprTheme.shared
-        layer?.backgroundColor = theme.surface.withAlphaComponent(0.60).cgColor
+        layer?.backgroundColor = theme.surface.withAlphaComponent(0.45).cgColor
         layer?.borderWidth = 1.0
         layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
 
@@ -450,7 +647,6 @@ private final class NotificationCardView: NSView {
         }
         addSubview(dismissButton)
 
-        let dismissLabel = NSTextField(labelWithString: "✕")
         dismissLabel.translatesAutoresizingMaskIntoConstraints = false
         dismissLabel.isEditable = false
         dismissLabel.isSelectable = false
@@ -476,7 +672,7 @@ private final class NotificationCardView: NSView {
         headerStack.spacing = 6.0
         textContainer.addSubview(headerStack)
 
-        let summaryLabel = NSTextField(labelWithString: notification.appName.isEmpty ? notification.title : notification.appName)
+        summaryLabel.stringValue = notification.appName.isEmpty ? notification.title : notification.appName
         summaryLabel.translatesAutoresizingMaskIntoConstraints = false
         summaryLabel.isEditable = false
         summaryLabel.isSelectable = false
@@ -486,7 +682,7 @@ private final class NotificationCardView: NSView {
         summaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         headerStack.addArrangedSubview(summaryLabel)
 
-        let timeLabel = NSTextField(labelWithString: notification.formattedTimestamp)
+        timeLabel.stringValue = notification.formattedTimestamp
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.isEditable = false
         timeLabel.isSelectable = false
@@ -496,7 +692,7 @@ private final class NotificationCardView: NSView {
         timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         headerStack.addArrangedSubview(timeLabel)
 
-        let bodyLabel = NSTextField(labelWithString: notification.body.isEmpty ? notification.title : notification.body)
+        bodyLabel.stringValue = notification.body.isEmpty ? notification.title : notification.body
         bodyLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyLabel.isEditable = false
         bodyLabel.isSelectable = false
@@ -531,6 +727,17 @@ private final class NotificationCardView: NSView {
             bodyLabel.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
             bodyLabel.bottomAnchor.constraint(equalTo: textContainer.bottomAnchor)
         ])
+    }
+
+    public func applyTheme() {
+        let theme = HyprTheme.shared
+        layer?.backgroundColor = theme.surface.withAlphaComponent(0.45).cgColor
+        layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        dismissButton.layer?.backgroundColor = theme.surface.withAlphaComponent(0.60).cgColor
+        dismissLabel.textColor = theme.primary
+        summaryLabel.textColor = theme.primary
+        timeLabel.textColor = theme.tertiary
+        bodyLabel.textColor = theme.onSurface
     }
 
     public override func mouseUp(with event: NSEvent) {

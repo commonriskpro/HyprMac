@@ -145,10 +145,12 @@ public final class SessionManager: @unchecked Sendable {
             setMenuBarAgentSuppressed(true)
             FileManager.default.createFile(atPath: SessionManager.menubarSuppressionFlag, contents: nil)
             _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true)
+            _ = SkyLightBridge.shared.setMenuBarSuppressed(true)
         case .aqua:
             setMenuBarAgentSuppressed(false)
             try? FileManager.default.removeItem(atPath: SessionManager.menubarSuppressionFlag)
             _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: false)
+            _ = SkyLightBridge.shared.setMenuBarSuppressed(false)
         }
     }
 
@@ -179,6 +181,7 @@ public final class SessionManager: @unchecked Sendable {
 
         switch mode {
         case .hyprMac:
+            _ = SkyLightBridge.shared.setMenuBarSuppressed(true)
             // 1. Hide native macOS menu bar: defaults write NSGlobalDomain _HIHideMenuBar -bool true
             let menuBarOk = runCommand(
                 executable: "/usr/bin/defaults",
@@ -202,6 +205,7 @@ public final class SessionManager: @unchecked Sendable {
             }
 
         case .aqua:
+            _ = SkyLightBridge.shared.setMenuBarSuppressed(false)
             // 1. Restore native macOS menu bar: defaults write NSGlobalDomain _HIHideMenuBar -bool false
             let menuBarOk = runCommand(
                 executable: "/usr/bin/defaults",

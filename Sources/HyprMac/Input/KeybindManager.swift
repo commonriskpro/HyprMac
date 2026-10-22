@@ -107,7 +107,7 @@ public final class KeybindManager: @unchecked Sendable {
             let running = isRunning
             lock.unlock()
 
-            if changed && running && !HyprServerBridge.shared.isAvailable {
+            if changed && running && !HyprServerBridge.shared.isAuthenticated {
                 restartTap()
             }
         }
@@ -359,7 +359,7 @@ public final class KeybindManager: @unchecked Sendable {
 
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         var eventsOfInterest = CGEventMask(1 << CGEventType.keyDown.rawValue)
-        if _isMenuBarSuppressed && !HyprServerBridge.shared.isAvailable {
+        if _isMenuBarSuppressed && !HyprServerBridge.shared.isAuthenticated {
             eventsOfInterest |= CGEventMask(1 << CGEventType.mouseMoved.rawValue)
         }
 
@@ -445,7 +445,15 @@ public final class KeybindManager: @unchecked Sendable {
         if type == .mouseMoved || type == .leftMouseDragged || type == .rightMouseDragged {
             if isMenuBarSuppressed {
                 let loc = event.location
+                if loc.y <= 4.0 {
+                    DispatchQueue.main.async {
+                        if let bar = HyprBarWindow.shared, bar.isFullscreenAutoHide, !bar.isRevealedInFullscreen {
+                            bar.revealInFullscreen(animated: true)
+                        }
+                    }
+                }
                 if loc.y < 12.0 {
+                    _ = SkyLightBridge.shared.setMenuBarSuppressed(true)
                     // Shield WindowServer's raw top-edge hover trigger by clamping y to 12.0,
                     // while still permitting interaction with HyprBar (Y: 5..37)
                     event.location = CGPoint(x: loc.x, y: 12.0)

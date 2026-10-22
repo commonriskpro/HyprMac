@@ -31,6 +31,7 @@ public final class AXProcessObserverPool: @unchecked Sendable {
     public var onWindowMoved: (@MainActor (pid_t) -> Void)?
     public var onWindowResized: (@MainActor (pid_t) -> Void)?
     public var onFocusedWindowChanged: (@MainActor (pid_t) -> Void)?
+    public var onFocusChanged: (@MainActor (pid_t, CGWindowID?) -> Void)?
     public var onTitleChanged: (@MainActor (pid_t) -> Void)?
     public var onWindowMiniaturized: (@MainActor (pid_t, CGWindowID?) -> Void)?
     public var onWindowDeminiaturized: (@MainActor (pid_t, CGWindowID?) -> Void)?
@@ -87,17 +88,7 @@ public final class AXProcessObserverPool: @unchecked Sendable {
             MainActor.assumeIsolated {
                 self.observeApplication(pid: pid)
                 self.scheduleCoalescedTilingUpdate()
-
-                // Staggered follow-up reconciliation passes as the newly launched app initializes its window
-                for delay in [0.150, 0.350, 0.700, 1.200] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                        MainActor.assumeIsolated {
-                            guard let self = self, self.isRunning else { return }
-                            self.observeApplication(pid: pid)
-                            self.scheduleCoalescedTilingUpdate()
-                        }
-                    }
-                }
+                self.scheduleWindowInitializationPasses(pid: pid)
             }
         }
         workspaceObservers.append(launchToken)
@@ -172,6 +163,7 @@ public final class AXProcessObserverPool: @unchecked Sendable {
         obs.onWindowCreated = { [weak self] p in
             self?.onWindowCreated?(p)
             self?.scheduleCoalescedTilingUpdate()
+            self?.scheduleWindowInitializationPasses(pid: p)
         }
         obs.onWindowDestroyed = { [weak self] p in
             self?.onWindowDestroyed?(p)
@@ -182,6 +174,9 @@ public final class AXProcessObserverPool: @unchecked Sendable {
         }
         obs.onWindowResized = { [weak self] in
             self?.onWindowResized?(pid)
+        }
+        obs.onFocusedWindowChangedWithWindow = { [weak self] p, wid in
+            self?.onFocusChanged?(p, wid)
         }
         obs.onFocusedWindowChanged = { [weak self] in
             self?.onFocusedWindowChanged?(pid)
@@ -218,6 +213,19 @@ public final class AXProcessObserverPool: @unchecked Sendable {
     /// Coalesces high-frequency layout changes into a single MainActor invocation.
     /// Non-starving coalesce: if an update is already scheduled, lets it execute at its deadline
     /// instead of cancelling and postponing into the future on every event.
+    @MainActor
+    public func scheduleWindowInitializationPasses(pid: pid_t) {
+        for delay in [0.120, 0.300, 0.650] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self = self, self.isRunning else { return }
+                    self.observeApplication(pid: pid)
+                    self.scheduleCoalescedTilingUpdate()
+                }
+            }
+        }
+    }
+
     @MainActor
     public func scheduleCoalescedTilingUpdate() {
         guard !isSuppressingTilingEvents else { return }

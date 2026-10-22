@@ -650,6 +650,9 @@ public final class WorkspaceManager {
     /// Provider closure for obtaining dynamic screen tiling bounds.
     public var boundsProvider: (@MainActor () -> CGRect)?
 
+    /// Provider closure for obtaining dynamic full-screen bounds for fullscreen windows.
+    public var fullscreenBoundsProvider: (@Sendable () -> CGRect)?
+
     /// Hook invoked whenever active workspace changes.
     public var onWorkspaceChange: (@Sendable (Int) -> Void)?
 
@@ -1024,8 +1027,9 @@ public final class WorkspaceManager {
         } else if let d = effectiveDwindle {
             targetFrames = d.tileWindows(windowIDs: tiledIDs, in: bounds)
         }
+        let fullscreenBounds = fullscreenBoundsProvider?() ?? bounds
         for wid in activeIDs where (isFullscreen?(wid) == true || stateStore.isFullscreen(wid)) {
-            targetFrames[wid] = bounds
+            targetFrames[wid] = fullscreenBounds
         }
 
         // Step 2: Inactive windows belonging to other workspaces

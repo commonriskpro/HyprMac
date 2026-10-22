@@ -1,6 +1,8 @@
 import Cocoa
 @preconcurrency import ApplicationServices
 
+private let kAXWindowZoomedNotification: String = "AXWindowZoomed"
+
 /// Native macOS Accessibility Event Observer.
 /// Bridges application-level Accessibility events (window moved, resized, focused, title changed, minimized)
 /// into reactive callbacks on MainActor, replacing recurring polling timers with true 0% CPU event listeners.
@@ -13,6 +15,7 @@ public final class AXEventObserver: @unchecked Sendable {
     public var onWindowMoved: (@MainActor () -> Void)?
     public var onWindowResized: (@MainActor () -> Void)?
     public var onFocusedWindowChanged: (@MainActor () -> Void)?
+    public var onFocusedWindowChangedWithWindow: (@MainActor (pid_t, CGWindowID?) -> Void)?
     public var onTitleChanged: (@MainActor () -> Void)?
     public var onWindowMiniaturized: (@MainActor () -> Void)?
     public var onWindowDeminiaturized: (@MainActor () -> Void)?
@@ -32,6 +35,7 @@ public final class AXEventObserver: @unchecked Sendable {
             kAXUIElementDestroyedNotification as CFString,
             kAXWindowMovedNotification as CFString,
             kAXWindowResizedNotification as CFString,
+            kAXWindowZoomedNotification as CFString,
             kAXFocusedWindowChangedNotification as CFString,
             kAXTitleChangedNotification as CFString,
             kAXWindowMiniaturizedNotification as CFString,
@@ -67,9 +71,11 @@ public final class AXEventObserver: @unchecked Sendable {
                         watcher.onWindowDestroyed?(pid)
                     } else if notifName == (kAXWindowMovedNotification as String) {
                         watcher.onWindowMoved?()
-                    } else if notifName == (kAXWindowResizedNotification as String) {
+                    } else if notifName == (kAXWindowResizedNotification as String) || notifName == (kAXWindowZoomedNotification as String) {
                         watcher.onWindowResized?()
                     } else if notifName == (kAXFocusedWindowChangedNotification as String) {
+                        let wid = WindowDetector.shared.getWindowID(for: element)
+                        watcher.onFocusedWindowChangedWithWindow?(pid, wid)
                         watcher.onFocusedWindowChanged?()
                     } else if notifName == (kAXTitleChangedNotification as String) {
                         watcher.onTitleChanged?()

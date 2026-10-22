@@ -151,15 +151,59 @@ public enum HardwareMonitor {
     }
 }
 
-/// Reader for system output volume via CoreAudio / AudioToolbox
+/// Represents a hardware or virtual audio output device
+public struct AudioOutputDevice: Equatable, Identifiable, Sendable {
+    public let id: AudioDeviceID
+    public let name: String
+    public let uid: String
+    public let transportType: UInt32
+    public let isDefault: Bool
+
+    public init(id: AudioDeviceID, name: String, uid: String, transportType: UInt32, isDefault: Bool) {
+        self.id = id
+        self.name = name
+        self.uid = uid
+        self.transportType = transportType
+        self.isDefault = isDefault
+    }
+
+    public var icon: String {
+        let lower = name.lowercased()
+        if lower.contains("headphone") || lower.contains("headset") || lower.contains("airpod") || lower.contains("earbuds") || lower.contains("virtuoso") || lower.contains("buds") {
+            return "󰋋"
+        }
+        if lower.contains("display") || lower.contains("monitor") || lower.contains("tv") || lower.contains("hdmi") || lower.contains("kc242") {
+            return "󰍹"
+        }
+        switch transportType {
+        case 1651275109 /* 'blue' */, 0x626c6561 /* 'blea' */:
+            return "󰂯"
+        case 1751412073 /* 'hdmi' */, 0x64707274 /* 'dprt' */:
+            return "󰍹"
+        case 0x61697270 /* 'airp' */:
+            return "󰀃"
+        case 1651274862 /* 'bltn' */:
+            return "󰓃"
+        case 1970496032 /* 'usb ' */:
+            return "󰋋"
+        default:
+            return "󰕾"
+        }
+    }
+}
+
+/// Reader and controller for system output volume and output audio devices via CoreAudio
 public enum VolumeMonitor {
     public static var shared: VolumeMonitor.Type { VolumeMonitor.self }
 
+    public static let didChangeNotification = Notification.Name("HyprMacVolumeMonitorDidChange")
+
     nonisolated(unsafe) private static var trackedSystemBlock: AudioObjectPropertyListenerBlock?
+    nonisolated(unsafe) private static var trackedDevicesBlock: AudioObjectPropertyListenerBlock?
     nonisolated(unsafe) private static var trackedDeviceBlock: AudioObjectPropertyListenerBlock?
     nonisolated(unsafe) private static var trackedDeviceID: AudioDeviceID?
 
-    public static func currentVolume() -> Int {
+    public static func defaultOutputDeviceID() -> AudioDeviceID {
         var defaultOutputDeviceID = AudioDeviceID(0)
         var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
         var propertyAddress = AudioObjectPropertyAddress(
@@ -176,12 +220,21 @@ public enum VolumeMonitor {
             &propertySize,
             &defaultOutputDeviceID
         )
-        guard status == noErr else { return 80 }
+        guard status == noErr else { return 0 }
+        return defaultOutputDeviceID
+    }
+
+    public static func currentVolume() -> Int {
+        let defaultOutputDeviceID = defaultOutputDeviceID()
+        guard defaultOutputDeviceID != 0 else { return 80 }
 
         var volume = Float32(0.0)
-        propertySize = UInt32(MemoryLayout<Float32>.size)
-        propertyAddress.mSelector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
-        propertyAddress.mScope = kAudioObjectPropertyScopeOutput
+        var propertySize = UInt32(MemoryLayout<Float32>.size)
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
 
         let volStatus = AudioObjectGetPropertyData(
             defaultOutputDeviceID,
@@ -198,31 +251,20 @@ public enum VolumeMonitor {
 
     public static func setVolume(_ volume: Int) {
         let clamped = max(0, min(100, volume))
-        var defaultOutputDeviceID = AudioDeviceID(0)
-        var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0,
-            nil,
-            &propertySize,
-            &defaultOutputDeviceID
-        )
-        guard status == noErr else {
+        let defaultOutputDeviceID = defaultOutputDeviceID()
+        guard defaultOutputDeviceID != 0 else {
             let script = "set volume output volume \(clamped)"
             NSAppleScript(source: script)?.executeAndReturnError(nil)
             return
         }
 
         var volFloat = Float32(clamped) / 100.0
-        propertyAddress.mSelector = kAudioHardwareServiceDeviceProperty_VirtualMainVolume
-        propertyAddress.mScope = kAudioObjectPropertyScopeOutput
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let propertySize = UInt32(MemoryLayout<Float32>.size)
         let setStatus = AudioObjectSetPropertyData(
             defaultOutputDeviceID,
             &propertyAddress,
@@ -235,6 +277,171 @@ public enum VolumeMonitor {
             let script = "set volume output volume \(clamped)"
             NSAppleScript(source: script)?.executeAndReturnError(nil)
         }
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        }
+    }
+
+    public static func outputDevices() -> [AudioOutputDevice] {
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize
+        )
+        guard status == noErr, dataSize > 0 else { return [] }
+
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0,
+            nil,
+            &dataSize,
+            &deviceIDs
+        )
+        guard status == noErr else { return [] }
+
+        let currentDefaultID = defaultOutputDeviceID()
+        var result: [AudioOutputDevice] = []
+
+        for dev in deviceIDs {
+            var streamAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioObjectPropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var streamSize: UInt32 = 0
+            status = AudioObjectGetPropertyDataSize(dev, &streamAddr, 0, nil, &streamSize)
+            guard status == noErr, streamSize > 0 else { continue }
+
+            let rawBuffer = UnsafeMutableRawPointer.allocate(
+                byteCount: Int(streamSize),
+                alignment: MemoryLayout<AudioBufferList>.alignment
+            )
+            status = AudioObjectGetPropertyData(dev, &streamAddr, 0, nil, &streamSize, rawBuffer)
+            var totalChannels = 0
+            if status == noErr {
+                let bufferListPtr = rawBuffer.bindMemory(to: AudioBufferList.self, capacity: 1)
+                let numBuffers = Int(bufferListPtr.pointee.mNumberBuffers)
+                if numBuffers > 0 {
+                    withUnsafePointer(to: &bufferListPtr.pointee.mBuffers) { firstBufPtr in
+                        let bufferBuf = UnsafeBufferPointer<AudioBuffer>(start: firstBufPtr, count: numBuffers)
+                        for b in bufferBuf {
+                            totalChannels += Int(b.mNumberChannels)
+                        }
+                    }
+                }
+            }
+            rawBuffer.deallocate()
+            guard totalChannels > 0 else { continue }
+
+            var nameAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioObjectPropertyName,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var nameUnmanaged: Unmanaged<CFString>?
+            var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var devName = "Audio Output"
+            if withUnsafeMutablePointer(to: &nameUnmanaged, { ptr in
+                AudioObjectGetPropertyData(dev, &nameAddr, 0, nil, &nameSize, ptr)
+            }) == noErr, let cf = nameUnmanaged?.takeRetainedValue() {
+                devName = cf as String
+            }
+
+            var uidAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidUnmanaged: Unmanaged<CFString>?
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var devUID = "\(dev)"
+            if withUnsafeMutablePointer(to: &uidUnmanaged, { ptr in
+                AudioObjectGetPropertyData(dev, &uidAddr, 0, nil, &uidSize, ptr)
+            }) == noErr, let cf = uidUnmanaged?.takeRetainedValue() {
+                devUID = cf as String
+            }
+
+            var transAddr = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyTransportType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var transType: UInt32 = 0
+            var transSize = UInt32(MemoryLayout<UInt32>.size)
+            _ = AudioObjectGetPropertyData(dev, &transAddr, 0, nil, &transSize, &transType)
+
+            let isDefault = (dev == currentDefaultID)
+            result.append(AudioOutputDevice(
+                id: dev,
+                name: devName,
+                uid: devUID,
+                transportType: transType,
+                isDefault: isDefault
+            ))
+        }
+
+        return result
+    }
+
+    @discardableResult
+    public static func setOutputDevice(_ deviceID: AudioDeviceID) -> Bool {
+        var devID = deviceID
+        let size = UInt32(MemoryLayout<AudioDeviceID>.size)
+
+        var defaultOutputAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let defaultStatus = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultOutputAddress,
+            0,
+            nil,
+            size,
+            &devID
+        )
+
+        var systemOutputAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let systemStatus = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &systemOutputAddress,
+            0,
+            nil,
+            size,
+            &devID
+        )
+
+        if defaultStatus != noErr || systemStatus != noErr {
+            let fallbackURL = URL(fileURLWithPath: "/opt/homebrew/bin/SwitchAudioSource")
+            if FileManager.default.isExecutableFile(atPath: fallbackURL.path) {
+                let process = Process()
+                process.executableURL = fallbackURL
+                process.arguments = ["-t", "output", "-i", "\(deviceID)"]
+                try? process.run()
+                process.waitUntilExit()
+            }
+        }
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        }
+        return true
     }
 
     public static func stopMonitoring() {
@@ -251,6 +458,20 @@ public enum VolumeMonitor {
                 block
             )
             trackedSystemBlock = nil
+        }
+        if let block = trackedDevicesBlock {
+            var devicesAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDevices,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &devicesAddress,
+                DispatchQueue.main,
+                block
+            )
+            trackedDevicesBlock = nil
         }
         if let block = trackedDeviceBlock, let deviceID = trackedDeviceID, deviceID != 0 {
             var volAddress = AudioObjectPropertyAddress(
@@ -284,21 +505,8 @@ public enum VolumeMonitor {
                 trackedDeviceID = nil
             }
 
-            var defaultOutputDeviceID = AudioDeviceID(0)
-            var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
-            var propertyAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            if AudioObjectGetPropertyData(
-                AudioObjectID(kAudioObjectSystemObject),
-                &propertyAddress,
-                0,
-                nil,
-                &propertySize,
-                &defaultOutputDeviceID
-            ) == noErr && defaultOutputDeviceID != 0 {
+            let defaultOutputDeviceID = defaultOutputDeviceID()
+            if defaultOutputDeviceID != 0 {
                 var volAddress = AudioObjectPropertyAddress(
                     mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
                     mScope: kAudioObjectPropertyScopeOutput,
@@ -307,6 +515,7 @@ public enum VolumeMonitor {
                 let devBlock: AudioObjectPropertyListenerBlock = { _, _ in
                     let vol = currentVolume()
                     onChange(vol)
+                    NotificationCenter.default.post(name: didChangeNotification, object: nil)
                 }
                 trackedDeviceBlock = devBlock
                 trackedDeviceID = defaultOutputDeviceID
@@ -329,6 +538,7 @@ public enum VolumeMonitor {
             attachDeviceListener()
             let vol = currentVolume()
             onChange(vol)
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
         }
         trackedSystemBlock = sysBlock
 
@@ -337,6 +547,27 @@ public enum VolumeMonitor {
             &systemAddress,
             DispatchQueue.main,
             sysBlock
+        )
+
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let devicesBlock: AudioObjectPropertyListenerBlock = { _, _ in
+            attachDeviceListener()
+            let vol = currentVolume()
+            onChange(vol)
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        }
+        trackedDevicesBlock = devicesBlock
+
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            DispatchQueue.main,
+            devicesBlock
         )
 
         attachDeviceListener()
@@ -469,11 +700,30 @@ public enum NetworkMonitor {
 public class ClickablePill: NSView {
     public var onClick: (() -> Void)?
 
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
+    public override func mouseDown(with event: NSEvent) {
+        // Intercept mouseDown so the window does not forward it to other responders or ignore it
+    }
+
     public override func mouseUp(with event: NSEvent) {
         let loc = convert(event.locationInWindow, from: nil)
         if bounds.contains(loc) {
             onClick?()
         }
+    }
+
+    public override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0.0 else { return nil }
+        if let target = super.hitTest(point) {
+            if target == self || target.isDescendant(of: self) {
+                return self
+            }
+            return target
+        }
+        return nil
     }
 
     public override func resetCursorRects() {
@@ -758,6 +1008,412 @@ public final class FloatingCapsuleView: NSView {
     }
 }
 
+/// Dark floating popover panel anchored below the top bar's volume pill for quick slider control and output device selection.
+@MainActor
+public final class VolumePopoverPanel: NSPanel {
+    public static let panelWidth: CGFloat = 280.0
+
+    public private(set) var isOpen: Bool = false
+    public var onClose: (() -> Void)?
+
+    private let capsuleView = FloatingCapsuleView(cornerRadius: 10.0, surfaceAlpha: 0.65)
+
+    // Volume section
+    private let volumeIconLabel = NSTextField(labelWithString: "󰕾")
+    private let volumeTitleLabel = NSTextField(labelWithString: "Sound")
+    private let volumePercentLabel = NSTextField(labelWithString: "80%")
+    private let volumeSlider = NSSlider()
+    private let divider = NSView()
+
+    // Devices section
+    private let devicesHeaderLabel = NSTextField(labelWithString: "OUTPUT DEVICES")
+    private let devicesStack = NSStackView()
+
+    private var outsideClickMonitor: Any?
+    private var globalClickMonitor: Any?
+    private var volumeObserver: Any?
+
+    public struct ResolvedColors: Sendable {
+        public let background: NSColor
+        public let border: NSColor
+        public let surface: NSColor
+        public let accent: NSColor
+        public let textPrimary: NSColor
+        public let textSecondary: NSColor
+
+        public init(theme: HyprTheme = .shared, barColors: HyprBarColors = HyprBarColors(), backgroundAlpha: CGFloat = 0.65) {
+            let baseBg = theme.resolveColor(barColors.surface, fallback: theme.surface)
+            self.background = baseBg.withAlphaComponent(backgroundAlpha)
+            self.border = theme.resolveColor(nil, fallback: theme.outline)
+            self.surface = theme.resolveColor(barColors.surface, fallback: theme.surface)
+            self.accent = theme.resolveColor(barColors.volume, fallback: theme.primary)
+            self.textPrimary = theme.resolveColor(barColors.windowTitle, fallback: theme.onSurface)
+            self.textSecondary = theme.resolveColor(barColors.clock, fallback: theme.secondary)
+        }
+    }
+
+    public init(anchorFrame: NSRect, screen: NSScreen?) {
+        let targetScreen = screen ?? NSScreen.main ?? NSScreen.screens.first
+        let screenFrame = targetScreen?.frame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+
+        let initialHeight: CGFloat = 180.0
+        let popoverX = min(
+            max(screenFrame.origin.x + 10.0, anchorFrame.midX - (Self.panelWidth / 2.0)),
+            screenFrame.origin.x + screenFrame.width - Self.panelWidth - 10.0
+        )
+        let popoverY = anchorFrame.minY - initialHeight - 6.0
+
+        let initialFrame = NSRect(x: popoverX, y: popoverY, width: Self.panelWidth, height: initialHeight)
+
+        super.init(
+            contentRect: initialFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        level = .popUpMenu
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isMovable = false
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+
+        setupUI()
+    }
+
+    private func setupUI() {
+        guard let content = contentView else { return }
+
+        capsuleView.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(capsuleView)
+
+        NSLayoutConstraint.activate([
+            capsuleView.topAnchor.constraint(equalTo: content.topAnchor),
+            capsuleView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            capsuleView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            capsuleView.trailingAnchor.constraint(equalTo: content.trailingAnchor)
+        ])
+
+        let container = capsuleView.contentView
+        let theme = HyprTheme.shared
+
+        let mainStack = NSStackView()
+        mainStack.translatesAutoresizingMaskIntoConstraints = false
+        mainStack.orientation = .vertical
+        mainStack.alignment = .leading
+        mainStack.spacing = 10.0
+        container.addSubview(mainStack)
+
+        NSLayoutConstraint.activate([
+            mainStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 14.0),
+            mainStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14.0),
+            mainStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14.0),
+            mainStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14.0)
+        ])
+
+        // Top Row: Icon + Title + Percent
+        let topRow = NSStackView()
+        topRow.orientation = .horizontal
+        topRow.alignment = .centerY
+        topRow.spacing = 6.0
+        topRow.translatesAutoresizingMaskIntoConstraints = false
+
+        volumeIconLabel.translatesAutoresizingMaskIntoConstraints = false
+        volumeIconLabel.isEditable = false
+        volumeIconLabel.isSelectable = false
+        volumeIconLabel.font = .barFont(ofSize: 13, weight: .bold)
+        volumeIconLabel.textColor = theme.tertiary
+        topRow.addArrangedSubview(volumeIconLabel)
+
+        volumeTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        volumeTitleLabel.isEditable = false
+        volumeTitleLabel.isSelectable = false
+        volumeTitleLabel.font = .barFont(ofSize: 12, weight: .bold)
+        volumeTitleLabel.textColor = theme.onSurface
+        topRow.addArrangedSubview(volumeTitleLabel)
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        topRow.addArrangedSubview(spacer)
+
+        volumePercentLabel.translatesAutoresizingMaskIntoConstraints = false
+        volumePercentLabel.isEditable = false
+        volumePercentLabel.isSelectable = false
+        volumePercentLabel.font = .barFont(ofSize: 11, weight: .bold, monospacedDigits: true)
+        volumePercentLabel.textColor = theme.tertiary
+        topRow.addArrangedSubview(volumePercentLabel)
+
+        mainStack.addArrangedSubview(topRow)
+        topRow.widthAnchor.constraint(equalTo: mainStack.widthAnchor).isActive = true
+
+        // Volume Slider
+        volumeSlider.translatesAutoresizingMaskIntoConstraints = false
+        volumeSlider.minValue = 0.0
+        volumeSlider.maxValue = 100.0
+        volumeSlider.isContinuous = true
+        volumeSlider.target = self
+        volumeSlider.action = #selector(sliderChanged(_:))
+        mainStack.addArrangedSubview(volumeSlider)
+        volumeSlider.widthAnchor.constraint(equalTo: mainStack.widthAnchor).isActive = true
+
+        // Subtle Divider
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.wantsLayer = true
+        divider.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.10).cgColor
+        divider.heightAnchor.constraint(equalToConstant: 1.0).isActive = true
+        mainStack.addArrangedSubview(divider)
+        divider.widthAnchor.constraint(equalTo: mainStack.widthAnchor).isActive = true
+
+        // Devices Header
+        devicesHeaderLabel.translatesAutoresizingMaskIntoConstraints = false
+        devicesHeaderLabel.isEditable = false
+        devicesHeaderLabel.isSelectable = false
+        devicesHeaderLabel.font = .barFont(ofSize: 9.5, weight: .bold)
+        devicesHeaderLabel.textColor = theme.onSurface.withAlphaComponent(0.50)
+        mainStack.addArrangedSubview(devicesHeaderLabel)
+
+        // Devices Stack
+        devicesStack.translatesAutoresizingMaskIntoConstraints = false
+        devicesStack.orientation = .vertical
+        devicesStack.alignment = .leading
+        devicesStack.spacing = 4.0
+        mainStack.addArrangedSubview(devicesStack)
+        devicesStack.widthAnchor.constraint(equalTo: mainStack.widthAnchor).isActive = true
+
+        applyTheme()
+        refreshData()
+    }
+
+    public func applyTheme(barColors: HyprBarColors = HyprBarColors()) {
+        let theme = HyprTheme.shared
+        let capsuleAlpha = HyprBarWindow.shared?.barView.capsuleAlpha ?? 0.65
+        capsuleView.theme = theme
+        capsuleView.surfaceAlpha = capsuleAlpha
+        capsuleView.updateTheme()
+
+        let resolved = ResolvedColors(theme: theme, barColors: barColors, backgroundAlpha: capsuleAlpha)
+        volumeIconLabel.textColor = resolved.accent
+        volumeTitleLabel.textColor = resolved.textPrimary
+        volumePercentLabel.textColor = resolved.accent
+        volumeSlider.trackFillColor = resolved.accent
+        devicesHeaderLabel.textColor = resolved.textSecondary.withAlphaComponent(0.60)
+        divider.layer?.backgroundColor = resolved.border.withAlphaComponent(0.20).cgColor
+
+        refreshDevicesList()
+    }
+
+    public func refreshData() {
+        let vol = VolumeMonitor.currentVolume()
+        if abs(volumeSlider.doubleValue - Double(vol)) >= 1.0 {
+            volumeSlider.doubleValue = Double(vol)
+        }
+        volumePercentLabel.stringValue = "\(vol)%"
+        refreshDevicesList()
+    }
+
+    @objc private func sliderChanged(_ sender: NSSlider) {
+        let vol = Int(sender.doubleValue)
+        VolumeMonitor.setVolume(vol)
+        volumePercentLabel.stringValue = "\(vol)%"
+    }
+
+    private func refreshDevicesList() {
+        for sub in devicesStack.arrangedSubviews {
+            devicesStack.removeArrangedSubview(sub)
+            sub.removeFromSuperview()
+        }
+
+        let devices = VolumeMonitor.outputDevices()
+        let theme = HyprTheme.shared
+
+        for dev in devices {
+            let row = ClickablePill()
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.wantsLayer = true
+            row.layer?.cornerRadius = 6.0
+            row.heightAnchor.constraint(equalToConstant: 28.0).isActive = true
+
+            if dev.isDefault {
+                row.layer?.backgroundColor = theme.primary.withAlphaComponent(0.20).cgColor
+                row.layer?.borderWidth = 1.0
+                row.layer?.borderColor = theme.primary.withAlphaComponent(0.40).cgColor
+            } else {
+                row.layer?.backgroundColor = NSColor.clear.cgColor
+                row.layer?.borderWidth = 1.0
+                row.layer?.borderColor = NSColor(white: 1.0, alpha: 0.05).cgColor
+            }
+
+            let iconLabel = NSTextField(labelWithString: dev.icon)
+            iconLabel.translatesAutoresizingMaskIntoConstraints = false
+            iconLabel.isEditable = false
+            iconLabel.isSelectable = false
+            iconLabel.font = .barFont(ofSize: 12, weight: .bold)
+            iconLabel.textColor = dev.isDefault ? theme.primary : theme.onSurface.withAlphaComponent(0.80)
+            row.addSubview(iconLabel)
+
+            let nameLabel = NSTextField(labelWithString: dev.name)
+            nameLabel.translatesAutoresizingMaskIntoConstraints = false
+            nameLabel.isEditable = false
+            nameLabel.isSelectable = false
+            nameLabel.font = .barFont(ofSize: 11, weight: dev.isDefault ? .bold : .medium)
+            nameLabel.textColor = dev.isDefault ? theme.onSurface : theme.onSurface.withAlphaComponent(0.85)
+            nameLabel.lineBreakMode = .byTruncatingTail
+            nameLabel.maximumNumberOfLines = 1
+            nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            row.addSubview(nameLabel)
+
+            let checkLabel = NSTextField(labelWithString: dev.isDefault ? "✓" : "")
+            checkLabel.translatesAutoresizingMaskIntoConstraints = false
+            checkLabel.isEditable = false
+            checkLabel.isSelectable = false
+            checkLabel.font = .barFont(ofSize: 11, weight: .bold)
+            checkLabel.textColor = theme.primary
+            row.addSubview(checkLabel)
+
+            NSLayoutConstraint.activate([
+                iconLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 8.0),
+                iconLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                iconLabel.widthAnchor.constraint(equalToConstant: 18.0),
+
+                checkLabel.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8.0),
+                checkLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+
+                nameLabel.leadingAnchor.constraint(equalTo: iconLabel.trailingAnchor, constant: 6.0),
+                nameLabel.trailingAnchor.constraint(equalTo: checkLabel.leadingAnchor, constant: -6.0),
+                nameLabel.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+            ])
+
+            row.onClick = { [weak self] in
+                VolumeMonitor.setOutputDevice(dev.id)
+                self?.refreshData()
+            }
+
+            devicesStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: devicesStack.widthAnchor).isActive = true
+        }
+
+        layoutIfNeeded()
+        let neededHeight = 119.0 + (CGFloat(devices.count) * 32.0)
+        var currentFrame = frame
+        let delta = neededHeight - currentFrame.height
+        currentFrame.size.height = neededHeight
+        currentFrame.origin.y -= delta
+        setFrame(currentFrame, display: true)
+    }
+
+    public func showPopover(animate: Bool = true) {
+        guard !isOpen else { return }
+        isOpen = true
+
+        refreshData()
+
+        volumeObserver = NotificationCenter.default.addObserver(
+            forName: VolumeMonitor.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshData()
+            }
+        }
+
+        if animate {
+            alphaValue = 0.0
+            orderFront(nil)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                animator().alphaValue = 1.0
+            }
+        } else {
+            alphaValue = 1.0
+            orderFront(nil)
+        }
+
+        outsideClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self = self, self.isOpen else { return event }
+            if let clickWindow = event.window, clickWindow === self {
+                return event
+            }
+            if let clickWindow = event.window, clickWindow is HyprBarWindow {
+                let ptInBar = clickWindow.contentView?.convert(event.locationInWindow, from: nil) ?? .zero
+                if let bar = clickWindow.contentView as? BarView ?? (clickWindow as? HyprBarWindow)?.barView {
+                    let ptInPill = bar.volumeContainer.convert(ptInBar, from: bar)
+                    if bar.volumeContainer.bounds.contains(ptInPill) {
+                        return event
+                    }
+                }
+                self.dismissPopover()
+                return event
+            }
+            self.dismissPopover()
+            return event
+        }
+
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.dismissPopover()
+            }
+        }
+    }
+
+    public func dismissPopover(animate: Bool = true) {
+        guard isOpen else { return }
+        isOpen = false
+
+        if let mon = outsideClickMonitor {
+            NSEvent.removeMonitor(mon)
+            outsideClickMonitor = nil
+        }
+        if let gmon = globalClickMonitor {
+            NSEvent.removeMonitor(gmon)
+            globalClickMonitor = nil
+        }
+        if let obs = volumeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            volumeObserver = nil
+        }
+
+        onClose?()
+
+        if animate {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.12
+                animator().alphaValue = 0.0
+            }, completionHandler: { [weak self] in
+                Task { @MainActor in
+                    self?.orderOut(nil)
+                }
+            })
+        } else {
+            alphaValue = 0.0
+            orderOut(nil)
+        }
+    }
+
+    public override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // Escape
+            dismissPopover()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            if let obs = self.volumeObserver {
+                NotificationCenter.default.removeObserver(obs)
+            }
+            if let mon = self.outsideClickMonitor {
+                NSEvent.removeMonitor(mon)
+            }
+            if let gmon = self.globalClickMonitor {
+                NSEvent.removeMonitor(gmon)
+            }
+        }
+    }
+}
+
 /// Native Waybar-style status bar with 3 independent floating capsules (mxmrn rice)
 @MainActor
 public final class BarView: NSView {
@@ -795,6 +1451,8 @@ public final class BarView: NSView {
             centerCapsule.surfaceAlpha = capsuleAlpha
             rightCapsule.surfaceAlpha = capsuleAlpha
             musicCapsule.surfaceAlpha = capsuleAlpha
+            volumePopover?.applyTheme(barColors: barColors)
+            NotificationCenterDrawer.shared.applyTheme()
         }
     }
 
@@ -831,7 +1489,9 @@ public final class BarView: NSView {
     // Center Island Elements: Battery telemetry, Clock & Day, Volume
     public let batteryLabel = NSTextField(labelWithString: "100% ")
     public let clockLabel = NSTextField(labelWithString: "")
+    public let volumeContainer = ClickablePill()
     public let volumeLabel = NSTextField(labelWithString: "  80%")
+    public private(set) var volumePopover: VolumePopoverPanel?
 
     // Right Island Elements: Notification, Network, Hardware (CPU/MEM), Power
     public let notificationContainer = ClickablePill()
@@ -981,13 +1641,31 @@ public final class BarView: NSView {
         clockLabel.font = .barFont(ofSize: 11, weight: .medium, monospacedDigits: true)
         centerCapsule.stackView.addArrangedSubview(clockLabel)
 
-        // 3. Volume / Audio:  {vol}%
+        // 3. Volume / Audio:  {vol}% (Clickable quick selector)
+        volumeContainer.translatesAutoresizingMaskIntoConstraints = false
+        volumeContainer.wantsLayer = true
+        volumeContainer.onClick = { [weak self] in
+            self?.toggleVolumePopover()
+        }
+
         volumeLabel.translatesAutoresizingMaskIntoConstraints = false
         volumeLabel.isEditable = false
         volumeLabel.isSelectable = false
         volumeLabel.alignment = .center
         volumeLabel.font = .barFont(ofSize: 11, weight: .medium)
-        centerCapsule.stackView.addArrangedSubview(volumeLabel)
+        volumeContainer.addSubview(volumeLabel)
+
+        NSLayoutConstraint.activate([
+            volumeLabel.centerXAnchor.constraint(equalTo: volumeContainer.centerXAnchor),
+            volumeLabel.centerYAnchor.constraint(equalTo: volumeContainer.centerYAnchor),
+            volumeLabel.topAnchor.constraint(equalTo: volumeContainer.topAnchor, constant: 2.0),
+            volumeLabel.bottomAnchor.constraint(equalTo: volumeContainer.bottomAnchor, constant: -2.0),
+            volumeLabel.leadingAnchor.constraint(equalTo: volumeContainer.leadingAnchor, constant: 2.0),
+            volumeLabel.trailingAnchor.constraint(equalTo: volumeContainer.trailingAnchor, constant: -2.0),
+            volumeContainer.heightAnchor.constraint(equalToConstant: 20.0),
+            volumeContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 18.0)
+        ])
+        centerCapsule.stackView.addArrangedSubview(volumeContainer)
     }
 
     // MARK: - Music Module Setup
@@ -1026,10 +1704,11 @@ public final class BarView: NSView {
 
         musicTrackContainer.addSubview(musicTrackLabel)
         NSLayoutConstraint.activate([
-            musicTrackLabel.topAnchor.constraint(equalTo: musicTrackContainer.topAnchor),
-            musicTrackLabel.bottomAnchor.constraint(equalTo: musicTrackContainer.bottomAnchor),
+            musicTrackLabel.topAnchor.constraint(equalTo: musicTrackContainer.topAnchor, constant: 2.0),
+            musicTrackLabel.bottomAnchor.constraint(equalTo: musicTrackContainer.bottomAnchor, constant: -2.0),
             musicTrackLabel.leadingAnchor.constraint(equalTo: musicTrackContainer.leadingAnchor),
-            musicTrackLabel.trailingAnchor.constraint(equalTo: musicTrackContainer.trailingAnchor)
+            musicTrackLabel.trailingAnchor.constraint(equalTo: musicTrackContainer.trailingAnchor),
+            musicTrackContainer.heightAnchor.constraint(equalToConstant: 20.0)
         ])
         musicCapsule.stackView.addArrangedSubview(musicTrackContainer)
 
@@ -1047,8 +1726,12 @@ public final class BarView: NSView {
         NSLayoutConstraint.activate([
             musicPrevLabel.centerXAnchor.constraint(equalTo: musicPrevButton.centerXAnchor),
             musicPrevLabel.centerYAnchor.constraint(equalTo: musicPrevButton.centerYAnchor),
+            musicPrevLabel.topAnchor.constraint(equalTo: musicPrevButton.topAnchor, constant: 2.0),
+            musicPrevLabel.bottomAnchor.constraint(equalTo: musicPrevButton.bottomAnchor, constant: -2.0),
             musicPrevLabel.leadingAnchor.constraint(equalTo: musicPrevButton.leadingAnchor, constant: 1.0),
-            musicPrevLabel.trailingAnchor.constraint(equalTo: musicPrevButton.trailingAnchor, constant: -1.0)
+            musicPrevLabel.trailingAnchor.constraint(equalTo: musicPrevButton.trailingAnchor, constant: -1.0),
+            musicPrevButton.heightAnchor.constraint(equalToConstant: 20.0),
+            musicPrevButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 18.0)
         ])
         musicCapsule.stackView.addArrangedSubview(musicPrevButton)
 
@@ -1066,8 +1749,12 @@ public final class BarView: NSView {
         NSLayoutConstraint.activate([
             musicPlayPauseLabel.centerXAnchor.constraint(equalTo: musicPlayPauseButton.centerXAnchor),
             musicPlayPauseLabel.centerYAnchor.constraint(equalTo: musicPlayPauseButton.centerYAnchor),
+            musicPlayPauseLabel.topAnchor.constraint(equalTo: musicPlayPauseButton.topAnchor, constant: 2.0),
+            musicPlayPauseLabel.bottomAnchor.constraint(equalTo: musicPlayPauseButton.bottomAnchor, constant: -2.0),
             musicPlayPauseLabel.leadingAnchor.constraint(equalTo: musicPlayPauseButton.leadingAnchor, constant: 1.0),
-            musicPlayPauseLabel.trailingAnchor.constraint(equalTo: musicPlayPauseButton.trailingAnchor, constant: -1.0)
+            musicPlayPauseLabel.trailingAnchor.constraint(equalTo: musicPlayPauseButton.trailingAnchor, constant: -1.0),
+            musicPlayPauseButton.heightAnchor.constraint(equalToConstant: 20.0),
+            musicPlayPauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 18.0)
         ])
         musicCapsule.stackView.addArrangedSubview(musicPlayPauseButton)
 
@@ -1085,8 +1772,12 @@ public final class BarView: NSView {
         NSLayoutConstraint.activate([
             musicNextLabel.centerXAnchor.constraint(equalTo: musicNextButton.centerXAnchor),
             musicNextLabel.centerYAnchor.constraint(equalTo: musicNextButton.centerYAnchor),
+            musicNextLabel.topAnchor.constraint(equalTo: musicNextButton.topAnchor, constant: 2.0),
+            musicNextLabel.bottomAnchor.constraint(equalTo: musicNextButton.bottomAnchor, constant: -2.0),
             musicNextLabel.leadingAnchor.constraint(equalTo: musicNextButton.leadingAnchor, constant: 1.0),
-            musicNextLabel.trailingAnchor.constraint(equalTo: musicNextButton.trailingAnchor, constant: -1.0)
+            musicNextLabel.trailingAnchor.constraint(equalTo: musicNextButton.trailingAnchor, constant: -1.0),
+            musicNextButton.heightAnchor.constraint(equalToConstant: 20.0),
+            musicNextButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 18.0)
         ])
         musicCapsule.stackView.addArrangedSubview(musicNextButton)
 
@@ -1123,8 +1814,12 @@ public final class BarView: NSView {
         NSLayoutConstraint.activate([
             notificationLabel.centerXAnchor.constraint(equalTo: notificationContainer.centerXAnchor),
             notificationLabel.centerYAnchor.constraint(equalTo: notificationContainer.centerYAnchor),
+            notificationLabel.topAnchor.constraint(equalTo: notificationContainer.topAnchor, constant: 2.0),
+            notificationLabel.bottomAnchor.constraint(equalTo: notificationContainer.bottomAnchor, constant: -2.0),
             notificationLabel.leadingAnchor.constraint(equalTo: notificationContainer.leadingAnchor, constant: 2.0),
-            notificationLabel.trailingAnchor.constraint(equalTo: notificationContainer.trailingAnchor, constant: -2.0)
+            notificationLabel.trailingAnchor.constraint(equalTo: notificationContainer.trailingAnchor, constant: -2.0),
+            notificationContainer.heightAnchor.constraint(equalToConstant: 20.0),
+            notificationContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 18.0)
         ])
         rightCapsule.stackView.addArrangedSubview(notificationContainer)
 
@@ -1182,8 +1877,12 @@ public final class BarView: NSView {
         NSLayoutConstraint.activate([
             powerLabel.centerXAnchor.constraint(equalTo: powerContainer.centerXAnchor),
             powerLabel.centerYAnchor.constraint(equalTo: powerContainer.centerYAnchor),
+            powerLabel.topAnchor.constraint(equalTo: powerContainer.topAnchor, constant: 2.0),
+            powerLabel.bottomAnchor.constraint(equalTo: powerContainer.bottomAnchor, constant: -2.0),
             powerLabel.leadingAnchor.constraint(equalTo: powerContainer.leadingAnchor, constant: 2.0),
-            powerLabel.trailingAnchor.constraint(equalTo: powerContainer.trailingAnchor, constant: -2.0)
+            powerLabel.trailingAnchor.constraint(equalTo: powerContainer.trailingAnchor, constant: -2.0),
+            powerContainer.heightAnchor.constraint(equalToConstant: 20.0),
+            powerContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 18.0)
         ])
         rightCapsule.stackView.addArrangedSubview(powerContainer)
     }
@@ -1232,6 +1931,9 @@ public final class BarView: NSView {
         rightCapsule.needsDisplay = true
         musicCapsule.needsDisplay = true
         needsDisplay = true
+
+        volumePopover?.applyTheme(barColors: barColors)
+        NotificationCenterDrawer.shared.applyTheme()
     }
 
     // MARK: - Workspace Module
@@ -1431,7 +2133,38 @@ public final class BarView: NSView {
         updateNotificationIndicator()
     }
 
+    // MARK: - Volume / Audio Popover
+
+    public func toggleVolumePopover() {
+        if let popover = volumePopover, popover.isOpen {
+            closeVolumePopover()
+        } else {
+            openVolumePopover()
+        }
+    }
+
+    public func openVolumePopover() {
+        closeVolumePopover(animate: false)
+
+        guard let win = self.window else { return }
+        let pillFrameInWindow = volumeContainer.convert(volumeContainer.bounds, to: nil)
+        let pillScreenRect = win.convertToScreen(pillFrameInWindow)
+
+        let popover = VolumePopoverPanel(anchorFrame: pillScreenRect, screen: win.screen)
+        popover.onClose = { [weak self] in
+            self?.volumePopover = nil
+        }
+        self.volumePopover = popover
+        popover.showPopover()
+    }
+
+    public func closeVolumePopover(animate: Bool = true) {
+        volumePopover?.dismissPopover(animate: animate)
+        volumePopover = nil
+    }
+
     public func stopTimers() {
+        closeVolumePopover(animate: false)
         updateTimer?.invalidate()
         updateTimer = nil
         BatteryMonitor.stopMonitoring()

@@ -286,6 +286,20 @@ func computeTilingBounds(bar: HyprBarWindow? = nil) -> CGRect {
 }
 
 @MainActor
+func computeFullscreenBounds(bar: HyprBarWindow? = nil) -> CGRect {
+    guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+        return .zero
+    }
+    let screenFrame = screen.frame
+    return CGRect(
+        x: screenFrame.origin.x,
+        y: 0.0,
+        width: screenFrame.width,
+        height: screenFrame.height
+    )
+}
+
+@MainActor
 func runTile() {
     if !WindowDetector.isProcessTrusted() {
         print("[!] Warning: Accessibility permissions not granted. Requesting...")
@@ -616,6 +630,7 @@ func runIntegratedDaemon(configPath: String?) {
     NotificationCenterManager.shared.start()
     bar.showBar()
     _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: true, exemptWid: UInt32(bar.windowNumber))
+    _ = SkyLightBridge.shared.setMenuBarSuppressed(true)
 
     // 3. Compositor Effects Manager setup (Opacity & Backdrop Blur)
     let effectsManager = CompositorEffectsManager.shared
@@ -640,6 +655,7 @@ func runIntegratedDaemon(configPath: String?) {
     }
     workspaceManager.borderManager = effectsManager
     workspaceManager.boundsProvider = { computeTilingBounds() }
+    workspaceManager.fullscreenBoundsProvider = { MainActor.assumeIsolated { computeFullscreenBounds() } }
 
     // 3c-2. Apply workspace-monitor bindings from config
     for (ws, spec) in config.workspaceMonitorBindings {
@@ -672,25 +688,56 @@ func runIntegratedDaemon(configPath: String?) {
     }
     let transitionTracker = TransitionTracker()
 
+    // 4. Initialize Keybinds
+    let keyManager = KeybindManager.shared
+    keyManager.masterEngine = masterEngine
+    keyManager.register(bindings: config.bindings)
+
+    let syncBarFullscreenState: @MainActor () -> Void = {
+        let activeWS = workspaceManager.activeWorkspace
+        let activeWindows = workspaceManager.windowOrder.filter {
+            workspaceManager.workspace(for: $0) == activeWS &&
+            !workspaceManager.isMinimized($0) &&
+            WindowDetector.shared.isWindowAlive(windowID: $0)
+        }
+
+        var isActiveFullscreen = false
+        for wid in activeWindows {
+            if keyManager.isFullscreen(windowID: wid) ||
+               WindowDetector.shared.isWindowNativeFullscreen(windowID: wid, pid: workspaceManager.getPID(for: wid)) {
+                isActiveFullscreen = true
+                break
+            }
+        }
+
+        if !isActiveFullscreen {
+            if let focused = WindowDetector.shared.fastFocusedWindow() ?? WindowDetector.shared.getFocusedWindow() {
+                if focused.windowID != CGWindowID(bar.windowNumber) &&
+                   WindowDetector.shared.isWindowNativeFullscreen(windowID: focused.windowID, pid: focused.processID) {
+                    isActiveFullscreen = true
+                }
+            }
+        }
+
+        bar.setFullscreenAutoHide(isActiveFullscreen, animated: true)
+    }
+
     workspaceManager.onWorkspaceChange = { ws in
         transitionTracker.lastWorkspaceSwitchTime = ProcessInfo.processInfo.systemUptime
         if Thread.isMainThread {
             MainActor.assumeIsolated {
                 bar.updateActiveWorkspace(ws)
+                syncBarFullscreenState()
             }
         } else {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     bar.updateActiveWorkspace(ws)
+                    syncBarFullscreenState()
                 }
             }
         }
     }
-
-    // 4. Initialize Keybinds
-    let keyManager = KeybindManager.shared
-    keyManager.masterEngine = masterEngine
-    keyManager.register(bindings: config.bindings)
 
     workspaceManager.isFloating = { [weak keyManager] wid in
         keyManager?.isFloating(windowID: wid) ?? false
@@ -866,6 +913,7 @@ func runIntegratedDaemon(configPath: String?) {
 
     final class NotificationTokenHolder: @unchecked Sendable {
         var token: (any NSObjectProtocol)?
+        var activeSpaceToken: (any NSObjectProtocol)?
     }
     let activationObserverHolder = NotificationTokenHolder()
 
@@ -959,9 +1007,10 @@ func runIntegratedDaemon(configPath: String?) {
             defer { SkyLightBridge.shared.reenableUpdate() }
 
             if isFullscreen {
-                let fullBounds = computeTilingBounds()
+                let fullBounds = computeFullscreenBounds()
                 let curBounds = savedFrame ?? engine.currentFrames()[wid] ?? WindowDetector.shared.fastFocusedWindow()?.bounds ?? WindowDetector.shared.getWindowBounds(windowID: wid) ?? fullBounds
                 wsMgr.setStoredFrame(fullBounds, for: wid)
+                bar.setFullscreenAutoHide(true, animated: true)
 
                 // 1. Immediately apply physical frame for the fullscreen window at t = 0
                 WindowDetector.shared.setWindowFrame(windowID: wid, frame: fullBounds)
@@ -984,7 +1033,7 @@ func runIntegratedDaemon(configPath: String?) {
                 // Restoring from fullscreen: recompute tiling with all active windows restored
                 let allTiledIDs = activeIDs.filter { !km.isFloating(windowID: $0) }
                 let frames = engine.tileWindows(windowIDs: allTiledIDs, in: tilingBounds)
-                let fullBounds = computeTilingBounds()
+                let fullBounds = computeFullscreenBounds()
                 let targetFrame: CGRect
 
                 if km.isFloating(windowID: wid) {
@@ -1021,6 +1070,7 @@ func runIntegratedDaemon(configPath: String?) {
                     let f = WindowDetector.shared.getFocusedWindow()
                     eMgr.update(focused: f, managedFrames: engine.currentFrames(), config: config)
                 }
+                syncBarFullscreenState()
             }
         }
     }
@@ -1054,6 +1104,7 @@ func runIntegratedDaemon(configPath: String?) {
                 let frames = engine.removeWindow(windowID: wid, in: tilingBounds)
                 engine.applyToSystem(windowFrames: frames, bridge: SkyLightBridge.shared)
                 effectsManager?.hideOverlay(for: wid)
+                syncBarFullscreenState()
             }
         }
     }
@@ -1143,6 +1194,9 @@ func runIntegratedDaemon(configPath: String?) {
                 if let token = activationObserverHolder.token {
                     NSWorkspace.shared.notificationCenter.removeObserver(token)
                 }
+                if let spaceToken = activationObserverHolder.activeSpaceToken {
+                    NSWorkspace.shared.notificationCenter.removeObserver(spaceToken)
+                }
                 if let m = mouseState.global {
                     NSEvent.removeMonitor(m)
                     mouseState.global = nil
@@ -1168,6 +1222,7 @@ func runIntegratedDaemon(configPath: String?) {
                     }
                 }
                 _ = try? HyprServerBridge.shared.setMenuBarSuppression(suppress: false)
+                _ = SkyLightBridge.shared.setMenuBarSuppressed(false)
                 _ = SessionManager.shared.switchTo(mode: .aqua)
                 print("[HyprMac] Restored. Goodbye!")
                 exit(0)
@@ -1257,6 +1312,7 @@ func runIntegratedDaemon(configPath: String?) {
                 bar.updateActiveWindow(title: focused.title, app: focused.appName)
             }
         }
+        syncBarFullscreenState()
     }
 
     // On-demand window reconciliation
@@ -1385,7 +1441,11 @@ func runIntegratedDaemon(configPath: String?) {
         // Reconcile frames if shifted
         let snapped = dwindleEngine.reconcileFrames(
             threshold: 2.0,
-            isFloating: { keyManager.isFloating(windowID: $0) || keyManager.isFullscreen(windowID: $0) },
+            isFloating: {
+                keyManager.isFloating(windowID: $0) ||
+                keyManager.isFullscreen(windowID: $0) ||
+                WindowDetector.shared.isWindowNativeFullscreen(windowID: $0, pid: workspaceManager.getPID(for: $0))
+            },
             boundsProvider: { WindowDetector.shared.getWindowBounds(windowID: $0, pid: workspaceManager.getPID(for: $0)) },
             frameSetter: { wid, frame in
                 let pid = workspaceManager.getPID(for: wid)
@@ -1397,6 +1457,7 @@ func runIntegratedDaemon(configPath: String?) {
         }
 
         updateFocusAndBorders(framesChanged)
+        syncBarFullscreenState()
     }
 
     // Auto-switch workspace on external application activation (Dock, Cmd+Tab, Finder)
@@ -1416,6 +1477,10 @@ func runIntegratedDaemon(configPath: String?) {
             }
 
             guard let pid = activatedPid, pid > 0, pid != getpid() else { return }
+
+            if SessionManager.shared.getCurrentMode() == .hyprMac {
+                _ = SkyLightBridge.shared.setMenuBarSuppressed(true)
+            }
 
             // When Finder activates (e.g. clicking the empty desktop), ensure menubar suppression is active asynchronously without blocking the main thread
             if bundleId == "com.apple.finder" && SessionManager.shared.getCurrentMode() == .hyprMac {
@@ -1515,6 +1580,19 @@ func runIntegratedDaemon(configPath: String?) {
             let title = WindowDetector.shared.getWindowTitle(windowID: wid, pid: pid) ?? ""
 
             handleAutoSwitchWorkspace(wid, targetWS, appName, title)
+        }
+    }
+
+    activationObserverHolder.activeSpaceToken = NSWorkspace.shared.notificationCenter.addObserver(
+        forName: NSWorkspace.activeSpaceDidChangeNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        MainActor.assumeIsolated {
+            if SessionManager.shared.getCurrentMode() == .hyprMac {
+                _ = SkyLightBridge.shared.setMenuBarSuppressed(true)
+            }
+            syncBarFullscreenState()
         }
     }
 
@@ -1619,8 +1697,28 @@ func runIntegratedDaemon(configPath: String?) {
 
     // 7. Start reactive Accessibility Observer Pool (Multi-Process)
     let axPool = AXProcessObserverPool.shared
+    axPool.onWindowResized = { _ in
+        syncBarFullscreenState()
+    }
     axPool.onTilingLayoutDirty = {
         reconcileWindows(false)
+    }
+    axPool.onFocusChanged = { pid, maybeWid in
+        if let wid = maybeWid, wid > 0,
+           !dwindleEngine.managedWindowSet.contains(wid),
+           !keyManager.isFloating(windowID: wid),
+           wid != CGWindowID(bar.windowNumber) {
+            reconcileWindows(false)
+            return
+        }
+        if let focused = WindowDetector.shared.getFocusedWindow(),
+           !dwindleEngine.managedWindowSet.contains(focused.windowID),
+           !keyManager.isFloating(windowID: focused.windowID),
+           focused.windowID != CGWindowID(bar.windowNumber) {
+            reconcileWindows(false)
+        } else {
+            updateFocusAndBorders(false)
+        }
     }
     axPool.onFocusedWindowChanged = { _ in
         if let focused = WindowDetector.shared.getFocusedWindow(),

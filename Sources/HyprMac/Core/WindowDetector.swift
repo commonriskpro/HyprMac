@@ -397,6 +397,64 @@ public final class WindowDetector: @unchecked Sendable {
                 return singleWin
             }
         }
+
+        // Multi-window geometry fallback if _AXUIElementGetWindow fails for multi-window apps
+        if windowElements.count > 1 {
+            var targetBounds = SkyLightBridge.shared.getWindowBounds(windowID: windowID)
+            if targetBounds == nil {
+                if let windowList = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+                    for item in windowList {
+                        if let wid = item[kCGWindowNumber as String] as? CGWindowID, wid == windowID,
+                           let boundsDict = item[kCGWindowBounds as String] as? [String: Any],
+                           let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) {
+                            targetBounds = rect
+                            break
+                        }
+                    }
+                }
+            }
+
+            if let target = targetBounds {
+                var bestElem: AXUIElement?
+                var minDelta: CGFloat = CGFloat.greatestFiniteMagnitude
+
+                lock.lock()
+                let otherCached = axElementCache.filter { $0.key != windowID }
+                lock.unlock()
+
+                for winElem in windowElements {
+                    let isClaimed = otherCached.values.contains { CFEqual($0, winElem) }
+                    if isClaimed { continue }
+
+                    var pt = CGPoint.zero
+                    var sz = CGSize.zero
+                    var posVal: AnyObject?
+                    var sizeVal: AnyObject?
+                    if AXUIElementCopyAttributeValue(winElem, kAXPositionAttribute as CFString, &posVal) == .success, let pv = posVal {
+                        AXValueGetValue(pv as! AXValue, .cgPoint, &pt)
+                    }
+                    if AXUIElementCopyAttributeValue(winElem, kAXSizeAttribute as CFString, &sizeVal) == .success, let sv = sizeVal {
+                        AXValueGetValue(sv as! AXValue, .cgSize, &sz)
+                    }
+                    if sz.width > 0 && sz.height > 0 {
+                        let dOrigin = abs(pt.x - target.origin.x) + abs(pt.y - target.origin.y)
+                        let dSize = abs(sz.width - target.width) + abs(sz.height - target.height)
+                        let totalDelta = dOrigin + dSize
+                        if totalDelta < minDelta {
+                            minDelta = totalDelta
+                            bestElem = winElem
+                        }
+                    }
+                }
+
+                if let match = bestElem, minDelta <= 60.0 {
+                    lock.lock()
+                    axElementCache[windowID] = match
+                    lock.unlock()
+                    return match
+                }
+            }
+        }
         return nil
     }
 
@@ -534,6 +592,43 @@ public final class WindowDetector: @unchecked Sendable {
         }
 
         return true
+    }
+
+    /// Determines whether a window is in native macOS fullscreen via SkyLight tags or Accessibility AXFullScreen attribute.
+    @MainActor
+    public func isWindowNativeFullscreen(windowID: CGWindowID, pid: pid_t? = nil) -> Bool {
+        if let tags = SkyLightBridge.shared.getWindowTags(windowID: windowID) {
+            if WindowTags(rawValue: tags.tag0).contains(.fullScreen) {
+                return true
+            }
+        }
+        if let winElem = getWindowAXElement(windowID: windowID, pid: pid) {
+            var fsVal: AnyObject?
+            let err = AXUIElementCopyAttributeValue(winElem, "AXFullScreen" as CFString, &fsVal)
+            if err == .invalidUIElement || err == .cannotComplete {
+                invalidateWindow(windowID: windowID)
+            }
+            if err == .success, let val = fsVal {
+                if let boolVal = val as? Bool, boolVal {
+                    return true
+                }
+                if CFGetTypeID(val) == CFBooleanGetTypeID(), CFEqual(val, kCFBooleanTrue) {
+                    return true
+                }
+            }
+        }
+        if let wb = SkyLightBridge.shared.getWindowBounds(windowID: windowID) ?? getWindowBounds(windowID: windowID, pid: pid) {
+            for screen in NSScreen.screens {
+                let sf = screen.frame
+                if abs(wb.width - sf.width) <= 4.0 &&
+                   abs(wb.height - sf.height) <= 4.0 &&
+                   abs(wb.origin.x - sf.origin.x) <= 4.0 &&
+                   abs(wb.origin.y) <= 4.0 {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Checks whether a window is minimized via Accessibility.

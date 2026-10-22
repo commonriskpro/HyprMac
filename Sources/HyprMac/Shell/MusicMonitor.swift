@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import Darwin
 
 /// Data representation of an active music track from a native media player.
 public struct MusicTrackInfo: Equatable, Sendable {
@@ -314,11 +315,60 @@ public final class MusicMonitor: NSObject {
 
     // MARK: - Playback Controls
 
-    private func executeAppleScript(_ source: String) {
-        DispatchQueue.global(qos: .userInitiated).async {
+    private typealias MRMediaRemoteSendCommandFn = @convention(c) (Int32, AnyObject?) -> DarwinBoolean
+
+    private nonisolated func dispatchMediaCommandFallback(command: Int32, key: Int32) {
+        // 1. Try private MediaRemote.framework MRMediaRemoteSendCommand
+        var dispatchedViaMediaRemote = false
+        if let handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY) {
+            defer { dlclose(handle) }
+            if let sym = dlsym(handle, "MRMediaRemoteSendCommand") {
+                let sendCommand = unsafeBitCast(sym, to: MRMediaRemoteSendCommandFn.self)
+                let result = sendCommand(command, nil)
+                dispatchedViaMediaRemote = result.boolValue
+            }
+        }
+
+        // 2. Fallback to hardware media key synthesis via CGEvent / NSEvent systemDefined
+        if !dispatchedViaMediaRemote {
+            postHardwareMediaKey(key: key)
+        }
+    }
+
+    private nonisolated func postHardwareMediaKey(key: Int32) {
+        let flags = NSEvent.ModifierFlags(rawValue: 0xa00)
+        for down in [true, false] {
+            let data1 = Int((key << 16) | (down ? (0xa << 8) : (0xb << 8)))
+            if let event = NSEvent.otherEvent(
+                with: .systemDefined,
+                location: .zero,
+                modifierFlags: flags,
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                subtype: 8,
+                data1: data1,
+                data2: -1
+            ) {
+                event.cgEvent?.post(tap: .cghidEventTap)
+            }
+        }
+    }
+
+    private func executeAppleScript(_ source: String, fallbackCommand: Int32, fallbackKey: Int32) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var success = false
             if let script = NSAppleScript(source: source) {
                 var error: NSDictionary?
                 script.executeAndReturnError(&error)
+                if error == nil {
+                    success = true
+                } else {
+                    print("[MusicMonitor] AppleScript error: \(String(describing: error)), falling back to MediaRemote / hardware media keys")
+                }
+            }
+            if !success {
+                self?.dispatchMediaCommandFallback(command: fallbackCommand, key: fallbackKey)
             }
         }
     }
@@ -335,9 +385,12 @@ public final class MusicMonitor: NSObject {
     }
 
     public func togglePlayPause() {
-        guard let bundle = currentTrack?.bundleID ?? activeMusicPlayerBundleID() else { return }
-        let appName = (bundle == "com.spotify.client") ? "Spotify" : "Music"
-        executeAppleScript("tell application \"" + appName + "\" to playpause")
+        if let bundle = currentTrack?.bundleID ?? activeMusicPlayerBundleID() {
+            let appName = (bundle == "com.spotify.client") ? "Spotify" : "Music"
+            executeAppleScript("tell application \"" + appName + "\" to playpause", fallbackCommand: 2, fallbackKey: 16)
+        } else {
+            dispatchMediaCommandFallback(command: 2, key: 16)
+        }
         if let cur = currentTrack {
             self.currentTrack = MusicTrackInfo(
                 player: cur.player,
@@ -351,15 +404,21 @@ public final class MusicMonitor: NSObject {
     }
 
     public func nextTrack() {
-        guard let bundle = currentTrack?.bundleID ?? activeMusicPlayerBundleID() else { return }
-        let appName = (bundle == "com.spotify.client") ? "Spotify" : "Music"
-        executeAppleScript("tell application \"" + appName + "\" to next track")
+        if let bundle = currentTrack?.bundleID ?? activeMusicPlayerBundleID() {
+            let appName = (bundle == "com.spotify.client") ? "Spotify" : "Music"
+            executeAppleScript("tell application \"" + appName + "\" to next track", fallbackCommand: 4, fallbackKey: 17)
+        } else {
+            dispatchMediaCommandFallback(command: 4, key: 17)
+        }
     }
 
     public func previousTrack() {
-        guard let bundle = currentTrack?.bundleID ?? activeMusicPlayerBundleID() else { return }
-        let appName = (bundle == "com.spotify.client") ? "Spotify" : "Music"
-        executeAppleScript("tell application \"" + appName + "\" to previous track")
+        if let bundle = currentTrack?.bundleID ?? activeMusicPlayerBundleID() {
+            let appName = (bundle == "com.spotify.client") ? "Spotify" : "Music"
+            executeAppleScript("tell application \"" + appName + "\" to previous track", fallbackCommand: 5, fallbackKey: 18)
+        } else {
+            dispatchMediaCommandFallback(command: 5, key: 18)
+        }
     }
 
     public func activatePlayerApp() {

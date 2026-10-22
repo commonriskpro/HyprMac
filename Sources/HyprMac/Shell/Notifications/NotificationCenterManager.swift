@@ -16,7 +16,9 @@ public final class NotificationCenterManager {
         }
     }
 
-    public private(set) var drawer: NotificationCenterDrawer?
+    public var drawer: NotificationCenterDrawer? {
+        NotificationCenterDrawer.shared
+    }
     public private(set) var toastManager: NotificationToastManager = .shared
     public var onStateChange: (@MainActor () -> Void)?
 
@@ -83,23 +85,17 @@ public final class NotificationCenterManager {
 
     /// Toggles the notification center slide-in drawer.
     public func toggleDrawer() {
-        if drawer == nil {
-            drawer = NotificationCenterDrawer()
-        }
-        drawer?.toggleDrawer()
+        NotificationCenterDrawer.shared.toggleDrawer()
     }
 
     /// Opens the notification center slide-in drawer.
     public func openDrawer() {
-        if drawer == nil {
-            drawer = NotificationCenterDrawer()
-        }
-        drawer?.openDrawer()
+        NotificationCenterDrawer.shared.openDrawer()
     }
 
     /// Closes the notification center slide-in drawer.
     public func closeDrawer() {
-        drawer?.closeDrawer()
+        NotificationCenterDrawer.shared.closeDrawer()
     }
 
     /// Removes a notification from history by its UUID.
