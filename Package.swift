@@ -32,7 +32,7 @@ let package = Package(
         .testTarget(
             name: "HyprMacTests",
             dependencies: ["HyprMac"],
-            path: "Tests/HyprMacTests"
+            path: "tests/HyprMacTests"
         )
     ]
 )

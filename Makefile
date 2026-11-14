@@ -26,7 +26,7 @@ endif
 
 BUILD_DIR = build
 
-.PHONY: all clean hook injector client build-hooks install install-daemon uninstall-daemon app install-app install-agent uninstall package
+.PHONY: all clean hook injector client build-hooks test test-swift test-ipc install install-daemon uninstall-daemon app install-app install-agent uninstall package
 
 install: install-daemon install-agent
 
@@ -59,6 +59,15 @@ package: all
 all: hook injector client app
 
 build-hooks: hook client injector
+
+test: test-swift test-ipc
+
+test-swift:
+	swift test
+
+test-ipc:
+	$(MAKE) -C tests
+	./tests/test_ipc --self-test
 
 app: client
 	swift build -c release
