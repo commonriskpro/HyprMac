@@ -77,7 +77,6 @@ if [[ -f "$WAL_CACHE/colors-waybar.css" ]]; then
     cp "$WAL_CACHE/colors-waybar.css" "$HOME/.config/waybar/colors-waybar.css"
     cp "$WAL_CACHE/colors-waybar.css" "$HOME/.cache/colors-waybar.css"
     echo "[+] Exported Waybar colors to ~/.config/waybar/ and ~/.cache/"
-    pkill -USR2 waybar 2>/dev/null || true
 fi
 
 echo "==> Ensuring terminal configurations..."
