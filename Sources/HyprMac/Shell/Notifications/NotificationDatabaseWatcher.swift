@@ -12,10 +12,24 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
     public let databasePath: String
 
     private let queue = DispatchQueue(label: "org.hyprland.hyprmac.notificationwatcher", qos: .utility)
+    private let lock = NSLock()
     private var source: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
-    public private(set) var lastRecID: Int64 = 0
-    public private(set) var isRunning: Bool = false
+    private var debounceWorkItem: DispatchWorkItem?
+
+    private var _lastRecID: Int64 = 0
+    public var lastRecID: Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return _lastRecID
+    }
+
+    private var _isRunning: Bool = false
+    public var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isRunning
+    }
 
     public var onNewNotification: (@MainActor @Sendable (HyprNotification) -> Void)?
 
@@ -30,8 +44,13 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
 
     /// Starts file system observation and initializes baseline lastRecID.
     public func start() {
-        guard !isRunning else { return }
-        isRunning = true
+        lock.lock()
+        guard !_isRunning else {
+            lock.unlock()
+            return
+        }
+        _isRunning = true
+        lock.unlock()
 
         // Initialize baseline lastRecID so we only emit new notifications
         initializeLastRecID()
@@ -57,7 +76,16 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
         )
 
         src.setEventHandler { [weak self] in
-            _ = self?.pollDatabase()
+            guard let self = self else { return }
+            self.lock.lock()
+            self.debounceWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                _ = self?.pollDatabase()
+            }
+            self.debounceWorkItem = workItem
+            self.lock.unlock()
+
+            self.queue.asyncAfter(deadline: .now() + 0.150, execute: workItem)
         }
 
         src.setCancelHandler { [fd] in
@@ -70,16 +98,25 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
 
     /// Halts file system observation and releases open file descriptors.
     public func stop() {
-        guard isRunning else { return }
-        isRunning = false
-
-        if let src = source {
-            src.cancel()
-            self.source = nil
-        } else if fileDescriptor >= 0 {
-            close(fileDescriptor)
+        lock.lock()
+        guard _isRunning else {
+            lock.unlock()
+            return
         }
-        fileDescriptor = -1
+        _isRunning = false
+        debounceWorkItem?.cancel()
+        debounceWorkItem = nil
+        let src = source
+        self.source = nil
+        let fd = fileDescriptor
+        self.fileDescriptor = -1
+        lock.unlock()
+
+        if let src = src {
+            src.cancel()
+        } else if fd >= 0 {
+            close(fd)
+        }
     }
 
     /// Initializes the baseline record ID to MAX(rec_id) from the SQLite database.
@@ -99,7 +136,9 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
             if sqlite3_step(stmt) == SQLITE_ROW {
                 let maxID = sqlite3_column_int64(stmt, 0)
-                self.lastRecID = maxID
+                self.lock.lock()
+                self._lastRecID = maxID
+                self.lock.unlock()
             }
             sqlite3_finalize(stmt)
         }
@@ -112,6 +151,8 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: databasePath) else {
             return []
         }
+
+        let currentLastRecID = lastRecID
 
         var db: OpaquePointer?
         let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
@@ -128,10 +169,10 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_int64(stmt, 1, lastRecID)
+        sqlite3_bind_int64(stmt, 1, currentLastRecID)
 
         var newNotifications: [HyprNotification] = []
-        var highestRecID = lastRecID
+        var highestRecID = currentLastRecID
 
         while sqlite3_step(stmt) == SQLITE_ROW {
             let recID = sqlite3_column_int64(stmt, 0)
@@ -149,7 +190,11 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
             }
         }
 
-        self.lastRecID = highestRecID
+        self.lock.lock()
+        if highestRecID > self._lastRecID {
+            self._lastRecID = highestRecID
+        }
+        self.lock.unlock()
 
         if !newNotifications.isEmpty {
             let itemsToEmit = newNotifications
@@ -165,6 +210,8 @@ public final class NotificationDatabaseWatcher: @unchecked Sendable {
 
     /// Manually sets the last processed record ID (used in tests or replay scenarios).
     public func setLastRecID(_ id: Int64) {
-        self.lastRecID = id
+        lock.lock()
+        _lastRecID = id
+        lock.unlock()
     }
 }

@@ -3,12 +3,21 @@ import Cocoa
 
 private let kAXWindowZoomedNotification: String = "AXWindowZoomed"
 
+private final class AXCallbackBox: @unchecked Sendable {
+    weak var observer: AXEventObserver?
+
+    init(observer: AXEventObserver) {
+        self.observer = observer
+    }
+}
+
 /// Native macOS Accessibility Event Observer.
 /// Bridges application-level Accessibility events (window moved, resized, focused, title changed, minimized)
 /// into reactive callbacks on MainActor, replacing recurring polling timers with true 0% CPU event listeners.
 public final class AXEventObserver: @unchecked Sendable {
     private var observer: AXObserver?
     private var source: CFRunLoopSource?
+    private var callbackBox: AXCallbackBox?
     public private(set) var observedPID: pid_t = 0
     private var appElement: AXUIElement?
 
@@ -60,57 +69,64 @@ public final class AXEventObserver: @unchecked Sendable {
         guard pid > 0, pid != observedPID else { return }
         stop()
 
+        let box = AXCallbackBox(observer: self)
+        let retainedBox = Unmanaged.passRetained(box)
+        let refcon = retainedBox.toOpaque()
+
         var axObs: AXObserver?
         let callback: AXObserverCallback = { _, element, notification, refcon in
             guard let refcon = refcon else { return }
-            let watcher = Unmanaged<AXEventObserver>.fromOpaque(refcon).takeUnretainedValue()
+            let box = Unmanaged<AXCallbackBox>.fromOpaque(refcon).takeUnretainedValue()
+            guard let observer = box.observer, observer.observedPID != 0 else { return }
             let notifName = notification as String
 
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak observer] in
                 MainActor.assumeIsolated {
-                    let pid = watcher.observedPID
-                    watcher.onAnyEvent?(pid, notifName)
+                    guard let observer = observer, observer.observedPID != 0 else { return }
+                    let pid = observer.observedPID
+                    observer.onAnyEvent?(pid, notifName)
                     if notifName == (kAXWindowCreatedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onWindowCreated?(pid, wid)
+                        observer.onWindowCreated?(pid, wid)
                     } else if notifName == (kAXUIElementDestroyedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onWindowDestroyed?(pid, wid)
+                        observer.onWindowDestroyed?(pid, wid)
                     } else if notifName == (kAXWindowMovedNotification as String) {
-                        watcher.onWindowMoved?()
+                        observer.onWindowMoved?()
                     } else if notifName == (kAXWindowResizedNotification as String) || notifName == (kAXWindowZoomedNotification as String) {
-                        watcher.onWindowResized?()
+                        observer.onWindowResized?()
                     } else if notifName == (kAXFocusedWindowChangedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onFocusedWindowChangedWithWindow?(pid, wid)
-                        watcher.onFocusedWindowChanged?()
+                        observer.onFocusedWindowChangedWithWindow?(pid, wid)
+                        observer.onFocusedWindowChanged?()
                     } else if notifName == (kAXMainWindowChangedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onMainWindowChanged?(pid, wid)
+                        observer.onMainWindowChanged?(pid, wid)
                     } else if notifName == (kAXFocusedUIElementChangedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onFocusedUIElementChanged?(pid, wid)
+                        observer.onFocusedUIElementChanged?(pid, wid)
                     } else if notifName == (kAXTitleChangedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onTitleChangedWithWindow?(pid, wid)
-                        watcher.onTitleChanged?()
+                        observer.onTitleChangedWithWindow?(pid, wid)
+                        observer.onTitleChanged?()
                     } else if notifName == (kAXWindowMiniaturizedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onWindowMiniaturizedWithWindow?(pid, wid)
-                        watcher.onWindowMiniaturized?()
+                        observer.onWindowMiniaturizedWithWindow?(pid, wid)
+                        observer.onWindowMiniaturized?()
                     } else if notifName == (kAXWindowDeminiaturizedNotification as String) {
                         let wid = WindowDetector.shared.getWindowID(for: element)
-                        watcher.onWindowDeminiaturizedWithWindow?(pid, wid)
-                        watcher.onWindowDeminiaturized?()
+                        observer.onWindowDeminiaturizedWithWindow?(pid, wid)
+                        observer.onWindowDeminiaturized?()
                     }
                 }
             }
         }
 
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
         guard AXObserverCreate(pid, callback, &axObs) == .success, let obs = axObs else {
+            retainedBox.release()
             return
         }
+        self.callbackBox = box
 
         let appElem = AXUIElementCreateApplication(pid)
         _ = AXUIElementSetMessagingTimeout(appElem, 0.150)
@@ -137,6 +153,11 @@ public final class AXEventObserver: @unchecked Sendable {
                     AXObserverRemoveNotification(obs, app, notif)
                 }
             }
+        }
+        if let box = callbackBox {
+            box.observer = nil
+            Unmanaged.passUnretained(box).release()
+            self.callbackBox = nil
         }
         self.observer = nil
         self.source = nil

@@ -317,16 +317,22 @@ public final class MusicMonitor: NSObject {
 
     private typealias MRMediaRemoteSendCommandFn = @convention(c) (Int32, AnyObject?) -> DarwinBoolean
 
+    private nonisolated(unsafe) static let mediaRemoteSendCommand: MRMediaRemoteSendCommandFn? = {
+        guard let handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY) else {
+            return nil
+        }
+        guard let sym = dlsym(handle, "MRMediaRemoteSendCommand") else {
+            return nil
+        }
+        return unsafeBitCast(sym, to: MRMediaRemoteSendCommandFn.self)
+    }()
+
     private nonisolated func dispatchMediaCommandFallback(command: Int32, key: Int32) {
         // 1. Try private MediaRemote.framework MRMediaRemoteSendCommand
         var dispatchedViaMediaRemote = false
-        if let handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_LAZY) {
-            defer { dlclose(handle) }
-            if let sym = dlsym(handle, "MRMediaRemoteSendCommand") {
-                let sendCommand = unsafeBitCast(sym, to: MRMediaRemoteSendCommandFn.self)
-                let result = sendCommand(command, nil)
-                dispatchedViaMediaRemote = result.boolValue
-            }
+        if let sendCommand = Self.mediaRemoteSendCommand {
+            let result = sendCommand(command, nil)
+            dispatchedViaMediaRemote = result.boolValue
         }
 
         // 2. Fallback to hardware media key synthesis via CGEvent / NSEvent systemDefined

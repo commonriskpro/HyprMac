@@ -3,6 +3,14 @@ import Cocoa
 import CoreServices
 import CryptoKit
 
+private final class WallpaperCallbackBox: @unchecked Sendable {
+    weak var watcher: WallpaperWatcher?
+
+    init(watcher: WallpaperWatcher) {
+        self.watcher = watcher
+    }
+}
+
 /// Native Kernel-Level Event-Driven Wallpaper & Theming Watcher for HyprMac.
 ///
 /// Monitors macOS wallpaper changes via FSEventStream against
@@ -17,14 +25,19 @@ public final class WallpaperWatcher: @unchecked Sendable {
     public var onThemeReload: (@MainActor () -> Void)?
 
     private let eventQueue = DispatchQueue(label: "com.hyprmac.wallpaperwatcher", qos: .utility)
+    private let queueKey = DispatchSpecificKey<Void>()
+    private let streamLock = NSLock()
     private var streamRef: FSEventStreamRef?
+    private var callbackBox: WallpaperCallbackBox?
 
     private var lastProcessedPath: String?
     private var lastProcessedHash: String?
     private var isExecuting: Bool = false
     private var hasPendingEvent: Bool = false
 
-    public init() {}
+    public init() {
+        eventQueue.setSpecific(key: queueKey, value: ())
+    }
 
     deinit {
         stop()
@@ -35,7 +48,13 @@ public final class WallpaperWatcher: @unchecked Sendable {
     /// Starts the FSEvents stream monitoring wallpaper changes.
     public func start() {
         eventQueue.async { [weak self] in
-            guard let self = self, self.streamRef == nil else { return }
+            guard let self = self else { return }
+            self.streamLock.lock()
+            guard self.streamRef == nil else {
+                self.streamLock.unlock()
+                return
+            }
+            self.streamLock.unlock()
 
             self.initializeFromExistingTheme()
 
@@ -46,19 +65,27 @@ public final class WallpaperWatcher: @unchecked Sendable {
             }
 
             let pathsToWatch = [storePath] as CFArray
+            let box = WallpaperCallbackBox(watcher: self)
 
             var context = FSEventStreamContext(
                 version: 0,
-                info: Unmanaged.passUnretained(self).toOpaque(),
-                retain: nil,
-                release: nil,
+                info: Unmanaged.passUnretained(box).toOpaque(),
+                retain: { info in
+                    guard let info = info else { return nil }
+                    _ = Unmanaged<WallpaperCallbackBox>.fromOpaque(info).retain()
+                    return info
+                },
+                release: { info in
+                    guard let info = info else { return }
+                    Unmanaged<WallpaperCallbackBox>.fromOpaque(info).release()
+                },
                 copyDescription: nil
             )
 
             let callback: FSEventStreamCallback = { stream, clientCallBackInfo, numEvents, eventPaths, eventFlags, eventIds in
                 guard let clientCallBackInfo = clientCallBackInfo else { return }
-                let watcher = Unmanaged<WallpaperWatcher>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
-                watcher.handleStreamEvent()
+                let box = Unmanaged<WallpaperCallbackBox>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
+                box.watcher?.handleStreamEvent()
             }
 
             guard let stream = FSEventStreamCreate(
@@ -74,29 +101,45 @@ public final class WallpaperWatcher: @unchecked Sendable {
                 return
             }
 
-            self.streamRef = stream
             FSEventStreamSetDispatchQueue(stream, self.eventQueue)
 
             if FSEventStreamStart(stream) {
+                self.streamLock.lock()
+                self.streamRef = stream
+                self.callbackBox = box
+                self.streamLock.unlock()
                 print("[+] [WallpaperWatcher] Kernel FSEvents watcher active on \(storePath) (0.5s debounce)")
             } else {
                 print("[-] [WallpaperWatcher] Failed to start FSEventStream")
                 FSEventStreamInvalidate(stream)
                 FSEventStreamRelease(stream)
-                self.streamRef = nil
             }
         }
     }
 
     /// Stops and cleanly invalidates the FSEvents stream.
     public func stop() {
-        eventQueue.sync { [weak self] in
-            guard let self = self, let stream = self.streamRef else { return }
+        let teardown = { [self] in
+            streamLock.lock()
+            guard let stream = self.streamRef else {
+                streamLock.unlock()
+                return
+            }
+            self.streamRef = nil
+            self.callbackBox?.watcher = nil
+            self.callbackBox = nil
+            streamLock.unlock()
+
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
-            self.streamRef = nil
             print("[+] [WallpaperWatcher] FSEventStream stopped and released cleanly")
+        }
+
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            teardown()
+        } else {
+            eventQueue.sync(execute: teardown)
         }
     }
 
