@@ -317,26 +317,13 @@ public final class MasterEngine {
         animated: Bool = true,
         bridge: SkyLightBridge = .shared
     ) {
-        bridge.disableUpdate()
-        defer { bridge.reenableUpdate() }
-
-        let animEngine = AnimationEngine.shared
-        for (wid, targetFrame) in windowFrames {
-            if isFullscreen?(wid) == true { continue }
-            let curBounds = animEngine.currentVisualFrame(windowID: wid) ?? WindowDetector.shared.getWindowBounds(windowID: wid)
-            WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
-
-            if animated && animEngine.config.animationsEnabled {
-                if newlyAddedWindows.contains(wid) {
-                    animEngine.animateIn(windowID: wid, targetFrame: targetFrame)
-                    continue
-                }
-                if let cur = curBounds, cur != targetFrame {
-                    animEngine.animateMove(windowID: wid, startFrame: cur, targetFrame: targetFrame, physicalBaseFrame: targetFrame)
-                    continue
-                }
-            }
-        }
+        LayoutSystemApplicator.apply(
+            windowFrames: windowFrames,
+            newlyAddedWindows: newlyAddedWindows,
+            animated: animated,
+            bridge: bridge,
+            isFullscreen: isFullscreen
+        )
     }
 }
 

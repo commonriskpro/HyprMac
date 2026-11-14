@@ -293,28 +293,13 @@ public final class DwindleEngine {
         animated: Bool = true,
         bridge: SkyLightBridge = .shared
     ) {
-        bridge.disableUpdate()
-        defer { bridge.reenableUpdate() }
-
-        let animEngine = AnimationEngine.shared
-        for (wid, targetFrame) in windowFrames {
-            if isFullscreen?(wid) == true { continue }
-            let curBounds = animEngine.currentVisualFrame(windowID: wid) ?? WindowDetector.shared.getWindowBounds(windowID: wid)
-            // Immediately apply physical frame at t = 0 so the application starts resizing
-            WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
-
-            if animated && animEngine.config.animationsEnabled {
-                let borderWid = BorderManager.shared.overlays[wid].flatMap { CGWindowID($0.windowNumber) }
-                if newlyAddedWindows.contains(wid) {
-                    animEngine.animateIn(windowID: wid, targetFrame: targetFrame, borderWindowID: borderWid)
-                    continue
-                }
-                if let cur = curBounds, cur != targetFrame {
-                    animEngine.animateMove(windowID: wid, startFrame: cur, targetFrame: targetFrame, borderWindowID: borderWid, physicalBaseFrame: targetFrame)
-                    continue
-                }
-            }
-        }
+        LayoutSystemApplicator.apply(
+            windowFrames: windowFrames,
+            newlyAddedWindows: newlyAddedWindows,
+            animated: animated,
+            bridge: bridge,
+            isFullscreen: isFullscreen
+        )
     }
 
     /// Checks if a window ID is actively tiled as a leaf in the Dwindle tree.
