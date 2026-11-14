@@ -299,10 +299,16 @@ static const char *resolve_dylib_path(const char *argv0, const char *explicit_pa
     if (n < 0 || (size_t)n >= sizeof(resolved)) {
         LOG_ERR("Path too long"); return NULL;
     }
-    if (access(resolved, F_OK) != 0) {
-        LOG_ERR("Not found: %s", resolved); return NULL;
+    if (access(resolved, F_OK) == 0) {
+        return resolved;
     }
-    return resolved;
+    /* Installed layout puts the server hook dylib in /usr/local/lib. */
+    strlcpy(resolved, "/usr/local/lib/libhyprserver.dylib", sizeof(resolved));
+    if (access(resolved, F_OK) == 0) {
+        return resolved;
+    }
+    LOG_ERR("Not found: %s/libhyprserver.dylib nor /usr/local/lib/libhyprserver.dylib", exe_real);
+    return NULL;
 }
 
 /* ===========================================================================
