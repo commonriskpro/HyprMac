@@ -13,6 +13,7 @@ public enum HyprProtocol {
 
     // Shared Memory IPC
     public static let shmPath = "/tmp/hyprmac-ipc.shm"
+    public static let ringLockPath = "/tmp/hyprmac-ipc.lock"
     public static let shmSize = 64 * 1024       // 64KB
     public static let cmdRingSize = 28 * 1024   // 28KB
     public static let rspRingSize = 28 * 1024   // 28KB
@@ -356,10 +357,19 @@ public final class HyprServerBridge: @unchecked Sendable {
     private var authToken: Data?
     private var sequenceCounter: UInt32 = 0
     private var triggerFd: Int32 = -1
+    private var triggerOpenFailureLogged = false
+    /// Cross-process advisory lock guarding the single request/response ring pair.
+    private var ringLockFD: Int32 = -1
 
     private func notifyTrigger() {
         if triggerFd < 0 {
             triggerFd = open("/tmp/hyprmac-ipc.trigger", O_WRONLY | O_CREAT | O_TRUNC, 0o666)
+            if triggerFd < 0 && !triggerOpenFailureLogged {
+                triggerOpenFailureLogged = true
+                os_log(.error, log: log,
+                       "Cannot open IPC trigger file: %{public}s. Falling back to hook polling.",
+                       String(cString: strerror(errno)))
+            }
         }
         if triggerFd >= 0 {
             var b: UInt8 = 1
@@ -409,7 +419,9 @@ public final class HyprServerBridge: @unchecked Sendable {
         if let pPtr = hookPidPtr {
             let pid = atomicLoad(pPtr)
             if pid > 0 {
-                if kill(pid_t(pid), 0) != 0 {
+                // WindowServer runs as _windowserver, so a plain existence probe
+                // from the desktop user returns EPERM for a live process.
+                if kill(pid_t(pid), 0) != 0 && errno != EPERM {
                     return false
                 }
             } else {
@@ -467,6 +479,10 @@ public final class HyprServerBridge: @unchecked Sendable {
                 Darwin.close(triggerFd)
                 triggerFd = -1
             }
+            if ringLockFD >= 0 {
+                Darwin.close(ringLockFD)
+                ringLockFD = -1
+            }
             _isAvailable = false
         }
     }
@@ -479,6 +495,23 @@ public final class HyprServerBridge: @unchecked Sendable {
         } else {
             return try queue.sync(execute: block)
         }
+    }
+
+    /// Serializes a request/response pair against every other local client.
+    /// Without this, a second process can read the ACK that belongs to the
+    /// first one and both callers end up with mismatched responses.
+    private func withRingLock<T>(_ body: () throws -> T) rethrows -> T {
+        guard ringLockFD >= 0 else {
+            return try body()
+        }
+        _ = flock(ringLockFD, LOCK_EX)
+        defer { _ = flock(ringLockFD, LOCK_UN) }
+        return try body()
+    }
+
+    /// Sequence carried by a serialized HyprMessageHeader.
+    private func sequence(of message: Data) -> UInt32 {
+        message.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 8, as: UInt32.self) }
     }
 
     // MARK: - Authentication
@@ -550,6 +583,15 @@ public final class HyprServerBridge: @unchecked Sendable {
 
             self.cmdRingBase = map.advanced(by: HyprProtocol.cmdRingOffset).assumingMemoryBound(to: UInt8.self)
             self.rspRingBase = map.advanced(by: HyprProtocol.rspRingOffset).assumingMemoryBound(to: UInt8.self)
+
+            // Every process shares one request/response ring pair, so all
+            // transactions must be mutually exclusive across processes.
+            if self.ringLockFD < 0 {
+                self.ringLockFD = Darwin.open(HyprProtocol.ringLockPath, O_RDWR | O_CREAT, 0o666)
+                if self.ringLockFD >= 0 {
+                    Darwin.fchmod(self.ringLockFD, 0o666)
+                }
+            }
 
             // Only initialize header layout if not already initialized by the hook
             if hdrPtr.pointee.magic != HyprProtocol.shmMagic {
@@ -627,8 +669,10 @@ public final class HyprServerBridge: @unchecked Sendable {
         os_log(.info, log: log, "Replaying %d buffered commands to HyprServer", commands.count)
         for (index, cmdData) in commands.enumerated() {
             do {
-                try writeCommandToRing(message: cmdData)
-                _ = try readResponse()
+                try withRingLock {
+                    try writeCommandToRing(message: cmdData)
+                    _ = try readResponse(expectedSequence: self.sequence(of: cmdData))
+                }
             } catch {
                 os_log(.error, log: log, "Failed to replay command %d/%d: %{public}@. Re-enqueuing remaining.",
                        index + 1, commands.count, error.localizedDescription)
@@ -745,7 +789,10 @@ public final class HyprServerBridge: @unchecked Sendable {
         }
     }
 
-    private func readResponse(timeout: TimeInterval = 0.5) throws -> (header: HyprResponseHeader, payload: Data) {
+    private func readResponse(
+        expectedSequence: UInt32? = nil,
+        timeout: TimeInterval = 0.5
+    ) throws -> (header: HyprResponseHeader, payload: Data) {
         guard let base = rspRingBase, let wPtr = rspWritePosPtr, let rPtr = rspReadPosPtr else {
             throw HyprBridgeError.notConnected
         }
@@ -826,6 +873,15 @@ public final class HyprServerBridge: @unchecked Sendable {
                     payload = msgData.subdata(in: 20..<expectedEnd)
                 }
 
+                // A client that timed out after writing can leave its response
+                // behind. Ring access is serialized, so any frame that does not
+                // carry our sequence is orphaned and safe to discard.
+                if let expected = expectedSequence, header.sequence != expected {
+                    os_log(.default, log: log, "Discarding orphaned response seq=%u (expected %u)",
+                           header.sequence, expected)
+                    continue
+                }
+
                 return (header: header, payload: payload)
             }
 
@@ -854,18 +910,23 @@ public final class HyprServerBridge: @unchecked Sendable {
             }
 
             let message = self.buildMessage(command: command, windowId: windowId, payload: payload)
+            let seq = self.sequence(of: message)
 
             do {
                 os_log(.debug, log: self.log, "Sending command 0x%04X (wid: %u, bytes: %d)", command.rawValue, windowId, message.count)
-                try self.writeCommandToRing(message: message)
-                return try self.readResponse()
+                return try self.withRingLock {
+                    try self.writeCommandToRing(message: message)
+                    return try self.readResponse(expectedSequence: seq)
+                }
             } catch {
                 os_log(.default, log: self.log, "Command 0x%04X attempt 1 failed: %{public}@. Retrying once...",
                        command.rawValue, error.localizedDescription)
 
                 do {
-                    try self.writeCommandToRing(message: message)
-                    return try self.readResponse()
+                    return try self.withRingLock {
+                        try self.writeCommandToRing(message: message)
+                        return try self.readResponse(expectedSequence: seq)
+                    }
                 } catch {
                     os_log(.error, log: self.log, "Command 0x%04X retry failed: %{public}@",
                            command.rawValue, error.localizedDescription)
@@ -905,6 +966,7 @@ public final class HyprServerBridge: @unchecked Sendable {
         commandName: String
     ) -> Bool {
         let message = buildMessage(command: command, windowId: windowId, payload: payload)
+        let seq = sequence(of: message)
 
         return executeOnQueue {
             if self.shmBase == nil {
@@ -919,8 +981,10 @@ public final class HyprServerBridge: @unchecked Sendable {
             }
 
             do {
-                try self.writeCommandToRing(message: message)
-                let response = try self.readResponse()
+                let response = try self.withRingLock {
+                    try self.writeCommandToRing(message: message)
+                    return try self.readResponse(expectedSequence: seq)
+                }
                 let ok = self.handleAckResponse(header: response.header, payload: response.payload, commandName: commandName)
                 if ok {
                     os_log(.info, log: self.log, "%{public}s succeeded for window %u", commandName, windowId)
@@ -931,8 +995,10 @@ public final class HyprServerBridge: @unchecked Sendable {
                        commandName, error.localizedDescription)
 
                 do {
-                    try self.writeCommandToRing(message: message)
-                    let response = try self.readResponse()
+                    let response = try self.withRingLock {
+                        try self.writeCommandToRing(message: message)
+                        return try self.readResponse(expectedSequence: seq)
+                    }
                     return self.handleAckResponse(header: response.header, payload: response.payload, commandName: commandName)
                 } catch {
                     os_log(.error, log: self.log, "%{public}s retry failed: %{public}@. Enqueuing in ring buffer.",
@@ -950,30 +1016,24 @@ public final class HyprServerBridge: @unchecked Sendable {
     public func getServerStatus() -> HyprServerStatusInfo {
         do {
             let (header, payload) = try sendTransaction(command: .ping, windowId: 0, payload: Data())
-            guard header.commandId == HyprCommand.pong.rawValue || header.commandId == HyprCommand.ack.rawValue else {
+            // Ring transactions are serialized, so a PING must be answered by
+            // a PONG. Anything else is a protocol fault: fail closed instead of
+            // decoding unrelated payload bytes as status fields.
+            guard header.commandId == HyprCommand.pong.rawValue, payload.count >= 8 else {
                 return HyprServerStatusInfo(isConnected: false)
             }
 
-            var ver: UInt32? = nil
-            var activeWins: UInt32? = nil
-            var verStr: String? = nil
-
-            if payload.count >= 8 {
-                let rawVer = payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
-                let rawWins = payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
-                ver = rawVer
-                activeWins = rawWins
-                let major = (rawVer >> 16) & 0xFF
-                let minor = (rawVer >> 8) & 0xFF
-                let patch = rawVer & 0xFF
-                verStr = "\(major).\(minor).\(patch)"
-            }
+            let rawVer = payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
+            let rawWins = payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
+            let major = (rawVer >> 16) & 0xFF
+            let minor = (rawVer >> 8) & 0xFF
+            let patch = rawVer & 0xFF
 
             return HyprServerStatusInfo(
                 isConnected: true,
-                serverVersion: ver,
-                activeWindows: activeWins,
-                versionString: verStr
+                serverVersion: rawVer,
+                activeWindows: rawWins,
+                versionString: "\(major).\(minor).\(patch)"
             )
         } catch {
             return HyprServerStatusInfo(isConnected: false)
