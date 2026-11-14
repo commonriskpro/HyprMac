@@ -6,6 +6,21 @@ public enum HardwareMonitor {
     nonisolated(unsafe) private static var lastTicks: (user: UInt32, sys: UInt32, idle: UInt32, nice: UInt32)?
     private static let hostPort: mach_port_t = mach_host_self()
 
+    /// Average utilization since boot, used when there is no delta window yet
+    /// (first sample, or two samples taken within the same kernel tick).
+    private static func cumulativePercent(
+        user: UInt32,
+        sys: UInt32,
+        idle: UInt32,
+        nice: UInt32
+    ) -> Int {
+        let total = Double(user) + Double(sys) + Double(idle) + Double(nice)
+        guard total > 0 else { return 0 }
+        let active = Double(user) + Double(sys) + Double(nice)
+        let pct = Int((active / total) * 100.0)
+        return Swift.max(1, Swift.min(100, pct))
+    }
+
     public static func currentCPULoad() -> Int {
         let count = mach_msg_type_number_t(MemoryLayout<host_cpu_load_info_data_t>.size / MemoryLayout<integer_t>.size)
         var actualCount = count
@@ -27,11 +42,7 @@ public enum HardwareMonitor {
 
         guard let previous = lastTicks else {
             lastTicks = (user, sys, idle, nice)
-            let total = Double(user) + Double(sys) + Double(idle) + Double(nice)
-            guard total > 0 else { return 0 }
-            let active = Double(user) + Double(sys) + Double(nice)
-            let pct = Int((active / total) * 100.0)
-            return Swift.max(1, Swift.min(100, pct))
+            return cumulativePercent(user: user, sys: sys, idle: idle, nice: nice)
         }
 
         let deltaUser = Double(user >= previous.user ? user - previous.user : 0)
@@ -41,7 +52,11 @@ public enum HardwareMonitor {
         lastTicks = (user, sys, idle, nice)
 
         let total = deltaUser + deltaSys + deltaIdle + deltaNice
-        guard total > 0 else { return 0 }
+        guard total > 0 else {
+            // No ticks elapsed in this window; report the since-boot average
+            // instead of a misleading 0%.
+            return cumulativePercent(user: user, sys: sys, idle: idle, nice: nice)
+        }
 
         let active = deltaUser + deltaSys + deltaNice
         let pct = Int((active / total) * 100.0)
