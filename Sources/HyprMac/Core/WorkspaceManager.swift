@@ -499,7 +499,7 @@ public final class WorkspaceManager {
         let cy = effectiveScreen.origin.y + (effectiveScreen.height - h) / 2.0
         let defaultCenteredFrame = CGRect(x: cx, y: cy, width: w, height: h)
 
-        let cur = getFrame(windowID) ?? storedFrames[windowID] ?? savedSpecialFrames[windowID]
+        let cur = getFrame(windowID) ?? stateStore.getStoredFrame(windowID) ?? savedSpecialFrames[windowID]
         if let current = cur, !HiddenWindowPlacement.isParkedOrHidden(current, screens: [effectiveScreen] + allScreens) {
             savedSpecialFrames[windowID] = current
         } else if savedSpecialFrames[windowID] == nil {
@@ -628,12 +628,6 @@ public final class WorkspaceManager {
 
     public func setRuleEvaluated(_ wid: CGWindowID, evaluated: Bool) {
         stateStore.setRuleEvaluated(wid, evaluated: evaluated)
-    }
-
-    /// Preserved window geometry frames when windows are placed offscreen.
-    public var storedFrames: [CGWindowID: CGRect] {
-        get { stateStore.storedFrames }
-        set { stateStore.storedFrames = newValue }
     }
 
     /// Preserved window insertion and display order across all workspaces.
@@ -848,12 +842,12 @@ public final class WorkspaceManager {
 
     /// Returns the stored offscreen frame for a window, if any.
     public func storedFrame(for wid: CGWindowID) -> CGRect? {
-        storedFrames[wid]
+        stateStore.getStoredFrame(wid)
     }
 
     /// Explicitly updates the preserved frame for a window.
     public func setStoredFrame(_ frame: CGRect, for wid: CGWindowID) {
-        storedFrames[wid] = frame
+        stateStore.setStoredFrame(frame, for: wid)
     }
 
     // MARK: - Window Visibility & Positioning
@@ -870,21 +864,21 @@ public final class WorkspaceManager {
         let allScreens = HiddenWindowPlacement.allCGScreens()
 
         // 1. Resolve current frame via storedFrames or SkyLight (avoiding synchronous AX IPC)
-        var currentFrame: CGRect? = storedFrames[wid]
+        var currentFrame: CGRect? = stateStore.getStoredFrame(wid)
         if currentFrame == nil || HiddenWindowPlacement.isParkedOrHidden(currentFrame!, screens: allScreens) {
             currentFrame = SkyLightBridge.shared.getWindowBounds(windowID: wid)
         }
 
         // 2. Preserve unhidden frame in storedFrames
         if let frame = currentFrame, !HiddenWindowPlacement.isParkedOrHidden(frame, screens: allScreens) {
-            storedFrames[wid] = frame
+            stateStore.setStoredFrame(frame, for: wid)
         }
 
         // 3. Determine size and screen to calculate the 1-pixel anchor
         let defaultScreen = NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? .zero
         let defaultSize = CGSize(width: max(200.0, defaultScreen.width * 0.5), height: max(200.0, defaultScreen.height * 0.5))
         let fallbackFrame = CGRect(origin: defaultScreen.origin, size: defaultSize)
-        let baseFrame = storedFrames[wid] ?? currentFrame ?? fallbackFrame
+        let baseFrame = stateStore.getStoredFrame(wid) ?? currentFrame ?? fallbackFrame
         let targetScreen = HiddenWindowPlacement.screen(for: baseFrame, among: allScreens)
         let otherScreens = allScreens.filter { $0 != targetScreen }
 
@@ -925,17 +919,17 @@ public final class WorkspaceManager {
         }
 
         if let target = targetFrame {
-            storedFrames[wid] = target
+            stateStore.setStoredFrame(target, for: wid)
         }
 
         let defaultScreen = NSScreen.main?.frame ?? NSScreen.screens.first?.frame ?? .zero
         let defaultSize = CGSize(width: max(200.0, defaultScreen.width * 0.5), height: max(200.0, defaultScreen.height * 0.5))
         let fallbackFrame = CGRect(origin: defaultScreen.origin, size: defaultSize)
-        let frame = targetFrame ?? storedFrames[wid] ?? fallbackFrame
+        let frame = targetFrame ?? stateStore.getStoredFrame(wid) ?? fallbackFrame
 
         if let winElem = WindowDetector.shared.getWindowAXElement(windowID: wid, pid: pid) {
             // Determine current size from stored frame or SkyLight (avoiding AX IPC)
-            let curSz = storedFrames[wid]?.size ?? SkyLightBridge.shared.getWindowBounds(windowID: wid)?.size ?? .zero
+            let curSz = stateStore.getStoredFrame(wid)?.size ?? SkyLightBridge.shared.getWindowBounds(windowID: wid)?.size ?? .zero
 
             var pt = frame.origin
             let posVal = AXValueCreate(.cgPoint, &pt)
@@ -1061,9 +1055,9 @@ public final class WorkspaceManager {
             let pid = windowPIDs[wid] ?? getPID(for: wid) ?? 0
             if pid > 0 { windowPIDs[wid] = pid }
 
-            let baseFrame = storedFrames[wid] ?? fallbackFrame
-            if storedFrames[wid] == nil {
-                storedFrames[wid] = baseFrame
+            let baseFrame = stateStore.getStoredFrame(wid) ?? fallbackFrame
+            if stateStore.getStoredFrame(wid) == nil {
+                stateStore.setStoredFrame(baseFrame, for: wid)
             }
             let targetScreen = HiddenWindowPlacement.screen(for: baseFrame, among: allScreens)
             let otherScreens = allScreens.filter { $0 != targetScreen }
@@ -1088,8 +1082,8 @@ public final class WorkspaceManager {
             let pid = windowPIDs[wid] ?? getPID(for: wid) ?? 0
             if pid > 0 { windowPIDs[wid] = pid }
 
-            let targetFrame = targetFrames[wid] ?? storedFrames[wid] ?? fallbackFrame
-            storedFrames[wid] = targetFrame
+            let targetFrame = targetFrames[wid] ?? stateStore.getStoredFrame(wid) ?? fallbackFrame
+            stateStore.setStoredFrame(targetFrame, for: wid)
 
             perApp[pid, default: []].append(WindowMoveItem(
                 wid: wid,

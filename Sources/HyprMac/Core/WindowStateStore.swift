@@ -150,19 +150,6 @@ public final class WindowStateStore: @unchecked Sendable {
 
     // MARK: - Stored Frames (Offscreen Parking)
 
-    public var storedFrames: [CGWindowID: CGRect] {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _storedFrames
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _storedFrames = newValue
-        }
-    }
-
     public func getStoredFrame(_ windowID: CGWindowID) -> CGRect? {
         lock.lock()
         defer { lock.unlock() }
@@ -180,19 +167,6 @@ public final class WindowStateStore: @unchecked Sendable {
     }
 
     // MARK: - Stripped Windows State
-
-    public var strippedWindows: Set<CGWindowID> {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _strippedWindows
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _strippedWindows = newValue
-        }
-    }
 
     public func isStripped(_ windowID: CGWindowID) -> Bool {
         lock.lock()

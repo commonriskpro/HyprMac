@@ -1435,7 +1435,6 @@ func runIntegratedDaemon(configPath: String?) {
                 WindowDetector.shared.invalidateWindow(windowID: wid)
             }
         }
-        stateStore.strippedWindows.formIntersection(allAliveWindowIDs)
 
         // Filter eligible windows using WorkspaceManager so only windows
         // belonging to the active workspace are tiled by DwindleEngine
