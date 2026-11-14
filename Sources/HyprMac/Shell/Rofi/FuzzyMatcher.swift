@@ -27,9 +27,18 @@ public enum FuzzyMatcher {
         candidates: [T],
         extractTarget: (T) -> String
     ) -> [T] {
+        return matchScored(query: query, candidates: candidates, extractTarget: extractTarget).map { $0.item }
+    }
+
+    /// Filters and scores candidates returning their scores.
+    public static func matchScored<T>(
+        query: String,
+        candidates: [T],
+        extractTarget: (T) -> String
+    ) -> [(item: T, score: Int)] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            return candidates
+            return candidates.map { ($0, 0) }
         }
 
         var scored: [ScoredCandidate<T>] = []
@@ -48,7 +57,7 @@ public enum FuzzyMatcher {
             return a.target.localizedCaseInsensitiveCompare(b.target) == .orderedAscending
         }
 
-        return scored.map { $0.item }
+        return scored.map { ($0.item, $0.score) }
     }
 
     /// Scores a single target against a query. Returns nil if no match.
@@ -62,44 +71,93 @@ public enum FuzzyMatcher {
             return 100_000
         }
 
+        let qCount = q.count
+
         // 2. Exact prefix match: (50,000 tier)
         // Shorter target names or exact length matches get higher score
         if t.hasPrefix(q) {
-            let lengthDiff = t.count - q.count
+            let lengthDiff = t.count - qCount
             return 50_000 + max(0, 5_000 - lengthDiff * 50)
         }
 
         // 3. Word boundary matches: (30,000 tier)
-        let words = target.components(separatedBy: nonAlphanumericSet).filter { !$0.isEmpty }
+        // Traverse t to find word boundaries and acronym initials without allocating intermediate [String] arrays
+        var wordIndex = 0
+        var inWord = false
+        var wordStart = t.startIndex
+        var initials = ""
+        initials.reserveCapacity(8)
+        var wordPrefixScore: Int? = nil
+
+        var scanIdx = t.startIndex
+        while scanIdx < t.endIndex {
+            let ch = t[scanIdx]
+            let isSeparator = ch.unicodeScalars.contains { nonAlphanumericSet.contains($0) }
+
+            if isSeparator {
+                if inWord {
+                    let wordSlice = t[wordStart..<scanIdx]
+                    if wordPrefixScore == nil && wordSlice.hasPrefix(q) {
+                        let lengthDiff = wordSlice.count - qCount
+                        wordPrefixScore = 30_000 - (wordIndex * 200) + max(0, 2_000 - lengthDiff * 30)
+                    }
+                    wordIndex += 1
+                    inWord = false
+                }
+            } else {
+                if !inWord {
+                    inWord = true
+                    wordStart = scanIdx
+                    initials.append(ch)
+                }
+            }
+            scanIdx = t.index(after: scanIdx)
+        }
+
+        if inWord {
+            let wordSlice = t[wordStart..<scanIdx]
+            if wordPrefixScore == nil && wordSlice.hasPrefix(q) {
+                let lengthDiff = wordSlice.count - qCount
+                wordPrefixScore = 30_000 - (wordIndex * 200) + max(0, 2_000 - lengthDiff * 30)
+            }
+            wordIndex += 1
+        }
 
         // 3a. Any individual word prefix
-        for (i, word) in words.enumerated() {
-            let w = word.lowercased()
-            if w.hasPrefix(q) {
-                let lengthDiff = w.count - q.count
-                return 30_000 - (i * 200) + max(0, 2_000 - lengthDiff * 30)
-            }
+        if let s = wordPrefixScore {
+            return s
         }
 
         // 3b. Word boundary initials / acronym match (e.g. "gc" for "Google Chrome")
-        let initials = words.compactMap { $0.first?.lowercased() }.joined()
         if initials.hasPrefix(q) {
-            let diff = initials.count - q.count
+            let diff = initials.count - qCount
             return 25_000 + max(0, 1_000 - diff * 100)
         }
 
         // 4. Consecutive character match / substring match: (15,000 tier)
         if let range = t.range(of: q) {
-            let distance = t.distance(from: t.startIndex, to: range.lowerBound)
-            return 15_000 - (distance * 100) + max(0, 1_000 - t.count * 10)
+            var distance = 0
+            var cur = t.startIndex
+            while cur < range.lowerBound {
+                distance += 1
+                cur = t.index(after: cur)
+            }
+            var tCount = distance
+            while cur < t.endIndex {
+                tCount += 1
+                cur = t.index(after: cur)
+            }
+            return 15_000 - (distance * 100) + max(0, 1_000 - tCount * 10)
         }
 
         // 5. Fuzzy subsequence match: (1,000 - 10,000 tier)
         var qIndex = q.startIndex
         var tIndex = t.startIndex
+        var tOffset = 0
         var subScore = 0
         var consecutiveCount = 0
         var prevMatched = false
+        var prevTChar: Character? = nil
 
         while qIndex < q.endIndex && tIndex < t.endIndex {
             let qChar = q[qIndex]
@@ -110,11 +168,10 @@ public enum FuzzyMatcher {
                 var charScore = 100
 
                 let isWordStart: Bool
-                if tIndex == t.startIndex {
+                if tOffset == 0 {
                     isWordStart = true
                 } else {
-                    let prevChar = t[t.index(before: tIndex)]
-                    isWordStart = prevChar.unicodeScalars.first.map { nonAlphanumericSet.contains($0) } ?? false
+                    isWordStart = prevTChar?.unicodeScalars.first.map { nonAlphanumericSet.contains($0) } ?? false
                 }
                 if isWordStart {
                     charScore += 250
@@ -127,7 +184,7 @@ public enum FuzzyMatcher {
                     consecutiveCount = 0
                 }
 
-                let dist = t.distance(from: t.startIndex, to: tIndex)
+                let dist = tOffset
                 charScore -= min(dist * 5, 100)
 
                 subScore += charScore
@@ -137,6 +194,8 @@ public enum FuzzyMatcher {
                 consecutiveCount = 0
             }
 
+            prevTChar = tChar
+            tOffset += 1
             tIndex = t.index(after: tIndex)
         }
 

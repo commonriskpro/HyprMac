@@ -800,13 +800,7 @@ public final class WallpaperGalleryWindow: NSPanel, NSTextFieldDelegate {
     }
 
     private func applyWallpaper(path: String) {
-        let cachePath = NSString(string: "~/.cache/current_wallpaper").expandingTildeInPath
-        try? path.write(toFile: cachePath, atomically: true, encoding: .utf8)
-
-        let url = URL(fileURLWithPath: path)
-        for screen in NSScreen.screens {
-            try? NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
-        }
+        WallpaperApplier.apply(path: path)
     }
 
     private func centerOnActiveScreen() {

@@ -825,7 +825,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
                 } else {
                     let openWindows = WindowProvider.match(query: trimmed)
                     let sysCmds = SystemCommandProvider.match(query: trimmed)
-                    let matchedApps = FuzzyMatcher.match(query: trimmed, candidates: allApps, extractTarget: { $0.name })
+                    let matchedApps = FuzzyMatcher.matchScored(query: trimmed, candidates: allApps, extractTarget: { $0.name })
                     let matchedWalls = trimmed.count >= 2 ? WallpaperProvider.match(query: trimmed) : []
 
                     var scoredItems: [(item: RofiSearchResult, score: Int)] = []
@@ -849,9 +849,8 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
                         scoredItems.append((cmd, s))
                     }
 
-                    for app in matchedApps {
-                        let s = FuzzyMatcher.score(query: trimmed, target: app.name) ?? 0
-                        scoredItems.append((.app(app), s))
+                    for (app, score) in matchedApps {
+                        scoredItems.append((.app(app), score))
                     }
 
                     for wall in matchedWalls.prefix(4) {
@@ -967,15 +966,7 @@ public final class RofiWindow: NSPanel, NSTextFieldDelegate {
     }
 
     private func applyWallpaper(path: String) {
-        let cachePath = NSString(string: "~/.cache/current_wallpaper").expandingTildeInPath
-        try? path.write(toFile: cachePath, atomically: true, encoding: .utf8)
-
-        let fileURL = URL(fileURLWithPath: path)
-        if let screens = NSScreen.screens as [NSScreen]? {
-            for screen in screens {
-                try? NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: [:])
-            }
-        }
+        WallpaperApplier.apply(path: path)
     }
 
     private func launchBinary(path: String) {
