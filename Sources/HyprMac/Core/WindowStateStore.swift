@@ -20,19 +20,6 @@ public final class WindowStateStore: @unchecked Sendable {
 
     // MARK: - Floating State
 
-    public var floatingWindowIDs: Set<CGWindowID> {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _floatingWindowIDs
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _floatingWindowIDs = newValue
-        }
-    }
-
     public func isFloating(_ windowID: CGWindowID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -50,19 +37,6 @@ public final class WindowStateStore: @unchecked Sendable {
     }
 
     // MARK: - Fullscreen State
-
-    public var fullscreenWindows: [CGWindowID: CGRect] {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _fullscreenWindows
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _fullscreenWindows = newValue
-        }
-    }
 
     public func isFullscreen(_ windowID: CGWindowID) -> Bool {
         lock.lock()
@@ -88,19 +62,6 @@ public final class WindowStateStore: @unchecked Sendable {
 
     // MARK: - Minimized State
 
-    public var minimizedWindowIDs: Set<CGWindowID> {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _minimizedWindowIDs
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _minimizedWindowIDs = newValue
-        }
-    }
-
     public func isMinimized(_ windowID: CGWindowID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -118,19 +79,6 @@ public final class WindowStateStore: @unchecked Sendable {
     }
 
     // MARK: - Workspace Assignment State
-
-    public var windowWorkspaces: [CGWindowID: Int] {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _windowWorkspaces
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _windowWorkspaces = newValue
-        }
-    }
 
     public func workspace(for windowID: CGWindowID) -> Int? {
         lock.lock()
@@ -186,19 +134,6 @@ public final class WindowStateStore: @unchecked Sendable {
 
     // MARK: - Pinned Windows State
 
-    public var pinnedWindowIDs: Set<CGWindowID> {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _pinnedWindowIDs
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _pinnedWindowIDs = newValue
-        }
-    }
-
     public func isPinned(_ windowID: CGWindowID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -217,19 +152,6 @@ public final class WindowStateStore: @unchecked Sendable {
 
     // MARK: - Rule-Driven Overrides State
 
-    public var noBorderWindows: Set<CGWindowID> {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _noBorderWindows
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _noBorderWindows = newValue
-        }
-    }
-
     public func hasNoBorder(_ windowID: CGWindowID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -243,19 +165,6 @@ public final class WindowStateStore: @unchecked Sendable {
             _noBorderWindows.insert(windowID)
         } else {
             _noBorderWindows.remove(windowID)
-        }
-    }
-
-    public var windowOpacityOverrides: [CGWindowID: (active: Double, inactive: Double)] {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _windowOpacityOverrides
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _windowOpacityOverrides = newValue
         }
     }
 
@@ -275,19 +184,6 @@ public final class WindowStateStore: @unchecked Sendable {
         }
     }
 
-    public var evaluatedRuleWindows: Set<CGWindowID> {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _evaluatedRuleWindows
-        }
-        set {
-            lock.lock()
-            defer { lock.unlock() }
-            _evaluatedRuleWindows = newValue
-        }
-    }
-
     public func isRuleEvaluated(_ windowID: CGWindowID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -302,6 +198,12 @@ public final class WindowStateStore: @unchecked Sendable {
         } else {
             _evaluatedRuleWindows.remove(windowID)
         }
+    }
+
+    public func resetEvaluatedRules() {
+        lock.lock()
+        defer { lock.unlock() }
+        _evaluatedRuleWindows.removeAll()
     }
 
     // MARK: - Lifecycle & Cleanup

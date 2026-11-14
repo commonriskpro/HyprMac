@@ -80,15 +80,6 @@ public final class KeybindManager: @unchecked Sendable {
     private var bindings: [KeyBinding] = []
     public var stateStore: WindowStateStore = .shared
 
-    public var floatingWindowIDs: Set<CGWindowID> {
-        get { stateStore.floatingWindowIDs }
-        set { stateStore.floatingWindowIDs = newValue }
-    }
-
-    public var fullscreenWindows: [CGWindowID: CGRect] {
-        get { stateStore.fullscreenWindows }
-        set { stateStore.fullscreenWindows = newValue }
-    }
     private let lock = NSLock()
     private var _isMenuBarSuppressed: Bool = false
     private var eventTap: CFMachPort?

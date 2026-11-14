@@ -1151,7 +1151,7 @@ func runIntegratedDaemon(configPath: String?) {
                 }
                 print("[HyprMac] Hot-reloading configuration from \(confPath)...")
                 let newConfig = ConfigParser.parseFile(atPath: confPath)
-                stateStore.evaluatedRuleWindows.removeAll()
+                stateStore.resetEvaluatedRules()
                 animationEngine.config = newConfig
                 bar?.barView.barColors = newConfig.barColors
                 ClientDecorationLoader.shared.ignoredApps = newConfig.ignoredClientApps

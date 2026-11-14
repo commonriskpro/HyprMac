@@ -207,29 +207,11 @@ public final class WorkspaceManager {
         return (now - lastWorkspaceSwitchTime) < settleInterval
     }
 
-    /// Window-to-workspace mapping (CGWindowID -> Workspace Number 1..9).
-    public var windowWorkspaces: [CGWindowID: Int] {
-        get { stateStore.windowWorkspaces }
-        set { stateStore.windowWorkspaces = newValue }
-    }
-
     /// Window-to-PID mapping for fast Accessibility element resolution.
     public private(set) var windowPIDs: [CGWindowID: pid_t] = [:]
 
     /// Last focused window ID per workspace (Workspace Number -> CGWindowID).
     private var lastFocusedPerWorkspace: [Int: CGWindowID] = [:]
-
-    /// Set of window IDs currently minimized via macOS Dock / WindowServer.
-    public var minimizedWindowIDs: Set<CGWindowID> {
-        get { stateStore.minimizedWindowIDs }
-        set { stateStore.minimizedWindowIDs = newValue }
-    }
-
-    /// Pinned window IDs that remain visible across all workspaces.
-    public var pinnedWindowIDs: Set<CGWindowID> {
-        get { stateStore.pinnedWindowIDs }
-        set { stateStore.pinnedWindowIDs = newValue }
-    }
 
     public func isPinned(_ wid: CGWindowID) -> Bool {
         stateStore.isPinned(wid)
@@ -464,7 +446,7 @@ public final class WorkspaceManager {
         let normName = Self.normalizeSpecialName(name)
 
         // 1. Remove from numbered workspaces 1...9
-        windowWorkspaces.removeValue(forKey: windowID)
+        stateStore.setWorkspace(nil, for: windowID)
 
         // 2. Remove from any other special workspace
         for (k, _) in specialWorkspaces {
@@ -591,11 +573,6 @@ public final class WorkspaceManager {
 
     // MARK: - Rule-Driven Overrides Accessors
 
-    public var noBorderWindows: Set<CGWindowID> {
-        get { stateStore.noBorderWindows }
-        set { stateStore.noBorderWindows = newValue }
-    }
-
     public func hasNoBorder(_ wid: CGWindowID) -> Bool {
         stateStore.hasNoBorder(wid)
     }
@@ -604,22 +581,12 @@ public final class WorkspaceManager {
         stateStore.setNoBorder(wid, noBorder: noBorder)
     }
 
-    public var windowOpacityOverrides: [CGWindowID: (active: Double, inactive: Double)] {
-        get { stateStore.windowOpacityOverrides }
-        set { stateStore.windowOpacityOverrides = newValue }
-    }
-
     public func opacityOverride(for wid: CGWindowID) -> (active: Double, inactive: Double)? {
         stateStore.opacityOverride(for: wid)
     }
 
     public func setOpacityOverride(_ override: (active: Double, inactive: Double)?, for wid: CGWindowID) {
         stateStore.setOpacityOverride(override, for: wid)
-    }
-
-    public var evaluatedRuleWindows: Set<CGWindowID> {
-        get { stateStore.evaluatedRuleWindows }
-        set { stateStore.evaluatedRuleWindows = newValue }
     }
 
     public func isRuleEvaluated(_ wid: CGWindowID) -> Bool {
@@ -682,10 +649,10 @@ public final class WorkspaceManager {
         if let p = pid ?? getPID(for: wid) {
             windowPIDs[wid] = p
         }
-        if let existing = windowWorkspaces[wid] {
+        if let existing = stateStore.workspace(for: wid) {
             return existing
         }
-        windowWorkspaces[wid] = activeWorkspace
+        stateStore.setWorkspace(activeWorkspace, for: wid)
         if !windowOrder.contains(wid) {
             windowOrder.append(wid)
         }
@@ -704,7 +671,7 @@ public final class WorkspaceManager {
                 specialWorkspaces.removeValue(forKey: k)
             }
         }
-        windowWorkspaces[wid] = workspace
+        stateStore.setWorkspace(workspace, for: wid)
         if !windowOrder.contains(wid) {
             windowOrder.append(wid)
         }
@@ -754,7 +721,7 @@ public final class WorkspaceManager {
     /// Returns all window IDs assigned to the specified workspace in display order.
     public func windows(for workspace: Int) -> [CGWindowID] {
         guard workspace >= 1 && workspace <= 9 else { return [] }
-        return windowOrder.filter { windowWorkspaces[$0] == workspace }
+        return windowOrder.filter { stateStore.workspace(for: $0) == workspace }
     }
 
     /// Returns all window IDs assigned to the currently active workspace, plus any pinned windows.
@@ -764,13 +731,13 @@ public final class WorkspaceManager {
 
         var current: [CGWindowID] = []
         for ws in activeWorkspacesSet {
-            current.append(contentsOf: windows(for: ws).filter { !minimizedWindowIDs.contains($0) })
+            current.append(contentsOf: windows(for: ws).filter { !stateStore.isMinimized($0) })
         }
-        let pinned = windowOrder.filter { isPinned($0) && !minimizedWindowIDs.contains($0) && !current.contains($0) }
+        let pinned = windowOrder.filter { isPinned($0) && !stateStore.isMinimized($0) && !current.contains($0) }
         var special: [CGWindowID] = []
         for name in activeSpecialWorkspaces {
             if let wids = specialWorkspaces[name] {
-                for wid in windowOrder where wids.contains(wid) && !minimizedWindowIDs.contains(wid) && !current.contains(wid) && !pinned.contains(wid) {
+                for wid in windowOrder where wids.contains(wid) && !stateStore.isMinimized(wid) && !current.contains(wid) && !pinned.contains(wid) {
                     special.append(wid)
                 }
             }
@@ -780,21 +747,17 @@ public final class WorkspaceManager {
 
     /// Returns the workspace number for a specific window, if known.
     public func workspace(for wid: CGWindowID) -> Int? {
-        windowWorkspaces[wid]
+        stateStore.workspace(for: wid)
     }
 
     /// Updates minimized status of a window while preserving its workspace assignment.
     public func setWindowMinimized(_ wid: CGWindowID, minimized: Bool) {
-        if minimized {
-            minimizedWindowIDs.insert(wid)
-        } else {
-            minimizedWindowIDs.remove(wid)
-        }
+        stateStore.setMinimized(wid, minimized: minimized)
     }
 
     /// Checks if a window is currently marked minimized.
     public func isMinimized(_ wid: CGWindowID) -> Bool {
-        minimizedWindowIDs.contains(wid)
+        stateStore.isMinimized(wid)
     }
 
     /// Unminimizes a window and reassigns it to the currently active workspace,
@@ -818,8 +781,8 @@ public final class WorkspaceManager {
             return ws
         }
         if let pid = pid ?? getPID(for: wid) {
-            if let assignedWid = windowOrder.last(where: { windowPIDs[$0] == pid && windowWorkspaces[$0] != nil && !isMinimized($0) }) {
-                return windowWorkspaces[assignedWid]
+            if let assignedWid = windowOrder.last(where: { windowPIDs[$0] == pid && stateStore.workspace(for: $0) != nil && !isMinimized($0) }) {
+                return stateStore.workspace(for: assignedWid)
             }
         }
         return nil
@@ -1000,7 +963,7 @@ public final class WorkspaceManager {
 
         // 1. Record currently focused window for the old active workspace
         let currentWid = WindowDetector.shared.fastFocusedWindow()?.windowID ?? lastFocusedPerWorkspace[activeWorkspace]
-        if let current = currentWid, windowWorkspaces[current] == activeWorkspace {
+        if let current = currentWid, stateStore.workspace(for: current) == activeWorkspace {
             lastFocusedPerWorkspace[activeWorkspace] = current
         }
 
@@ -1028,8 +991,8 @@ public final class WorkspaceManager {
 
         // Step 2: Inactive windows belonging to other workspaces
         let otherWindows = windowOrder.filter {
-            windowWorkspaces[$0] != activeWorkspace &&
-            !minimizedWindowIDs.contains($0) &&
+            stateStore.workspace(for: $0) != activeWorkspace &&
+            !stateStore.isMinimized($0) &&
             !isPinned($0) &&
             !(isInSpecialWorkspace($0) && activeSpecialWorkspaces.contains(specialWorkspaceName(for: $0) ?? ""))
         }
@@ -1208,14 +1171,14 @@ public final class WorkspaceManager {
     ) {
         guard windowID > 0, targetWorkspace >= 1 && targetWorkspace <= 9 else { return }
 
-        let oldWorkspace = windowWorkspaces[windowID] ?? activeWorkspace
+        let oldWorkspace = stateStore.workspace(for: windowID) ?? activeWorkspace
         for (k, _) in specialWorkspaces {
             specialWorkspaces[k]?.remove(windowID)
             if specialWorkspaces[k]?.isEmpty == true {
                 specialWorkspaces.removeValue(forKey: k)
             }
         }
-        windowWorkspaces[windowID] = targetWorkspace
+        stateStore.setWorkspace(targetWorkspace, for: windowID)
         if !windowOrder.contains(windowID) {
             windowOrder.append(windowID)
         }
@@ -1273,7 +1236,7 @@ public final class WorkspaceManager {
     /// Activates owning process, brings the window to the front, and requests Accessibility focus.
     public func focusWindow(wid: CGWindowID) {
         guard wid > 0 else { return }
-        if let ws = windowWorkspaces[wid] {
+        if let ws = stateStore.workspace(for: wid) {
             lastFocusedPerWorkspace[ws] = wid
         }
                 let pid = windowPIDs[wid] ?? getPID(for: wid)
