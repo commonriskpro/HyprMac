@@ -94,7 +94,7 @@ public final class CategoryChipButton: NSView {
 @MainActor
 public final class WallpaperCardView: NSView {
     public let item: WallpaperItem
-    public let index: Int
+    public var index: Int
     public var isSelected: Bool = false {
         didSet { updateAppearance() }
     }
@@ -349,12 +349,17 @@ public final class WallpaperGridView: NSView {
     public func reloadGrid(items: [WallpaperItem], selectedIndex: Int) {
         setupScrollObservation()
 
-        for card in cardViews {
-            card.unloadThumbnail()
-            card.cleanup()
-            card.removeFromSuperview()
+        let currentPaths = cardViews.map(\.item.path)
+        let newPaths = items.map(\.path)
+
+        if currentPaths == newPaths {
+            for (i, card) in cardViews.enumerated() {
+                card.index = i
+                card.isSelected = (i == selectedIndex)
+            }
+            updateVisibleThumbnails()
+            return
         }
-        cardViews.removeAll(keepingCapacity: true)
 
         let count = items.count
         let cols = Self.columns
@@ -370,28 +375,56 @@ public final class WallpaperGridView: NSView {
 
         setFrameSize(NSSize(width: targetWidth, height: targetHeight))
 
+        var existingCardsByPath: [String: WallpaperCardView] = [:]
+        for card in cardViews {
+            existingCardsByPath[card.item.path] = card
+        }
+
+        let newPathSet = Set(newPaths)
+
+        // Remove cards no longer in items
+        for card in cardViews {
+            if !newPathSet.contains(card.item.path) {
+                card.unloadThumbnail()
+                card.cleanup()
+                card.removeFromSuperview()
+            }
+        }
+
+        var newCardViews: [WallpaperCardView] = []
+        newCardViews.reserveCapacity(count)
+
         for (i, item) in items.enumerated() {
             let col = i % cols
             let row = i / cols
             let x = Self.padding + (CGFloat(col) * (Self.cardWidth + Self.horizontalSpacing))
             let y = Self.padding + (CGFloat(row) * (Self.cardHeight + Self.verticalSpacing))
+            let frame = NSRect(x: x, y: y, width: Self.cardWidth, height: Self.cardHeight)
 
-            let card = WallpaperCardView(item: item, index: i)
-            card.frame = NSRect(x: x, y: y, width: Self.cardWidth, height: Self.cardHeight)
-            card.isSelected = (i == selectedIndex)
-            card.onHover = { [weak self] idx in
-                self?.onSelectionChanged?(idx)
+            if let card = existingCardsByPath[item.path] {
+                card.index = i
+                card.frame = frame
+                card.isSelected = (i == selectedIndex)
+                newCardViews.append(card)
+            } else {
+                let card = WallpaperCardView(item: item, index: i)
+                card.frame = frame
+                card.isSelected = (i == selectedIndex)
+                card.onHover = { [weak self] idx in
+                    self?.onSelectionChanged?(idx)
+                }
+                card.onClick = { [weak self] idx in
+                    self?.onSelectionChanged?(idx)
+                }
+                card.onDoubleClick = { [weak self] idx in
+                    self?.onApplyItem?(idx)
+                }
+                addSubview(card)
+                newCardViews.append(card)
             }
-            card.onClick = { [weak self] idx in
-                self?.onSelectionChanged?(idx)
-            }
-            card.onDoubleClick = { [weak self] idx in
-                self?.onApplyItem?(idx)
-            }
-            addSubview(card)
-            cardViews.append(card)
         }
 
+        cardViews = newCardViews
         updateVisibleThumbnails()
     }
 

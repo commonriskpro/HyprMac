@@ -441,26 +441,61 @@ public final class NotificationCenterDrawer: NSPanel {
     /// Re-renders the list of notification cards from NotificationCenterManager history.
     public func reloadHistory() {
         let items = NotificationCenterManager.shared.history
-
-        // Clear existing cards
-        for view in cardsStackView.arrangedSubviews {
-            cardsStackView.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-
         emptyLabel.isHidden = !items.isEmpty
-
-        for item in items {
-            let card = NotificationCardView(notification: item)
-            card.translatesAutoresizingMaskIntoConstraints = false
-            cardsStackView.addArrangedSubview(card)
-            card.widthAnchor.constraint(equalTo: cardsStackView.widthAnchor).isActive = true
-        }
 
         dndSwitch.state = NotificationCenterManager.shared.isDoNotDisturb ? .on : .off
         let vol = VolumeMonitor.currentVolume()
         volumeSlider.doubleValue = Double(vol)
         volumeValueLabel.stringValue = "\(vol)%"
+
+        let currentCards = cardsStackView.arrangedSubviews.compactMap { $0 as? NotificationCardView }
+        let currentIDs = currentCards.map(\.notification.id)
+        let newIDs = items.map(\.id)
+
+        if currentIDs == newIDs {
+            return
+        }
+
+        var existingCardsByID: [UUID: NotificationCardView] = [:]
+        for card in currentCards {
+            existingCardsByID[card.notification.id] = card
+        }
+
+        let newIDSet = Set(newIDs)
+
+        // Remove dropped cards or non-card arranged subviews
+        for view in cardsStackView.arrangedSubviews {
+            if let card = view as? NotificationCardView {
+                if !newIDSet.contains(card.notification.id) {
+                    cardsStackView.removeArrangedSubview(card)
+                    card.removeFromSuperview()
+                }
+            } else {
+                cardsStackView.removeArrangedSubview(view)
+                view.removeFromSuperview()
+            }
+        }
+
+        for (index, item) in items.enumerated() {
+            if let card = existingCardsByID[item.id] {
+                if index < cardsStackView.arrangedSubviews.count {
+                    if cardsStackView.arrangedSubviews[index] !== card {
+                        cardsStackView.insertArrangedSubview(card, at: index)
+                    }
+                } else {
+                    cardsStackView.addArrangedSubview(card)
+                }
+            } else {
+                let card = NotificationCardView(notification: item)
+                card.translatesAutoresizingMaskIntoConstraints = false
+                if index < cardsStackView.arrangedSubviews.count {
+                    cardsStackView.insertArrangedSubview(card, at: index)
+                } else {
+                    cardsStackView.addArrangedSubview(card)
+                }
+                card.widthAnchor.constraint(equalTo: cardsStackView.widthAnchor).isActive = true
+            }
+        }
     }
 
     /// Computes drawer open and closed geometry anchored below HyprBar and 10 pt from right screen edge.
