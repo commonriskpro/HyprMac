@@ -1327,6 +1327,7 @@ func runIntegratedDaemon(configPath: String?) {
         let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
         let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
         guard config.layout.lowercased() == "dwindle" else { return }
+        let snapshot = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
         let pendingEnrollments = AXProcessObserverPool.shared.pendingEnrollmentSnapshot()
         let pendingWindowIDs = Set(pendingEnrollments.map(\.windowID))
 
@@ -1335,7 +1336,6 @@ func runIntegratedDaemon(configPath: String?) {
             // and must still run so windows created during the switch are not lost, while
             // tiling/frame mutation writes remain deferred to the next full pass.
             guard !pendingEnrollments.isEmpty else { return }
-            let snapshot = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
             let eligibleWindows = getEligibleUserWindows(in: computeTilingBounds(), excludingPIDs: [getpid()], windowListSnapshot: snapshot, pendingWindowIDs: pendingWindowIDs)
             var enrolled: [(pid: pid_t, windowID: CGWindowID)] = []
             for w in eligibleWindows where pendingWindowIDs.contains(w.windowID) {
@@ -1357,7 +1357,6 @@ func runIntegratedDaemon(configPath: String?) {
         let tilingBounds = computeTilingBounds()
 
         // Unpark any orphaned windows alive in WindowServer that are not tracked in an inactive workspace
-        let snapshot = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
         let allScreens = HiddenWindowPlacement.allCGScreens()
         if let windowList = snapshot {
             for item in windowList {

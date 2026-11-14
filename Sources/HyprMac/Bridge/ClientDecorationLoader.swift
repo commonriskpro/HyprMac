@@ -191,6 +191,9 @@ public final class ClientDecorationLoader: @unchecked Sendable {
         guard let baseDylib = resolveBinary(name: "libhyprclient.dylib") else {
             print("[HyprMac] libhyprclient.dylib not found. Skipping client attachment.")
             fflush(stdout)
+            lock.lock()
+            attachedPIDs.remove(pid)
+            lock.unlock()
             return
         }
 
@@ -236,6 +239,9 @@ public final class ClientDecorationLoader: @unchecked Sendable {
         guard let injectBin = resolveBinary(name: "hypr-inject") else {
             print("[HyprMac] hypr-inject binary not found. Skipping client attachment.")
             fflush(stdout)
+            lock.lock()
+            attachedPIDs.remove(pid)
+            lock.unlock()
             return
         }
 
@@ -245,19 +251,28 @@ public final class ClientDecorationLoader: @unchecked Sendable {
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
 
-        do {
-            try task.run()
-            task.waitUntilExit()
-            if task.terminationStatus == 0 {
+        task.terminationHandler = { [weak self] proc in
+            guard let self = self else { return }
+            if proc.terminationStatus == 0 {
                 print("[HyprMac] Successfully attached client decoration stripper to " + appName + " (PID: " + String(pid) + ")")
                 fflush(stdout)
             } else {
-                print("[HyprMac] Failed to attach client decoration stripper to " + appName + " (PID: " + String(pid) + ", exit " + String(task.terminationStatus) + ")")
+                print("[HyprMac] Failed to attach client decoration stripper to " + appName + " (PID: " + String(pid) + ", exit " + String(proc.terminationStatus) + ")")
                 fflush(stdout)
+                self.lock.lock()
+                self.attachedPIDs.remove(pid)
+                self.lock.unlock()
             }
+        }
+
+        do {
+            try task.run()
         } catch {
             print("[HyprMac] Error invoking hypr-inject for " + appName + " (PID: " + String(pid) + "): " + error.localizedDescription)
             fflush(stdout)
+            lock.lock()
+            attachedPIDs.remove(pid)
+            lock.unlock()
         }
     }
 

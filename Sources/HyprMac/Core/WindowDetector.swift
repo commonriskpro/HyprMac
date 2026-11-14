@@ -38,6 +38,7 @@ public final class WindowDetector: @unchecked Sendable {
     private let lock = NSLock()
     private var pidCache: [CGWindowID: pid_t] = [:]
     private var axElementCache: [CGWindowID: AXUIElement] = [:]
+    private var standardWindowCache: [CGWindowID: Bool] = [:]
     private var _cachedFocusedWindow: FocusedWindowInfo?
 
     private init() {
@@ -463,6 +464,7 @@ public final class WindowDetector: @unchecked Sendable {
         lock.lock()
         axElementCache.removeValue(forKey: windowID)
         pidCache.removeValue(forKey: windowID)
+        standardWindowCache.removeValue(forKey: windowID)
         lock.unlock()
     }
 
@@ -473,6 +475,7 @@ public final class WindowDetector: @unchecked Sendable {
         for wid in toRemove {
             axElementCache.removeValue(forKey: wid)
             pidCache.removeValue(forKey: wid)
+            standardWindowCache.removeValue(forKey: wid)
         }
         lock.unlock()
     }
@@ -482,6 +485,7 @@ public final class WindowDetector: @unchecked Sendable {
         lock.lock()
         axElementCache = axElementCache.filter { aliveWindowIDs.contains($0.key) }
         pidCache = pidCache.filter { aliveWindowIDs.contains($0.key) }
+        standardWindowCache = standardWindowCache.filter { aliveWindowIDs.contains($0.key) }
         lock.unlock()
     }
 
@@ -490,6 +494,7 @@ public final class WindowDetector: @unchecked Sendable {
         lock.lock()
         axElementCache.removeAll()
         pidCache.removeAll()
+        standardWindowCache.removeAll()
         _cachedFocusedWindow = nil
         lock.unlock()
     }
@@ -668,6 +673,13 @@ public final class WindowDetector: @unchecked Sendable {
 
     /// Verifies if a window is a standard application window (excluding popups, dropdowns, dialogs, tooltips).
     public func isStandardWindow(windowID: CGWindowID, pid: pid_t? = nil, timeout: TimeInterval = 0.050) -> Bool {
+        lock.lock()
+        if let cached = standardWindowCache[windowID] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
         guard let winElem = getWindowAXElement(windowID: windowID, pid: pid, timeout: timeout) else {
             return false
         }
@@ -680,23 +692,38 @@ public final class WindowDetector: @unchecked Sendable {
             invalidateWindow(windowID: windowID)
             return false
         }
-        guard roleErr == .success, let role = roleVal as? String,
-              role == (kAXWindowRole as String) || role == "AXWindow" else {
+        guard roleErr == .success, let role = roleVal as? String else {
+            return false
+        }
+        guard role == (kAXWindowRole as String) || role == "AXWindow" else {
+            lock.lock()
+            standardWindowCache[windowID] = false
+            lock.unlock()
             return false
         }
 
         // Query AXSubrole: filter out non-standard windows (popups, dropdowns, dialogs, floating toolbars)
         var subroleVal: AnyObject?
         let subroleErr = AXUIElementCopyAttributeValue(winElem, kAXSubroleAttribute as CFString, &subroleVal)
+        if subroleErr == .invalidUIElement || subroleErr == .cannotComplete {
+            invalidateWindow(windowID: windowID)
+            return false
+        }
         if subroleErr == .success, let subrole = subroleVal as? String {
             let nonStandardSubroles: Set<String> = [
                 "AXFloatingWindow", "AXDialog", "AXSystemDialog", "AXUnknown"
             ]
             if nonStandardSubroles.contains(subrole) {
+                lock.lock()
+                standardWindowCache[windowID] = false
+                lock.unlock()
                 return false
             }
         }
 
+        lock.lock()
+        standardWindowCache[windowID] = true
+        lock.unlock()
         return true
     }
 
