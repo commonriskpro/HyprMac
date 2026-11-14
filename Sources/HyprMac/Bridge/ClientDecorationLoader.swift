@@ -181,7 +181,8 @@ public final class ClientDecorationLoader: @unchecked Sendable {
     }
 
     private func performAttachment(pid: pid_t, appName: String, bundleId: String) {
-        guard kill(pid, 0) == 0 else {
+        // EPERM means the process exists but belongs to another user.
+        guard kill(pid, 0) == 0 || errno == EPERM else {
             lock.lock()
             attachedPIDs.remove(pid)
             lock.unlock()
