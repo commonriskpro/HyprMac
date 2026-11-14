@@ -2772,6 +2772,12 @@ static void shm_poll_loop(void *shm_base) {
 
     // Register trigger file for event-driven wake-up via kqueue EVFILT_VNODE
     int trigger_fd = open(HYPR_TRIGGER_PATH, O_RDWR | O_CREAT | O_TRUNC, 0666);
+    if (trigger_fd >= 0) {
+        // WindowServer's umask leaves this 0644 owned by _windowserver, which
+        // makes the desktop daemon unable to poke it. The wake-up path must be
+        // writable by the logged-in session, matching the SHM ring permissions.
+        fchmod(trigger_fd, 0666);
+    }
     if (trigger_fd >= 0 && kq >= 0) {
         struct kevent ev;
         EV_SET(&ev, trigger_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB, 0, NULL);
@@ -2863,15 +2869,18 @@ static void shm_poll_loop(void *shm_base) {
 static void init_auth_token(void) {
     arc4random_buf(g_auth_token, sizeof(g_auth_token));
     unlink(HYPR_AUTH_TOKEN_PATH);
-    int fd = open(HYPR_AUTH_TOKEN_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    // The hook runs inside WindowServer (uid 88) while the desktop daemon runs
+    // as the logged-in user, so the token follows the same session-readable
+    // policy as the SHM ring and trigger file.
+    int fd = open(HYPR_AUTH_TOKEN_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) {
-        fchmod(fd, 0600);
+        fchmod(fd, 0644);
         ssize_t written = write(fd, g_auth_token, sizeof(g_auth_token));
         if (written != (ssize_t)sizeof(g_auth_token)) {
             hypr_log("Failed to write complete auth token (%zd/%zu bytes)", written, sizeof(g_auth_token));
         }
         close(fd);
-        hypr_log("Generated auth token and wrote to %s (permissions 0600)", HYPR_AUTH_TOKEN_PATH);
+        hypr_log("Generated auth token and wrote to %s (session-readable)", HYPR_AUTH_TOKEN_PATH);
     } else {
         hypr_log("Failed to create auth token file %s: %s", HYPR_AUTH_TOKEN_PATH, strerror(errno));
     }
