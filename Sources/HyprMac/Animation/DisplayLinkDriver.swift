@@ -11,9 +11,10 @@ public final class DisplayLinkDriver: @unchecked Sendable {
     public let displayID: CGDirectDisplayID
     private var displayLink: CVDisplayLink?
     private var isRunningInternal: Bool = false
+    private var inFlightCallbacks: Int = 0
     private var lastHostTime: UInt64 = 0
     private var timebaseInfo = mach_timebase_info()
-    private let lock = NSLock()
+    private let condition = NSCondition()
     private var tickCallback: TickCallback?
 
     public init(displayID: CGDirectDisplayID = CGMainDisplayID()) {
@@ -24,6 +25,9 @@ public final class DisplayLinkDriver: @unchecked Sendable {
 
     deinit {
         stop()
+        if let link = displayLink {
+            CVDisplayLinkSetOutputCallback(link, nil, nil)
+        }
     }
 
     private func setupDisplayLink() {
@@ -50,11 +54,28 @@ public final class DisplayLinkDriver: @unchecked Sendable {
         let currentHostTime = inNow.hostTime
         var dt: Double = 0.0
 
-        lock.lock()
-        let lastTime = lastHostTime
+        let cb: TickCallback?
+        let lastTime: UInt64
+
+        condition.lock()
+        guard isRunningInternal else {
+            condition.unlock()
+            return
+        }
+        inFlightCallbacks += 1
+        lastTime = lastHostTime
         lastHostTime = currentHostTime
-        let cb = tickCallback
-        lock.unlock()
+        cb = tickCallback
+        condition.unlock()
+
+        defer {
+            condition.lock()
+            inFlightCallbacks -= 1
+            if inFlightCallbacks == 0 {
+                condition.broadcast()
+            }
+            condition.unlock()
+        }
 
         if lastTime > 0 {
             let elapsedNanos = (currentHostTime - lastTime) * UInt64(timebaseInfo.numer) / UInt64(timebaseInfo.denom)
@@ -89,15 +110,15 @@ public final class DisplayLinkDriver: @unchecked Sendable {
     }
 
     public var isRunning: Bool {
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         return isRunningInternal
     }
 
     /// Starts vblank delivery on this monitor's display link.
     public func start(onTick: @escaping TickCallback) {
-        lock.lock()
-        defer { lock.unlock() }
+        condition.lock()
+        defer { condition.unlock() }
         self.tickCallback = onTick
         self.lastHostTime = 0
         guard let link = displayLink, !isRunningInternal else { return }
@@ -109,21 +130,33 @@ public final class DisplayLinkDriver: @unchecked Sendable {
 
     /// Stops vblank delivery.
     public func stop() {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let link = displayLink, isRunningInternal else { return }
-        CVDisplayLinkStop(link)
+        condition.lock()
+        guard isRunningInternal else {
+            condition.unlock()
+            return
+        }
         isRunningInternal = false
         self.tickCallback = nil
         self.lastHostTime = 0
+        condition.unlock()
+
+        if let link = displayLink {
+            CVDisplayLinkStop(link)
+        }
+
+        condition.lock()
+        while inFlightCallbacks > 0 {
+            condition.wait()
+        }
+        condition.unlock()
     }
 
     /// Manually drives a simulated tick with delta-time dt (used for deterministic testing).
     public func step(dt: Double, timestamp: Double = 0.0) {
         let cb: TickCallback?
-        lock.lock()
+        condition.lock()
         cb = tickCallback
-        lock.unlock()
+        condition.unlock()
         cb?(timestamp, dt)
     }
 }

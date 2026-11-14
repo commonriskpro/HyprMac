@@ -116,7 +116,12 @@ public final class AnimationEngine {
 
     private let skyLight: SkyLightBridge
     public var isSimulated: Bool = false
-    private let isSteppingLock = OSAllocatedUnfairLock(initialState: false)
+    private struct SteppingState {
+        var isStepping: Bool = false
+        var pendingDt: Double = 0.0
+    }
+    private let isSteppingLock = OSAllocatedUnfairLock(initialState: SteppingState())
+    private let axSyncQueue = DispatchQueue(label: "org.hyprland.hyprmac.axframesync", qos: .userInteractive)
 
     public init(
         config: HyprConfig = .default,
@@ -559,6 +564,9 @@ public final class AnimationEngine {
         }
         activeWorkspaceAnimation = nil
         if activeAnimations.isEmpty && !isSimulated {
+            isSteppingLock.withLock { state in
+                state.pendingDt = 0.0
+            }
             displayLink.stop()
         }
     }
@@ -600,6 +608,9 @@ public final class AnimationEngine {
             skyLight.setWindowAlpha(windowID: bWid, alpha: Float(config.windowOpacity))
         }
         if activeAnimations.isEmpty && activeWorkspaceAnimation == nil && !isSimulated {
+            isSteppingLock.withLock { state in
+                state.pendingDt = 0.0
+            }
             displayLink.stop()
         }
     }
@@ -624,8 +635,9 @@ public final class AnimationEngine {
             HyprServerBridge.shared.resetWorkspaceTransforms(windowIDs: allResetIDs)
         }
         activeAnimations.removeAll()
-        isSteppingLock.withLock { isStepping in
-            isStepping = false
+        isSteppingLock.withLock { state in
+            state.isStepping = false
+            state.pendingDt = 0.0
         }
         if !isSimulated {
             displayLink.stop()
@@ -638,6 +650,9 @@ public final class AnimationEngine {
     /// Can be called directly by tests or triggered by DisplayLinkDriver.
     public func step(dt: Double) {
         guard !activeAnimations.isEmpty || activeWorkspaceAnimation != nil else {
+            isSteppingLock.withLock { state in
+                state.pendingDt = 0.0
+            }
             if !isSimulated && displayLink.isRunning {
                 displayLink.stop()
             }
@@ -751,6 +766,8 @@ public final class AnimationEngine {
         var completedWids: [CGWindowID] = []
         var windowTransformEntries: [(windowID: CGWindowID, transform: CGAffineTransform, alpha: Float)] = []
 
+        let frameTxRef = activeAnimations.isEmpty ? nil : skyLight.transactionCreate()
+
         for (wid, anim) in activeAnimations {
             anim.elapsed += dt
             let normalizedTime = min(max(anim.elapsed / anim.duration, 0.0), 1.0)
@@ -817,12 +834,11 @@ public final class AnimationEngine {
                 let transform = CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: tx, ty: ty)
 
                 // Always apply transform via SkyLight
-                if let txRef = skyLight.transactionCreate() {
+                if let txRef = frameTxRef {
                     skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: transform)
                     if let bWid = anim.borderWindowID {
                         skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: transform)
                     }
-                    skyLight.transactionCommit(transaction: txRef, sync: false)
                 } else {
                     skyLight.setWindowTransform(windowID: wid, transform: transform)
                     if let bWid = anim.borderWindowID {
@@ -840,33 +856,46 @@ public final class AnimationEngine {
             }
         }
 
+        if let txRef = frameTxRef {
+            skyLight.transactionCommit(transaction: txRef, sync: false)
+        }
+
         if HyprServerBridge.shared.isAvailable && !windowTransformEntries.isEmpty {
             HyprServerBridge.shared.setWorkspaceTransform(entries: windowTransformEntries)
         }
 
         // Finalize completed animations
+        if !completedWids.isEmpty {
+            let completionTxRef = skyLight.transactionCreate()
+            for wid in completedWids {
+                guard let anim = activeAnimations[wid] else { continue }
+                if let txRef = completionTxRef {
+                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
+                    if let bWid = anim.borderWindowID {
+                        skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: .identity)
+                    }
+                } else {
+                    skyLight.setWindowTransform(windowID: wid, transform: .identity)
+                    if let bWid = anim.borderWindowID {
+                        skyLight.setWindowTransform(windowID: bWid, transform: .identity)
+                    }
+                }
+            }
+            if let txRef = completionTxRef {
+                skyLight.transactionCommit(transaction: txRef, sync: true)
+            }
+        }
+
         for wid in completedWids {
             guard let anim = activeAnimations.removeValue(forKey: wid) else { continue }
 
-            // 1. Reset transforms to identity and restore target opacity
+            // 1. Restore target opacity
             let finalAlpha = Float(config.windowOpacity)
             var resetIDs: [CGWindowID] = [wid]
             if let bWid = anim.borderWindowID {
                 resetIDs.append(bWid)
             }
 
-            if let txRef = skyLight.transactionCreate() {
-                skyLight.transactionSetWindowTransform(transaction: txRef, windowID: wid, transform: .identity)
-                if let bWid = anim.borderWindowID {
-                    skyLight.transactionSetWindowTransform(transaction: txRef, windowID: bWid, transform: .identity)
-                }
-                skyLight.transactionCommit(transaction: txRef, sync: true)
-            } else {
-                skyLight.setWindowTransform(windowID: wid, transform: .identity)
-                if let bWid = anim.borderWindowID {
-                    skyLight.setWindowTransform(windowID: bWid, transform: .identity)
-                }
-            }
             skyLight.setWindowAlpha(windowID: wid, alpha: finalAlpha)
             if let bWid = anim.borderWindowID {
                 skyLight.setWindowAlpha(windowID: bWid, alpha: finalAlpha)
@@ -878,15 +907,23 @@ public final class AnimationEngine {
 
             // 2. Apply final physical frame atomically via Accessibility
             if anim.kind != .windowsOut && anim.kind != .minimize {
-                WindowDetector.shared.setWindowFrame(windowID: wid, frame: anim.targetFrame)
+                let targetFrame = anim.targetFrame
+                axSyncQueue.async {
+                    WindowDetector.shared.setWindowFrame(windowID: wid, frame: targetFrame)
+                }
             }
 
             // 3. Invoke completion callback
             anim.onComplete?(wid)
         }
 
-        if activeAnimations.isEmpty && activeWorkspaceAnimation == nil && !isSimulated {
-            displayLink.stop()
+        if activeAnimations.isEmpty && activeWorkspaceAnimation == nil {
+            isSteppingLock.withLock { state in
+                state.pendingDt = 0.0
+            }
+            if !isSimulated {
+                displayLink.stop()
+            }
         }
     }
 
@@ -896,21 +933,26 @@ public final class AnimationEngine {
         guard (activeWorkspaceAnimation != nil || !activeAnimations.isEmpty), !displayLink.isRunning, !isSimulated else { return }
         displayLink.start { [weak self] _, dt in
             guard let self = self else { return }
-            let shouldStep = self.isSteppingLock.withLock { isStepping -> Bool in
-                if isStepping { return false }
-                isStepping = true
-                return true
+            let (shouldStep, effectiveDt) = self.isSteppingLock.withLock { state -> (Bool, Double) in
+                if state.isStepping {
+                    state.pendingDt += dt
+                    return (false, 0.0)
+                }
+                state.isStepping = true
+                let totalDt = min(dt + state.pendingDt, 0.25)
+                state.pendingDt = 0.0
+                return (true, totalDt)
             }
             guard shouldStep else { return }
 
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 defer {
-                    self.isSteppingLock.withLock { isStepping in
-                        isStepping = false
+                    self.isSteppingLock.withLock { state in
+                        state.isStepping = false
                     }
                 }
-                self.step(dt: dt)
+                self.step(dt: effectiveDt)
             }
         }
     }
