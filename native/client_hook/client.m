@@ -1489,7 +1489,10 @@ static void strip_window_decorations(NSWindow *window) {
             objc_setAssociatedObject(window, kHyprWindowStrippedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
     } @catch (NSException *exception) {
-        // Safe fail-closed
+        fprintf(stderr, "[HyprMac][decoration] strip failed on wid=%ld: %s - %s\n",
+                (long)window.windowNumber,
+                exception.name.UTF8String ?: "(unknown)",
+                exception.reason.UTF8String ?: "(no reason)");
     } @finally {
         s_in_strip = NO;
     }
