@@ -299,17 +299,17 @@ public final class ConfigParser {
                 config.barColors.clock = cleanVal
             case "clock", "time":
                 if cleanVal.lowercased() == "12h" || cleanVal.lowercased() == "12" || cleanVal.lowercased() == "12-hour" {
-                    config.clockFormat = "h:mm a  EEE"
+                    config.clockFormat = "h:mm a  EEE, MMM d"
                 } else if cleanVal.lowercased() == "24h" || cleanVal.lowercased() == "24" || cleanVal.lowercased() == "24-hour" {
-                    config.clockFormat = "HH:mm  EEE"
+                    config.clockFormat = "HH:mm  EEE, MMM d"
                 } else {
                     config.barColors.clock = cleanVal
                 }
             case "clock_format", "clockformat", "time_format", "timeformat", "format_clock", "format_time":
                 if cleanVal.lowercased() == "12h" || cleanVal.lowercased() == "12" || cleanVal.lowercased() == "12-hour" {
-                    config.clockFormat = "h:mm a  EEE"
+                    config.clockFormat = "h:mm a  EEE, MMM d"
                 } else if cleanVal.lowercased() == "24h" || cleanVal.lowercased() == "24" || cleanVal.lowercased() == "24-hour" {
-                    config.clockFormat = "HH:mm  EEE"
+                    config.clockFormat = "HH:mm  EEE, MMM d"
                 } else {
                     var fmt = cleanVal
                     if fmt.hasPrefix("{:") && fmt.hasSuffix("}") {
@@ -319,9 +319,9 @@ public final class ConfigParser {
                 }
             case "clock_12h", "clock12h", "time_12h", "time12h":
                 if parseBool(cleanVal) == true {
-                    config.clockFormat = "h:mm a  EEE"
+                    config.clockFormat = "h:mm a  EEE, MMM d"
                 } else if parseBool(cleanVal) == false {
-                    config.clockFormat = "HH:mm  EEE"
+                    config.clockFormat = "HH:mm  EEE, MMM d"
                 }
             case "col.volume", "volume":
                 config.barColors.volume = cleanVal

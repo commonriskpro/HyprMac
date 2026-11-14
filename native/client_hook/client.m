@@ -8,8 +8,17 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <mach-o/dyld.h>
+#import <mach-o/loader.h>
+#import <mach/mach.h>
+#import <mach/mach_vm.h>
+#import <mach/port.h>
+#import <mach/vm_prot.h>
+#import <mach/vm_region.h>
+#import <mach/vm_types.h>
 #import <unistd.h>
 #import <stdio.h>
+#import <string.h>
 
 #pragma mark - Helper Functions
 
@@ -139,6 +148,197 @@ __attribute__((visibility("default")))
 HyprZenDrawer *hypr_get_drawer(NSWindow *win) {
     if (!win) return nil;
     return objc_getAssociatedObject(win, kHyprZenDrawerKey);
+}
+
+#pragma mark - Caption Slot Release
+//
+// Removing the traffic lights is only half of the job: the leading titlebar
+// slot they hold must be released as well. Otherwise the app keeps reserving
+// an empty gutter where the buttons used to live and everything in that bar
+// stays pushed to the right (Chromium tab strips are the most visible case:
+// ~86pt of dead space in front of the first tab).
+//
+// The reservation exists in two independent flavours:
+//
+//   A) OS driven - AppKit reserves the slot inside NSThemeFrame. Apps that
+//      lay their titlebar out through AppKit follow that reservation, so
+//      collapsing it moves their content back to the window edge.
+//
+//   B) App driven - Chromium (and every browser built on it) hardcodes the
+//      caption button rectangle and reserves the slot itself, ignoring the
+//      OS traffic light state. For those the hardcoded rectangle is
+//      neutralized so the app's own layout drops the reservation.
+
+static BOOL hypr_window_releases_caption_slot(NSWindow *window) {
+    return [objc_getAssociatedObject(window, kHyprWindowStrippedKey) boolValue];
+}
+
+// --- A) OS driven reservation -----------------------------------------------
+
+static double (*s_orig_themeFrame_minXTitlebarButtonsWidth)(id, SEL) = NULL;
+static double (*s_orig_themeFrame_minXTitlebarWidgetInset)(id, SEL) = NULL;
+
+static double hypr_themeFrame_minXTitlebarButtonsWidth(id self, SEL _cmd) {
+    NSWindow *window = [(NSView *)self window];
+    if (window && hypr_window_releases_caption_slot(window)) {
+        return 0.0;
+    }
+    return s_orig_themeFrame_minXTitlebarButtonsWidth(self, _cmd);
+}
+
+static double hypr_themeFrame_minXTitlebarWidgetInset(id self, SEL _cmd) {
+    NSWindow *window = [(NSView *)self window];
+    if (window && hypr_window_releases_caption_slot(window)) {
+        return 0.0;
+    }
+    return s_orig_themeFrame_minXTitlebarWidgetInset(self, _cmd);
+}
+
+// --- B) App driven reservation (Chromium family) ----------------------------
+
+// Chromium keeps the caption button rectangle in its read only literal pool
+// as two adjacent 16 byte blocks: the legacy one (20, 11, 54, 16) and the
+// macOS 26+ one (12, 10, 62, 18). Both are consumed by
+// BrowserFrameViewMac::GetCaptionButtonBounds(); an empty rectangle makes the
+// browser skip the leading exclusion altogether.
+static const float kHyprChromiumLegacyCaptionRect[4] = {20.0f, 11.0f, 54.0f, 16.0f};
+static const float kHyprChromiumModernCaptionRect[4] = {12.0f, 10.0f, 62.0f, 18.0f};
+
+static BOOL hypr_patch_caption_rect_width(const void *block) {
+    vm_size_t pageSize = (vm_size_t)getpagesize();
+    vm_address_t page = (vm_address_t)block & ~(vm_address_t)(pageSize - 1);
+    vm_prot_t originalProtection = VM_PROT_READ;
+    vm_address_t region = page;
+    vm_size_t regionSize = pageSize;
+    mach_port_t objectName = MACH_PORT_NULL;
+    vm_region_basic_info_data_64_t regionInfo;
+    mach_msg_type_number_t regionInfoCount = VM_REGION_BASIC_INFO_COUNT_64;
+
+    if (vm_region_64(mach_task_self(), &region, &regionSize,
+                     (int)VM_REGION_BASIC_INFO_64,
+                     (vm_region_info_t)&regionInfo, &regionInfoCount,
+                     &objectName) == KERN_SUCCESS) {
+        originalProtection = regionInfo.protection;
+    }
+    if (vm_protect(mach_task_self(), page, pageSize, FALSE,
+                   VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS) {
+        return NO;
+    }
+
+    float zero = 0.0f;
+    memcpy((void *)((const uint8_t *)block + 2 * sizeof(float)), &zero, sizeof(float));
+
+    vm_protect(mach_task_self(), page, pageSize, FALSE, originalProtection);
+    return YES;
+}
+
+static void hypr_scan_image_for_caption_rect(const struct mach_header *rawHeader, intptr_t slide) {
+    if (!rawHeader || rawHeader->magic != MH_MAGIC_64) return;
+
+    const struct mach_header_64 *header = (const struct mach_header_64 *)rawHeader;
+    const uint8_t *commandsStart = (const uint8_t *)header + sizeof(struct mach_header_64);
+    const uint8_t *commandsEnd = commandsStart + header->sizeofcmds;
+    const struct load_command *command = (const struct load_command *)commandsStart;
+
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        if ((const uint8_t *)command + sizeof(struct load_command) > commandsEnd) {
+            break;
+        }
+        if (command->cmdsize < sizeof(struct load_command)) {
+            break;
+        }
+        if ((const uint8_t *)command + command->cmdsize > commandsEnd) {
+            break;
+        }
+
+        if (command->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *segment =
+                (const struct segment_command_64 *)command;
+            if ((segment->initprot & VM_PROT_READ) != 0 &&
+                strncmp(segment->segname, "__TEXT", 16) == 0) {
+                size_t size = (size_t)(segment->filesize < segment->vmsize ? segment->filesize : segment->vmsize);
+                if (size > sizeof(kHyprChromiumModernCaptionRect) && segment->vmaddr != 0) {
+                    const uint8_t *base = (const uint8_t *)((uintptr_t)segment->vmaddr + (uintptr_t)slide);
+                    // The width (62.0f) is the rarest field of the rectangle, use
+                    // it as the anchor and verify the full block afterwards.
+                    const uint8_t anchor[4] = {0x00, 0x00, 0x7C, 0x42};
+                    size_t limit = size - sizeof(kHyprChromiumModernCaptionRect);
+                    for (size_t offset = 0; offset <= limit; offset++) {
+                        if (memcmp(base + offset + 2 * sizeof(float), anchor, sizeof(anchor)) != 0) {
+                            continue;
+                        }
+                        if (memcmp(base + offset, kHyprChromiumModernCaptionRect,
+                                   sizeof(kHyprChromiumModernCaptionRect)) != 0) {
+                            continue;
+                        }
+                        hypr_patch_caption_rect_width(base + offset);
+                        // The legacy rectangle lives in the same literal pool.
+                        for (int delta = -64; delta <= 64; delta += 16) {
+                            if (delta == 0) continue;
+                            if ((long)offset + delta < 0) continue;
+                            size_t legacyOffset = (size_t)((long)offset + delta);
+                            if (legacyOffset + sizeof(kHyprChromiumLegacyCaptionRect) > size) {
+                                continue;
+                            }
+                            if (memcmp(base + legacyOffset, kHyprChromiumLegacyCaptionRect,
+                                       sizeof(kHyprChromiumLegacyCaptionRect)) == 0) {
+                                hypr_patch_caption_rect_width(base + legacyOffset);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        command = (const struct load_command *)((const uint8_t *)command + command->cmdsize);
+    }
+}
+
+static void hypr_release_app_caption_slot_impl(void);
+static void hypr_relayout_windows_for_caption_slot(void);
+
+static void hypr_release_app_caption_slot(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        // Helper processes never own a window, so there is nothing to release
+        // for them and the scan would be pure overhead.
+        NSString *executable = [[NSBundle mainBundle] executablePath];
+        if (executable &&
+            [executable rangeOfString:@"/Contents/Frameworks/"].location != NSNotFound) {
+            return;
+        }
+        hypr_release_app_caption_slot_impl();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            hypr_relayout_windows_for_caption_slot();
+        });
+    });
+}
+
+static void hypr_release_app_caption_slot_impl(void) {
+    uint32_t imageCount = _dyld_image_count();
+    for (uint32_t i = 0; i < imageCount; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (name && (strncmp(name, "/System/Library/", 16) == 0 ||
+                     strncmp(name, "/usr/lib/", 9) == 0)) {
+            continue;
+        }
+        hypr_scan_image_for_caption_rect(_dyld_get_image_header(i),
+                                         _dyld_get_image_vmaddr_slide(i));
+    }
+}
+
+// Chromium caches its caption button rectangle in the layout of the tab
+// strip, so the window has to be laid out again once the reservation is
+// gone. Toggling the full size content mask is the very same trick Chromium
+// uses for that purpose.
+static void hypr_relayout_windows_for_caption_slot(void) {
+    for (NSWindow *window in [NSApp windows]) {
+        if (!hypr_window_releases_caption_slot(window)) continue;
+        NSUInteger styleMask = window.styleMask;
+        if (styleMask & NSWindowStyleMaskFullSizeContentView) {
+            [window setStyleMask:styleMask ^ NSWindowStyleMaskFullSizeContentView];
+            [window setStyleMask:styleMask];
+        }
+    }
 }
 
 #pragma mark - Zen Sidebar Drawer
@@ -2153,6 +2353,20 @@ static void hypr_install_hooks_on_main(void) {
         // Swizzle NSThemeFrame surface rounding and corner calculation methods
         Class themeFrameClass = objc_getClass("NSThemeFrame");
         if (themeFrameClass) {
+            // Release the leading titlebar slot the hidden traffic lights were
+            // reserving so the app content moves back to the window edge.
+            Method mButtonsWidth = class_getInstanceMethod(themeFrameClass, sel_registerName("_minXTitlebarButtonsWidth"));
+            if (mButtonsWidth) {
+                s_orig_themeFrame_minXTitlebarButtonsWidth = (double (*)(id, SEL))method_getImplementation(mButtonsWidth);
+                method_setImplementation(mButtonsWidth, (IMP)hypr_themeFrame_minXTitlebarButtonsWidth);
+            }
+
+            Method mWidgetInset = class_getInstanceMethod(themeFrameClass, sel_registerName("_minXTitlebarWidgetInset"));
+            if (mWidgetInset) {
+                s_orig_themeFrame_minXTitlebarWidgetInset = (double (*)(id, SEL))method_getImplementation(mWidgetInset);
+                method_setImplementation(mWidgetInset, (IMP)hypr_themeFrame_minXTitlebarWidgetInset);
+            }
+
             Method mShouldRound = class_getInstanceMethod(themeFrameClass, sel_registerName("_shouldRoundCornersForSurface"));
             if (mShouldRound) {
                 s_orig_themeFrame_shouldRoundCornersForSurface = (BOOL (*)(id, SEL))method_getImplementation(mShouldRound);
@@ -2413,6 +2627,11 @@ static void hypr_client_entry(void) {
     }
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        // Apps that reserve the caption button slot themselves (Chromium and
+        // friends) have to release it before their first window is laid out.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            hypr_release_app_caption_slot();
+        });
         if ([NSThread isMainThread]) {
             hypr_install_hooks_on_main();
         } else {

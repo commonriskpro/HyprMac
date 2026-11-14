@@ -344,7 +344,7 @@ public final class WindowDetector: @unchecked Sendable {
     }
 
     /// Resolves the AXUIElement window handle corresponding to the CGWindowID.
-    public func getWindowAXElement(windowID: CGWindowID, pid: pid_t? = nil) -> AXUIElement? {
+    public func getWindowAXElement(windowID: CGWindowID, pid: pid_t? = nil, timeout: TimeInterval = 0.050) -> AXUIElement? {
         lock.lock()
         if let cached = axElementCache[windowID] {
             lock.unlock()
@@ -359,7 +359,7 @@ public final class WindowDetector: @unchecked Sendable {
         guard let validPID = appPID, validPID > 0 else { return nil }
 
         let appElement = AXUIElementCreateApplication(validPID)
-        AXUIElementSetMessagingTimeout(appElement, 0.050)
+        AXUIElementSetMessagingTimeout(appElement, Float(timeout))
         var windowsVal: AnyObject?
         guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsVal) == .success,
               let axWindows = windowsVal as? [AXUIElement] else {
@@ -369,7 +369,7 @@ public final class WindowDetector: @unchecked Sendable {
         // Filter elements to strictly valid AXWindows (excluding non-window elements like Finder Desktop AXScrollArea)
         var windowElements: [AXUIElement] = []
         for elem in axWindows {
-            AXUIElementSetMessagingTimeout(elem, 0.050)
+            AXUIElementSetMessagingTimeout(elem, Float(timeout))
             var roleVal: AnyObject?
             if AXUIElementCopyAttributeValue(elem, kAXRoleAttribute as CFString, &roleVal) == .success,
                let role = roleVal as? String, role == (kAXWindowRole as String) {
@@ -632,8 +632,8 @@ public final class WindowDetector: @unchecked Sendable {
     }
 
     /// Checks whether a window is minimized via Accessibility.
-    public func isWindowMinimized(windowID: CGWindowID, pid: pid_t? = nil) -> Bool {
-        guard let winElem = getWindowAXElement(windowID: windowID, pid: pid) else {
+    public func isWindowMinimized(windowID: CGWindowID, pid: pid_t? = nil, timeout: TimeInterval = 0.050) -> Bool {
+        guard let winElem = getWindowAXElement(windowID: windowID, pid: pid, timeout: timeout) else {
             return false
         }
         var minVal: AnyObject?
@@ -667,10 +667,11 @@ public final class WindowDetector: @unchecked Sendable {
     }
 
     /// Verifies if a window is a standard application window (excluding popups, dropdowns, dialogs, tooltips).
-    public func isStandardWindow(windowID: CGWindowID, pid: pid_t? = nil) -> Bool {
-        guard let winElem = getWindowAXElement(windowID: windowID, pid: pid) else {
+    public func isStandardWindow(windowID: CGWindowID, pid: pid_t? = nil, timeout: TimeInterval = 0.050) -> Bool {
+        guard let winElem = getWindowAXElement(windowID: windowID, pid: pid, timeout: timeout) else {
             return false
         }
+        AXUIElementSetMessagingTimeout(winElem, Float(timeout))
 
         // Query AXRole: must be AXWindow (kAXWindowRole)
         var roleVal: AnyObject?
@@ -801,7 +802,8 @@ public final class WindowDetector: @unchecked Sendable {
     public func getEligibleWindows(
         in screenBounds: CGRect? = nil,
         excludingPIDs: Set<pid_t> = [getpid()],
-        windowListSnapshot: [[String: Any]]? = nil
+        windowListSnapshot: [[String: Any]]? = nil,
+        pendingWindowIDs: Set<CGWindowID> = []
     ) -> [FocusedWindowInfo] {
         let windowList = windowListSnapshot ?? (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]])
         guard let list = windowList else {
@@ -821,7 +823,7 @@ public final class WindowDetector: @unchecked Sendable {
             guard let layer = item[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
             if windowListSnapshot != nil {
                 let isOnscreen = (item[kCGWindowIsOnscreen as String] as? Bool) ?? ((item[kCGWindowIsOnscreen as String] as? Int) == 1)
-                if !isOnscreen { continue }
+                if !isOnscreen && !pendingWindowIDs.contains(wid) { continue }
             }
             guard let pid = item[kCGWindowOwnerPID as String] as? pid_t, !excludingPIDs.contains(pid) else { continue }
             guard let appName = item[kCGWindowOwnerName as String] as? String, !excludedApps.contains(appName) else { continue }
@@ -834,8 +836,9 @@ public final class WindowDetector: @unchecked Sendable {
 
             guard rect.width >= 100 && rect.height >= 100 else { continue }
             guard !HiddenWindowPlacement.isParkedOrHidden(rect) else { continue }
-            guard !isWindowMinimized(windowID: wid, pid: pid) else { continue }
-            guard isStandardWindow(windowID: wid, pid: pid) else { continue }
+            let axTimeout: TimeInterval = pendingWindowIDs.contains(wid) ? 0.120 : 0.050
+            guard !isWindowMinimized(windowID: wid, pid: pid, timeout: axTimeout) else { continue }
+            guard isStandardWindow(windowID: wid, pid: pid, timeout: axTimeout) else { continue }
 
             if let screen = screenBounds {
                 guard rect.intersects(screen) else { continue }

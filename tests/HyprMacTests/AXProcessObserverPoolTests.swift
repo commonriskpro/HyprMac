@@ -132,4 +132,50 @@ final class AXProcessObserverPoolTests: XCTestCase {
 
         wait(for: [exp], timeout: 1.0)
     }
+
+    func testHasPendingEnrollmentsAndLifecycle() {
+        let pool = AXProcessObserverPool()
+        let pid1: pid_t = 12345
+        let pid2: pid_t = 67890
+
+        XCTAssertFalse(pool.hasPendingEnrollments(for: pid1))
+        XCTAssertFalse(pool.hasPendingEnrollments(for: pid2))
+        XCTAssertTrue(pool.pendingEnrollmentSnapshot().isEmpty)
+
+        // 1. Enqueue pending enrollments
+        pool.schedulePendingEnrollment(pid: pid1, windowIDs: [101, 102])
+        XCTAssertTrue(pool.hasPendingEnrollments(for: pid1))
+        XCTAssertFalse(pool.hasPendingEnrollments(for: pid2))
+        XCTAssertEqual(pool.pendingEnrollmentSnapshot().count, 2)
+
+        // 2. Partial completion
+        pool.completePendingEnrollment([(pid: pid1, windowID: 101)])
+        XCTAssertTrue(pool.hasPendingEnrollments(for: pid1))
+        XCTAssertEqual(pool.pendingEnrollmentSnapshot().count, 1)
+
+        // 3. Full completion
+        pool.completePendingEnrollment([(pid: pid1, windowID: 102)])
+        XCTAssertFalse(pool.hasPendingEnrollments(for: pid1))
+        XCTAssertTrue(pool.pendingEnrollmentSnapshot().isEmpty)
+
+        // 4. Prune dead windows
+        pool.schedulePendingEnrollment(pid: pid2, windowIDs: [201, 202])
+        XCTAssertTrue(pool.hasPendingEnrollments(for: pid2))
+        pool.prunePendingEnrollments(aliveWindowIDs: [201])
+        XCTAssertTrue(pool.hasPendingEnrollments(for: pid2))
+        XCTAssertEqual(pool.pendingEnrollmentSnapshot().count, 1)
+        XCTAssertEqual(pool.pendingEnrollmentSnapshot().first?.windowID, 201)
+
+        pool.prunePendingEnrollments(aliveWindowIDs: [])
+        XCTAssertFalse(pool.hasPendingEnrollments(for: pid2))
+        XCTAssertTrue(pool.pendingEnrollmentSnapshot().isEmpty)
+
+        // 5. Cleanup on stop
+        pool.start()
+        pool.schedulePendingEnrollment(pid: pid1, windowIDs: [301])
+        XCTAssertTrue(pool.hasPendingEnrollments(for: pid1))
+        pool.stop()
+        XCTAssertFalse(pool.hasPendingEnrollments(for: pid1))
+        XCTAssertTrue(pool.pendingEnrollmentSnapshot().isEmpty)
+    }
 }

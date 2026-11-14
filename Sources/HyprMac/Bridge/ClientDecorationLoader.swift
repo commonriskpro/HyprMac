@@ -203,7 +203,21 @@ public final class ClientDecorationLoader: @unchecked Sendable {
             let containerDylib = containerTmp + "/libhyprclient.dylib"
             do {
                 try FileManager.default.createDirectory(atPath: containerTmp, withIntermediateDirectories: true)
-                if !FileManager.default.fileExists(atPath: containerDylib) {
+                var needsCopy = true
+                if FileManager.default.fileExists(atPath: containerDylib) {
+                    let baseAttrs = try? FileManager.default.attributesOfItem(atPath: baseDylib)
+                    let destAttrs = try? FileManager.default.attributesOfItem(atPath: containerDylib)
+                    let baseDate = (baseAttrs?[.modificationDate] as? Date) ?? Date.distantFuture
+                    let destDate = (destAttrs?[.modificationDate] as? Date) ?? Date.distantPast
+                    let baseSize = (baseAttrs?[.size] as? UInt64) ?? 0
+                    let destSize = (destAttrs?[.size] as? UInt64) ?? 0
+                    if baseDate <= destDate && baseSize == destSize {
+                        needsCopy = false
+                    } else {
+                        try? FileManager.default.removeItem(atPath: containerDylib)
+                    }
+                }
+                if needsCopy {
                     try FileManager.default.copyItem(atPath: baseDylib, toPath: containerDylib)
                 }
                 targetDylib = containerDylib
@@ -295,13 +309,17 @@ public final class ClientDecorationLoader: @unchecked Sendable {
 
     private func resolveBinary(name: String) -> String? {
         let home = NSHomeDirectory()
-        let searchPaths = [
+        var searchPaths: [String] = []
+        if let execDir = Bundle.main.executableURL?.deletingLastPathComponent().path {
+            searchPaths.append(execDir + "/" + name)
+        }
+        searchPaths.append(contentsOf: [
             Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(name).path,
             FileManager.default.currentDirectoryPath + "/build/" + name,
             home + "/.config/hypr/" + name,
             "/usr/local/bin/" + name,
             "/usr/local/lib/" + name
-        ]
+        ])
 
         for path in searchPaths {
             if FileManager.default.fileExists(atPath: path) {

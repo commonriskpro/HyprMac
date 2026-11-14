@@ -255,9 +255,15 @@ func runStrip() {
 func getEligibleUserWindows(
     in screenBounds: CGRect,
     excludingPIDs: Set<pid_t> = [getpid()],
-    windowListSnapshot: [[String: Any]]? = nil
+    windowListSnapshot: [[String: Any]]? = nil,
+    pendingWindowIDs: Set<CGWindowID> = []
 ) -> [(windowID: CGWindowID, pid: pid_t, appName: String, title: String, bounds: CGRect, bundleID: String)] {
-    return WindowDetector.shared.getEligibleWindows(in: screenBounds, excludingPIDs: excludingPIDs, windowListSnapshot: windowListSnapshot).map {
+    return WindowDetector.shared.getEligibleWindows(
+        in: screenBounds,
+        excludingPIDs: excludingPIDs,
+        windowListSnapshot: windowListSnapshot,
+        pendingWindowIDs: pendingWindowIDs
+    ).map {
         ($0.windowID, $0.processID, $0.appName, $0.title, $0.bounds, $0.bundleID)
     }
 }
@@ -1320,8 +1326,29 @@ func runIntegratedDaemon(configPath: String?) {
         let now = ProcessInfo.processInfo.systemUptime
         let lastSwitch = max(transitionTracker.lastWorkspaceSwitchTime, workspaceManager.lastWorkspaceSwitchTime)
         let isSettleWindow = (now - lastSwitch) < 0.500 || workspaceManager.isSwitchInProgress(settleInterval: 0.500)
-        guard !isSettleWindow else { return }
         guard config.layout.lowercased() == "dwindle" else { return }
+        let pendingEnrollments = AXProcessObserverPool.shared.pendingEnrollmentSnapshot()
+        let pendingWindowIDs = Set(pendingEnrollments.map(\.windowID))
+
+        if isSettleWindow {
+            // During a workspace-switch settle window, enrollment is an idempotent SSOT insert
+            // and must still run so windows created during the switch are not lost, while
+            // tiling/frame mutation writes remain deferred to the next full pass.
+            guard !pendingEnrollments.isEmpty else { return }
+            let snapshot = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
+            let eligibleWindows = getEligibleUserWindows(in: computeTilingBounds(), excludingPIDs: [getpid()], windowListSnapshot: snapshot, pendingWindowIDs: pendingWindowIDs)
+            var enrolled: [(pid: pid_t, windowID: CGWindowID)] = []
+            for w in eligibleWindows where pendingWindowIDs.contains(w.windowID) {
+                if workspaceManager.workspace(for: w.windowID) == nil {
+                    workspaceManager.assignWindow(wid: w.windowID, to: workspaceManager.activeWorkspace, pid: w.pid)
+                } else {
+                    workspaceManager.assignWindowIfNeeded(wid: w.windowID, pid: w.pid)
+                }
+                enrolled.append((pid: w.pid, windowID: w.windowID))
+            }
+            AXProcessObserverPool.shared.completePendingEnrollment(enrolled)
+            return
+        }
 
         AXProcessObserverPool.shared.isSuppressingTilingEvents = true
         defer { AXProcessObserverPool.shared.isSuppressingTilingEvents = false }
@@ -1347,7 +1374,7 @@ func runIntegratedDaemon(configPath: String?) {
                 }
             }
         }
-        let eligibleWindows = getEligibleUserWindows(in: tilingBounds, excludingPIDs: [getpid()], windowListSnapshot: snapshot)
+        let eligibleWindows = getEligibleUserWindows(in: tilingBounds, excludingPIDs: [getpid()], windowListSnapshot: snapshot, pendingWindowIDs: pendingWindowIDs)
         let currentIDs = eligibleWindows.map { $0.windowID }
 
         // Auto-assign any newly discovered window to active workspace with PID
@@ -1365,6 +1392,10 @@ func runIntegratedDaemon(configPath: String?) {
                 applyDecorationsToWindow(w.windowID)
             }
         }
+        let eligibleWindowIDs = Set(eligibleWindows.map(\.windowID))
+        AXProcessObserverPool.shared.completePendingEnrollment(
+            pendingEnrollments.filter { eligibleWindowIDs.contains($0.windowID) }
+        )
 
         // Check minimization status for each managed window in workspaceManager
         var minimizedChanged = false
@@ -1392,6 +1423,8 @@ func runIntegratedDaemon(configPath: String?) {
         let allAliveWindowIDs = WindowDetector.shared.getAllAliveWindowIDs(fromSnapshot: snapshot)
         WindowDetector.shared.pruneCache(aliveWindowIDs: allAliveWindowIDs)
         stateStore.prune(aliveWindowIDs: allAliveWindowIDs)
+        // Symmetric cleanup: pending identities whose windows are gone can never enroll.
+        AXProcessObserverPool.shared.prunePendingEnrollments(aliveWindowIDs: allAliveWindowIDs)
 
         // Purge dead windows across all workspaces
         for wid in workspaceManager.windowOrder {
@@ -1730,6 +1763,32 @@ func runIntegratedDaemon(configPath: String?) {
             updateFocusAndBorders(false)
         }
     }
+
+    let handleReactiveWindowEvent: @MainActor (pid_t, CGWindowID?) -> Void = { pid, maybeWid in
+        if let wid = maybeWid, wid > 0 {
+            let isUnmanagedCandidate = !dwindleEngine.managedWindowSet.contains(wid) &&
+                                       !keyManager.isFloating(windowID: wid) &&
+                                       wid != CGWindowID(bar.windowNumber) &&
+                                       !workspaceManager.isMinimized(wid)
+            if isUnmanagedCandidate || axPool.hasPendingEnrollments(for: pid) {
+                axPool.schedulePendingEnrollment(pid: pid, windowIDs: [wid])
+                axPool.scheduleCoalescedTilingUpdate()
+            }
+        } else if axPool.hasPendingEnrollments(for: pid) {
+            axPool.scheduleCoalescedTilingUpdate()
+        }
+    }
+
+    axPool.onTitleChangedWithWindow = { pid, maybeWid in
+        handleReactiveWindowEvent(pid, maybeWid)
+    }
+    axPool.onMainWindowChanged = { pid, maybeWid in
+        handleReactiveWindowEvent(pid, maybeWid)
+    }
+    axPool.onFocusedUIElementChanged = { pid, maybeWid in
+        handleReactiveWindowEvent(pid, maybeWid)
+    }
+
     axPool.onTitleChanged = { _ in
         if let focused = WindowDetector.shared.getFocusedWindow() {
             applyWindowRulesToWindow(focused.windowID, focused.processID, focused.appName, focused.bundleID, focused.title, focused.bounds, false)

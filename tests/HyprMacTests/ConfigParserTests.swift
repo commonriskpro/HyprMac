@@ -303,7 +303,7 @@ final class ConfigParserTests: XCTestCase {
         }
         """
         let config = ConfigParser.parse(text: input)
-        XCTAssertEqual(config.clockFormat, "h:mm a  EEE")
+        XCTAssertEqual(config.clockFormat, "h:mm a  EEE, MMM d")
     }
 
     func testParseBarClockFormat24h() {
@@ -313,7 +313,7 @@ final class ConfigParserTests: XCTestCase {
         }
         """
         let config = ConfigParser.parse(text: input)
-        XCTAssertEqual(config.clockFormat, "HH:mm  EEE")
+        XCTAssertEqual(config.clockFormat, "HH:mm  EEE, MMM d")
     }
 
     func testParseBarClockFormatCustomStrftime() {
@@ -333,7 +333,7 @@ final class ConfigParserTests: XCTestCase {
         }
         """
         let config = ConfigParser.parse(text: input)
-        XCTAssertEqual(config.clockFormat, "h:mm a  EEE")
+        XCTAssertEqual(config.clockFormat, "h:mm a  EEE, MMM d")
     }
 
 }

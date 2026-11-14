@@ -168,4 +168,67 @@ final class WindowDetectorTests: XCTestCase {
         // No overlap
         XCTAssertFalse(finderFrameTiled.intersects(ghosttyFrameTiled))
     }
+
+    @MainActor
+    func testGetEligibleWindowsWithPendingWindowIDsNotOnScreen() {
+        let detector = WindowDetector.shared
+        if let existing = detector.getEligibleWindows(excludingPIDs: []).first {
+            let boundsDict: [String: Any] = [
+                "X": existing.bounds.origin.x,
+                "Y": existing.bounds.origin.y,
+                "Width": existing.bounds.width,
+                "Height": existing.bounds.height
+            ]
+            let snapshotItem: [String: Any] = [
+                kCGWindowNumber as String: existing.windowID,
+                kCGWindowLayer as String: 0,
+                kCGWindowOwnerPID as String: existing.processID,
+                kCGWindowOwnerName as String: existing.appName,
+                kCGWindowName as String: existing.title,
+                kCGWindowAlpha as String: 1.0,
+                kCGWindowBounds as String: boundsDict,
+                kCGWindowIsOnscreen as String: false
+            ]
+
+            // 1. Without pendingWindowIDs: window is skipped because kCGWindowIsOnscreen is false
+            let skipped = detector.getEligibleWindows(
+                in: nil,
+                excludingPIDs: [],
+                windowListSnapshot: [snapshotItem],
+                pendingWindowIDs: []
+            )
+            XCTAssertTrue(skipped.isEmpty, "When isOnscreen == false and not in pendingWindowIDs, window must be skipped")
+
+            // 2. With pendingWindowIDs: !isOnscreen check is bypassed, so eligible window is admitted
+            let admitted = detector.getEligibleWindows(
+                in: nil,
+                excludingPIDs: [],
+                windowListSnapshot: [snapshotItem],
+                pendingWindowIDs: [existing.windowID]
+            )
+            XCTAssertEqual(admitted.count, 1, "When wid is in pendingWindowIDs, !isOnscreen check must be bypassed and window enrolled")
+            XCTAssertEqual(admitted.first?.windowID, existing.windowID)
+        } else {
+            // Fallback for headless environments: verify !isOnscreen filter behavior
+            let dummyWid: CGWindowID = 999991
+            let dummyPID: pid_t = 999992
+            let dummyItem: [String: Any] = [
+                kCGWindowNumber as String: dummyWid,
+                kCGWindowLayer as String: 0,
+                kCGWindowOwnerPID as String: dummyPID,
+                kCGWindowOwnerName as String: "DummyApp",
+                kCGWindowName as String: "Dummy",
+                kCGWindowAlpha as String: 1.0,
+                kCGWindowBounds as String: ["X": 100.0, "Y": 100.0, "Width": 500.0, "Height": 500.0],
+                kCGWindowIsOnscreen as String: false
+            ]
+            let skipped = detector.getEligibleWindows(
+                in: nil,
+                excludingPIDs: [],
+                windowListSnapshot: [dummyItem],
+                pendingWindowIDs: []
+            )
+            XCTAssertTrue(skipped.isEmpty)
+        }
+    }
 }

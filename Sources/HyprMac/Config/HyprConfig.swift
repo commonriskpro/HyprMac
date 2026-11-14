@@ -423,8 +423,8 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
     public var barColors: HyprBarColors = HyprBarColors()
     /// Opacity/alpha for the floating bar capsules (default: 0.65).
     public var barOpacity: Double = 0.65
-    /// Format string for the status bar clock module (e.g. "h:mm a  EEE" for 12h, "HH:mm  EEE" for 24h).
-    public var clockFormat: String = "h:mm a  EEE"
+    /// Format string for the status bar clock module (e.g. "h:mm a  EEE, MMM d" for 12h, "HH:mm  EEE, MMM d" for 24h).
+    public var clockFormat: String = "h:mm a  EEE, MMM d"
     /// Map of user-defined and resolved configuration variables (e.g. `$mainMod: "SUPER"`).
     public var variables: [String: String] = [:]
     /// Declarative window rules parsed from `windowrule` and `windowrulev2` directives.
@@ -486,7 +486,7 @@ public struct HyprConfig: Equatable, Sendable, CustomStringConvertible {
         animationTree: HyprAnimationTree = .default,
         barColors: HyprBarColors = HyprBarColors(),
         barOpacity: Double = 0.65,
-        clockFormat: String = "h:mm a  EEE",
+        clockFormat: String = "h:mm a  EEE, MMM d",
         bindings: [HyprBinding] = [],
         variables: [String: String] = [:],
         windowRules: [HyprWindowRule] = [],

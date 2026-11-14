@@ -284,7 +284,7 @@ final class HyprBarTests: XCTestCase {
 
     func testBarViewClockFormat12h() {
         let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1440, height: 32), workspaceCount: 6)
-        barView.clockFormat = "h:mm a  EEE"
+        barView.clockFormat = "h:mm a  EEE, MMM d"
         barView.updateClock()
         let text = barView.clockLabel.stringValue
         XCTAssertFalse(text.isEmpty)
@@ -352,5 +352,73 @@ final class HyprBarTests: XCTestCase {
 
     func testNotificationCenterDrawerWindowLevel() {
         XCTAssertEqual(NotificationCenterDrawer.shared.level, .popUpMenu)
+    }
+
+    func testBarViewClockContainerClickTogglesCalendarPopover() {
+        let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1440, height: 32), workspaceCount: 6)
+        XCTAssertTrue(barView.clockContainer.subviews.contains(barView.clockLabel))
+        XCTAssertNil(barView.calendarPopover)
+
+        // Clicking clock container opens popover
+        barView.clockContainer.onClick?()
+        XCTAssertNotNil(barView.calendarPopover)
+        XCTAssertTrue(barView.calendarPopover?.isOpen == true)
+
+        // Clicking again toggles (closes) popover
+        barView.clockContainer.onClick?()
+        XCTAssertNil(barView.calendarPopover)
+    }
+
+    func testMutualExclusionBetweenCalendarAndVolumePopovers() {
+        let barView = BarView(frame: NSRect(x: 0, y: 0, width: 1440, height: 32), workspaceCount: 6)
+
+        // Open calendar popover
+        barView.openCalendarPopover()
+        XCTAssertNotNil(barView.calendarPopover)
+        XCTAssertNil(barView.volumePopover)
+
+        // Open volume popover -> calendar popover must close
+        barView.openVolumePopover()
+        XCTAssertNil(barView.calendarPopover)
+        XCTAssertNotNil(barView.volumePopover)
+
+        // Open calendar popover again -> volume popover must close
+        barView.openCalendarPopover()
+        XCTAssertNotNil(barView.calendarPopover)
+        XCTAssertNil(barView.volumePopover)
+
+        // stopTimers() closes both
+        barView.stopTimers()
+        XCTAssertNil(barView.calendarPopover)
+        XCTAssertNil(barView.volumePopover)
+    }
+
+    func testCalendarPopoverPanelNavigationAndHeader() {
+        let panel = CalendarPopoverPanel(anchorFrame: NSRect(x: 500, y: 1000, width: 100, height: 20), screen: nil)
+        panel.showPopover(animate: false)
+        XCTAssertTrue(panel.isOpen)
+        XCTAssertEqual(panel.level, .popUpMenu)
+        XCTAssertEqual(panel.frame.width, CalendarPopoverPanel.panelWidth)
+
+        let initialMonth = panel.displayedMonth
+        // Click next month
+        panel.nextMonthButton.onClick?()
+        let calendar = Calendar.current
+        XCTAssertNotEqual(calendar.component(.month, from: panel.displayedMonth), calendar.component(.month, from: initialMonth))
+
+        // Click today button resets to today
+        panel.todayButton.onClick?()
+        XCTAssertEqual(calendar.component(.month, from: panel.displayedMonth), calendar.component(.month, from: Date()))
+
+        // Click prev month
+        panel.prevMonthButton.onClick?()
+        XCTAssertNotEqual(calendar.component(.month, from: panel.displayedMonth), calendar.component(.month, from: Date()))
+
+        // Click header container jumps to today
+        panel.headerContainer.onClick?()
+        XCTAssertEqual(calendar.component(.month, from: panel.displayedMonth), calendar.component(.month, from: Date()))
+
+        panel.dismissPopover(animate: false)
+        XCTAssertFalse(panel.isOpen)
     }
 }
