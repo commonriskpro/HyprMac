@@ -19,6 +19,7 @@
 #include <signal.h>
 #include <setjmp.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -259,11 +260,11 @@ typedef struct hypr_symbols HyprSymbols;
 #define HyprSymbols hypr_symbols
 
 static struct hypr_symbols g_symbols = {0};
-static bool g_menubar_suppressed = false;
+static _Atomic bool g_menubar_suppressed = false;
 static uint32_t g_suppressed_menubar_wids[32] = {0};
 static int32_t g_suppressed_menubar_orig_levels[32] = {0};
-static size_t g_suppressed_menubar_count = 0;
-static uint32_t g_exempt_bar_wid = 0;
+static _Atomic size_t g_suppressed_menubar_count = 0;
+static _Atomic uint32_t g_exempt_bar_wid = 0;
 static os_unfair_lock g_menubar_lock = OS_UNFAIR_LOCK_INIT;
 
 /* Static function pointer globals */
@@ -428,33 +429,64 @@ static inline uint32_t hash_wid(uint32_t wid) {
 
 /* ---- Border Overlay Management (Task 4.3) -------------------------------- */
 
-static uint32_t g_border_wids[HYPR_MANAGED_WINDOWS_CAPACITY];
-static size_t g_border_wid_count = 0;
+#define BORDER_SET_CAPACITY 8192
+#define BORDER_SET_MASK (BORDER_SET_CAPACITY - 1)
+
+static uint32_t g_border_wids_set[BORDER_SET_CAPACITY];
+static _Atomic int g_border_active_count = 0;
 static os_unfair_lock g_border_wids_lock = OS_UNFAIR_LOCK_INIT;
 static _Thread_local bool g_creating_border_overlay = false;
 
+static inline uint32_t hash_border_wid(uint32_t wid) {
+    return (wid * 2654435761u) & BORDER_SET_MASK;
+}
+
 static void mark_as_border_wid(uint32_t wid) {
-    if (wid == 0) return;
+    if (wid == 0 || wid == UINT32_MAX) return;
     os_unfair_lock_lock(&g_border_wids_lock);
-    for (size_t i = 0; i < g_border_wid_count; i++) {
-        if (g_border_wids[i] == wid) {
+    uint32_t h = hash_border_wid(wid);
+    int first_tombstone = -1;
+    for (size_t i = 0; i < BORDER_SET_CAPACITY; i++) {
+        uint32_t slot = (h + i) & BORDER_SET_MASK;
+        uint32_t val = g_border_wids_set[slot];
+        if (val == wid) {
+            os_unfair_lock_unlock(&g_border_wids_lock);
+            return;
+        }
+        if (val == UINT32_MAX && first_tombstone == -1) {
+            first_tombstone = (int)slot;
+        }
+        if (val == 0) {
+            uint32_t insert_slot = (first_tombstone != -1) ? (uint32_t)first_tombstone : slot;
+            g_border_wids_set[insert_slot] = wid;
+            atomic_fetch_add_explicit(&g_border_active_count, 1, memory_order_release);
             os_unfair_lock_unlock(&g_border_wids_lock);
             return;
         }
     }
-    if (g_border_wid_count < HYPR_MANAGED_WINDOWS_CAPACITY) {
-        g_border_wids[g_border_wid_count++] = wid;
+    if (first_tombstone != -1) {
+        g_border_wids_set[first_tombstone] = wid;
+        atomic_fetch_add_explicit(&g_border_active_count, 1, memory_order_release);
     }
     os_unfair_lock_unlock(&g_border_wids_lock);
 }
 
 static void unmark_border_wid(uint32_t wid) {
-    if (wid == 0) return;
+    if (wid == 0 || wid == UINT32_MAX) return;
+    if (atomic_load_explicit(&g_border_active_count, memory_order_relaxed) == 0) return;
     os_unfair_lock_lock(&g_border_wids_lock);
-    for (size_t i = 0; i < g_border_wid_count; i++) {
-        if (g_border_wids[i] == wid) {
-            g_border_wids[i] = g_border_wids[g_border_wid_count - 1];
-            g_border_wid_count--;
+    uint32_t h = hash_border_wid(wid);
+    for (size_t i = 0; i < BORDER_SET_CAPACITY; i++) {
+        uint32_t slot = (h + i) & BORDER_SET_MASK;
+        uint32_t val = g_border_wids_set[slot];
+        if (val == wid) {
+            g_border_wids_set[slot] = UINT32_MAX;
+            if (atomic_fetch_sub_explicit(&g_border_active_count, 1, memory_order_release) == 1) {
+                memset(g_border_wids_set, 0, sizeof(g_border_wids_set));
+            }
+            break;
+        }
+        if (val == 0) {
             break;
         }
     }
@@ -462,12 +494,19 @@ static void unmark_border_wid(uint32_t wid) {
 }
 
 static bool is_border_wid(uint32_t wid) {
-    if (wid == 0) return false;
+    if (wid == 0 || wid == UINT32_MAX) return false;
+    if (atomic_load_explicit(&g_border_active_count, memory_order_acquire) == 0) return false;
     os_unfair_lock_lock(&g_border_wids_lock);
-    for (size_t i = 0; i < g_border_wid_count; i++) {
-        if (g_border_wids[i] == wid) {
+    uint32_t h = hash_border_wid(wid);
+    for (size_t i = 0; i < BORDER_SET_CAPACITY; i++) {
+        uint32_t slot = (h + i) & BORDER_SET_MASK;
+        uint32_t val = g_border_wids_set[slot];
+        if (val == wid) {
             os_unfair_lock_unlock(&g_border_wids_lock);
             return true;
+        }
+        if (val == 0) {
+            break;
         }
     }
     os_unfair_lock_unlock(&g_border_wids_lock);
@@ -1357,17 +1396,22 @@ static void register_space_callbacks(void) {
 
 static bool is_menubar_wid(uint32_t wid) {
     if (wid == 0) return false;
+    uint32_t exempt = atomic_load_explicit(&g_exempt_bar_wid, memory_order_relaxed);
+    if (exempt != 0 && wid == exempt) return false;
     if (is_border_wid(wid)) return false;
-    if (g_exempt_bar_wid != 0 && wid == g_exempt_bar_wid) return false;
 
-    os_unfair_lock_lock(&g_menubar_lock);
-    for (size_t i = 0; i < g_suppressed_menubar_count; i++) {
-        if (g_suppressed_menubar_wids[i] == wid) {
-            os_unfair_lock_unlock(&g_menubar_lock);
-            return true;
+    size_t supp_count = atomic_load_explicit(&g_suppressed_menubar_count, memory_order_acquire);
+    if (supp_count > 0) {
+        os_unfair_lock_lock(&g_menubar_lock);
+        size_t count = g_suppressed_menubar_count;
+        for (size_t i = 0; i < count; i++) {
+            if (g_suppressed_menubar_wids[i] == wid) {
+                os_unfair_lock_unlock(&g_menubar_lock);
+                return true;
+            }
         }
+        os_unfair_lock_unlock(&g_menubar_lock);
     }
-    os_unfair_lock_unlock(&g_menubar_lock);
 
     int32_t level = 0;
     CGSConnectionID conn = _CGSDefaultConnection();
@@ -1402,7 +1446,7 @@ static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const 
         }
 
         os_unfair_lock_lock(&g_menubar_lock);
-        g_exempt_bar_wid = exempt_wid;
+        atomic_store_explicit(&g_exempt_bar_wid, exempt_wid, memory_order_release);
 
         // 1. Ingest explicit target window IDs (e.g. from orchestrator)
         if (target_wids && count > 0) {
@@ -1472,7 +1516,7 @@ static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const 
             hypr_log("Evicted menubar wid=%u to level -100 alpha 0.0", wid);
         }
 
-        g_menubar_suppressed = true;
+        atomic_store_explicit(&g_menubar_suppressed, true, memory_order_release);
         os_unfair_lock_unlock(&g_menubar_lock);
 
         hypr_log("apply_menubar_suppression(true): Menu bar completely suppressed (%zu windows evicted, exempt_wid=%u)", g_suppressed_menubar_count, g_exempt_bar_wid);
@@ -1513,8 +1557,8 @@ static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const 
         g_suppressed_menubar_count = 0;
         memset(g_suppressed_menubar_wids, 0, sizeof(g_suppressed_menubar_wids));
         memset(g_suppressed_menubar_orig_levels, 0, sizeof(g_suppressed_menubar_orig_levels));
-        g_exempt_bar_wid = 0;
-        g_menubar_suppressed = false;
+        atomic_store_explicit(&g_exempt_bar_wid, 0, memory_order_release);
+        atomic_store_explicit(&g_menubar_suppressed, false, memory_order_release);
         os_unfair_lock_unlock(&g_menubar_lock);
 
         if (g_symbols.TransactionCreate && g_symbols.TransactionSetMenuBarOverrideMaximumReveal) {
@@ -1537,10 +1581,12 @@ static void apply_menubar_suppression(bool suppress, uint32_t exempt_wid, const 
 /* ---- SkyLight SLS Compositor Primitives Interposition -------------------- */
 
 static CGError my_SLSOrderWindow(CGSConnectionID cid, uint32_t wid, int op, uint32_t rel) {
-    if (g_menubar_suppressed && is_menubar_wid(wid)) {
-        if (op != 0) {
-            hypr_log("my_SLSOrderWindow: blocked menubar wid=%u order=%d -> forced to kCGSOrderOut", wid, op);
-            op = 0; // Force kCGSOrderOut
+    if (atomic_load_explicit(&g_menubar_suppressed, memory_order_relaxed)) {
+        if (is_menubar_wid(wid)) {
+            if (op != 0) {
+                hypr_log("my_SLSOrderWindow: blocked menubar wid=%u order=%d -> forced to kCGSOrderOut", wid, op);
+                op = 0; // Force kCGSOrderOut
+            }
         }
     }
     fn_CGSOrderWindow orig = g_orig_SLSOrderWindow ? g_orig_SLSOrderWindow : g_symbols.OrderWindow;
@@ -1550,12 +1596,14 @@ static CGError my_SLSOrderWindow(CGSConnectionID cid, uint32_t wid, int op, uint
 static CGError my_SLSMoveWindow(CGSConnectionID cid, uint32_t wid, const CGPoint *point) {
     const CGPoint *target_point = point;
     CGPoint clamped;
-    if (g_menubar_suppressed && is_menubar_wid(wid)) {
-        if (point && point->y >= -30.0) {
-            clamped = *point;
-            clamped.y = -200.0;
-            target_point = &clamped;
-            hypr_log("my_SLSMoveWindow: clamped menubar wid=%u to offscreen y=-200", wid);
+    if (atomic_load_explicit(&g_menubar_suppressed, memory_order_relaxed)) {
+        if (is_menubar_wid(wid)) {
+            if (point && point->y >= -30.0) {
+                clamped = *point;
+                clamped.y = -200.0;
+                target_point = &clamped;
+                hypr_log("my_SLSMoveWindow: clamped menubar wid=%u to offscreen y=-200", wid);
+            }
         }
     }
     fn_SLSMoveWindow orig = g_orig_SLSMoveWindow ? g_orig_SLSMoveWindow : g_symbols.MoveWindow;
@@ -1563,8 +1611,10 @@ static CGError my_SLSMoveWindow(CGSConnectionID cid, uint32_t wid, const CGPoint
 }
 
 static CGSError my_SLSSetWindowAlpha(CGSConnectionID cid, uint32_t wid, float alpha) {
-    if (g_menubar_suppressed && is_menubar_wid(wid)) {
-        alpha = 0.0f;
+    if (atomic_load_explicit(&g_menubar_suppressed, memory_order_relaxed)) {
+        if (is_menubar_wid(wid)) {
+            alpha = 0.0f;
+        }
     }
     if (g_symbols.SetWindowAlpha) {
         return g_symbols.SetWindowAlpha(cid, wid, alpha);
@@ -1585,9 +1635,11 @@ static CGError my_SLSNewWindow(CGSConnectionID cid, int type, float x, float y, 
         if (is_border_wid(wid)) {
             return err;
         }
-        if (g_menubar_suppressed && is_menubar_wid(wid)) {
-            if (g_symbols.SetWindowAlpha) {
-                g_symbols.SetWindowAlpha(cid, wid, 0.0f);
+        if (atomic_load_explicit(&g_menubar_suppressed, memory_order_relaxed)) {
+            if (is_menubar_wid(wid)) {
+                if (g_symbols.SetWindowAlpha) {
+                    g_symbols.SetWindowAlpha(cid, wid, 0.0f);
+                }
             }
         }
         apply_global_policy_to_window(cid, wid);
@@ -2547,16 +2599,30 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
                 return;
             }
             CGSConnectionID cid = g_symbols.MainConnectionID();
-            uint32_t wids_to_update[HYPR_MANAGED_WINDOWS_CAPACITY];
+            uint32_t stack_wids[128];
+            uint32_t *wids_to_update = stack_wids;
+            size_t update_capacity = sizeof(stack_wids) / sizeof(stack_wids[0]);
             size_t update_count = 0;
+
             os_unfair_lock_lock(&g_state_lock);
-            for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
+            if (g_managed_window_count > update_capacity) {
+                wids_to_update = (uint32_t *)malloc(g_managed_window_count * sizeof(uint32_t));
+                if (!wids_to_update) {
+                    wids_to_update = stack_wids;
+                    update_capacity = sizeof(stack_wids) / sizeof(stack_wids[0]);
+                } else {
+                    update_capacity = g_managed_window_count;
+                }
+            }
+            size_t scanned_active = 0;
+            for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY && scanned_active < g_managed_window_count; i++) {
                 if (g_managed_windows[i].active) {
+                    scanned_active++;
                     bool was_focused = g_managed_windows[i].is_focused;
                     bool now_focused = (g_managed_windows[i].wid == target_wid);
                     g_managed_windows[i].is_focused = now_focused;
                     if (was_focused != now_focused || (now_focused && g_managed_windows[i].border_wid == 0)) {
-                        if (update_count < HYPR_MANAGED_WINDOWS_CAPACITY) {
+                        if (update_count < update_capacity) {
                             wids_to_update[update_count++] = g_managed_windows[i].wid;
                         }
                     }
@@ -2566,6 +2632,9 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
 
             for (size_t i = 0; i < update_count; i++) {
                 create_or_update_border_overlay(_CGSDefaultConnection(), wids_to_update[i]);
+            }
+            if (wids_to_update != stack_wids) {
+                free(wids_to_update);
             }
 
             if (target_wid != 0) {
@@ -2674,7 +2743,7 @@ static void dispatch_command(const uint8_t *payload, uint32_t len) {
 
             if (tx) {
                 if (g_symbols.TransactionCommit) {
-                    g_symbols.TransactionCommit(tx, 1);
+                    g_symbols.TransactionCommit(tx, 0);
                 }
                 CFRelease(tx);
             }
@@ -2939,23 +3008,49 @@ static void hypr_server_init(void) {
 /* Destructor: release Mach bootstrap port and clean up ephemeral artifacts. */
 __attribute__((destructor))
 static void hypr_server_fini(void) {
-    uint32_t border_wids[HYPR_MANAGED_WINDOWS_CAPACITY];
-    uint32_t wids[HYPR_MANAGED_WINDOWS_CAPACITY];
+    uint32_t stack_border_wids[128];
+    uint32_t stack_wids[128];
+    uint32_t *border_wids = stack_border_wids;
+    uint32_t *wids = stack_wids;
+    size_t capacity = sizeof(stack_wids) / sizeof(stack_wids[0]);
     size_t count = 0;
 
     os_unfair_lock_lock(&g_state_lock);
-    for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY; i++) {
-        if (g_managed_windows[i].active && g_managed_windows[i].border_wid != 0) {
-            border_wids[count] = g_managed_windows[i].border_wid;
-            wids[count] = g_managed_windows[i].wid;
-            g_managed_windows[i].border_wid = 0;
-            count++;
+    if (g_managed_window_count > capacity) {
+        border_wids = (uint32_t *)malloc(g_managed_window_count * sizeof(uint32_t));
+        wids = (uint32_t *)malloc(g_managed_window_count * sizeof(uint32_t));
+        if (!border_wids || !wids) {
+            if (border_wids) free(border_wids);
+            if (wids) free(wids);
+            border_wids = stack_border_wids;
+            wids = stack_wids;
+            capacity = sizeof(stack_wids) / sizeof(stack_wids[0]);
+        } else {
+            capacity = g_managed_window_count;
+        }
+    }
+    size_t scanned_active = 0;
+    for (size_t i = 0; i < HYPR_MANAGED_WINDOWS_CAPACITY && scanned_active < g_managed_window_count; i++) {
+        if (g_managed_windows[i].active) {
+            scanned_active++;
+            if (g_managed_windows[i].border_wid != 0 && count < capacity) {
+                border_wids[count] = g_managed_windows[i].border_wid;
+                wids[count] = g_managed_windows[i].wid;
+                g_managed_windows[i].border_wid = 0;
+                count++;
+            }
         }
     }
     os_unfair_lock_unlock(&g_state_lock);
 
     for (size_t i = 0; i < count; i++) {
         destroy_border_overlay_wid(_CGSDefaultConnection(), border_wids[i], wids[i]);
+    }
+    if (border_wids != stack_border_wids) {
+        free(border_wids);
+    }
+    if (wids != stack_wids) {
+        free(wids);
     }
 
     if (g_bootstrap_service_port != MACH_PORT_NULL) {

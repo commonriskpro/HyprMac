@@ -463,6 +463,10 @@ public final class HyprServerBridge: @unchecked Sendable {
                 Darwin.close(shmFD)
                 shmFD = -1
             }
+            if triggerFd >= 0 {
+                Darwin.close(triggerFd)
+                triggerFd = -1
+            }
             _isAvailable = false
         }
     }
