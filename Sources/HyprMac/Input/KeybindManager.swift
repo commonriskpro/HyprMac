@@ -57,6 +57,13 @@ public struct KeyBinding: Sendable {
     }
 }
 
+/// Semantic actions for internal desktop shell UI components.
+public enum BuiltinShellAction: Sendable {
+    case launcher
+    case wallpaperGallery
+    case powerMenu
+}
+
 /// Core global keybinding manager for HyprMac.
 /// Captures global hotkeys via CGEvent.tapCreate and dispatches Hyprland actions.
 public final class KeybindManager: @unchecked Sendable {
@@ -88,10 +95,6 @@ public final class KeybindManager: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     public private(set) var isRunning: Bool = false
     private var hasLoggedTapFailure: Bool = false
-
-    private var activeGalleryWindow: WallpaperGalleryWindow?
-    private var activeRofiWindow: RofiWindow?
-    private var activeWlogoutWindow: WlogoutWindow?
 
     /// When true, top-edge mouse motion is clamped to y >= 12.0 to shield WindowServer's menu bar reveal.
     public var isMenuBarSuppressed: Bool {
@@ -143,6 +146,8 @@ public final class KeybindManager: @unchecked Sendable {
     public var onLayoutMsg: (@Sendable (String) -> Void)?
     /// Notification/callback hook for monitor focus.
     public var onFocusMonitor: (@Sendable (String) -> Void)?
+    /// Notification/callback hook for internal desktop shell actions (launcher, wallpaper gallery, power menu).
+    public var onBuiltinShellAction: (@MainActor @Sendable (BuiltinShellAction) -> Void)?
 
     /// Optional weak reference to active MasterEngine for master layout messages.
     public weak var masterEngine: MasterEngine?
@@ -870,40 +875,22 @@ public final class KeybindManager: @unchecked Sendable {
         // 4. In-daemon fast dispatch for internal desktop components
         let lower = trimmed.lowercased()
         if lower == "hyprmac wallpaper" || lower == "hyprmac gallery" || lower.hasSuffix("/hyprmac wallpaper") || lower.hasSuffix("/hyprmac gallery") {
-            runOnMainActor {
-                if WallpaperGalleryWindow.current != nil {
-                    WallpaperGalleryWindow.current?.showGallery()
-                } else {
-                    let win = WallpaperGalleryWindow(initialQuery: nil, synchronousLoad: false)
-                    self.activeGalleryWindow = win
-                    win.showGallery()
-                }
+            runOnMainActor { [weak self] in
+                self?.onBuiltinShellAction?(.wallpaperGallery)
             }
             return
         }
 
         if lower == "hyprmac launcher" || lower == "hyprmac rofi" || lower.hasSuffix("/hyprmac launcher") || lower.hasSuffix("/hyprmac rofi") {
-            runOnMainActor {
-                if RofiWindow.current != nil {
-                    RofiWindow.current?.showLauncher()
-                } else {
-                    let win = RofiWindow()
-                    self.activeRofiWindow = win
-                    win.showLauncher()
-                }
+            runOnMainActor { [weak self] in
+                self?.onBuiltinShellAction?(.launcher)
             }
             return
         }
 
         if lower == "hyprmac powermenu" || lower == "hyprmac wlogout" || lower.hasSuffix("/hyprmac powermenu") || lower.hasSuffix("/hyprmac wlogout") {
-            runOnMainActor {
-                if WlogoutWindow.current != nil {
-                    WlogoutWindow.current?.showMenu()
-                } else {
-                    let win = WlogoutWindow()
-                    self.activeWlogoutWindow = win
-                    win.showMenu()
-                }
+            runOnMainActor { [weak self] in
+                self?.onBuiltinShellAction?(.powerMenu)
             }
             return
         }

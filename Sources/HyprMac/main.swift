@@ -698,6 +698,9 @@ func runIntegratedDaemon(configPath: String?) {
     let keyManager = KeybindManager.shared
     keyManager.masterEngine = masterEngine
     keyManager.register(bindings: config.bindings)
+    keyManager.onBuiltinShellAction = { action in
+        ShellCommandCoordinator.shared.handleAction(action)
+    }
 
     let syncBarFullscreenState: @MainActor () -> Void = {
         let activeWS = workspaceManager.activeWorkspace
