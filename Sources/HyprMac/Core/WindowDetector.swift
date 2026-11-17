@@ -30,6 +30,16 @@ public struct FocusedWindowInfo: Sendable, Equatable {
     }
 }
 
+/// Accessibility-reported minimization state of a window.
+///
+/// `.unavailable` means Accessibility could not answer (no element, timeout, invalid handle);
+/// it is explicitly not the same as `.visible`.
+public enum WindowMinimizedState: Sendable, Equatable {
+    case minimized
+    case visible
+    case unavailable
+}
+
 public final class WindowDetector: @unchecked Sendable {
     public static let shared = WindowDetector()
 
@@ -636,25 +646,32 @@ public final class WindowDetector: @unchecked Sendable {
         return false
     }
 
-    /// Checks whether a window is minimized via Accessibility.
-    public func isWindowMinimized(windowID: CGWindowID, pid: pid_t? = nil, timeout: TimeInterval = 0.050) -> Bool {
+    /// Queries the window's minimization state via Accessibility.
+    ///
+    /// Accessibility answers asynchronously with respect to a minimize request, and a failed
+    /// query carries no evidence at all. Callers must therefore treat `.unavailable` as
+    /// "unknown" instead of "visible"; conflating both is what makes an in-flight minimize
+    /// look like a user-initiated restore.
+    public func minimizedState(windowID: CGWindowID, pid: pid_t? = nil, timeout: TimeInterval = 0.050) -> WindowMinimizedState {
         guard let winElem = getWindowAXElement(windowID: windowID, pid: pid, timeout: timeout) else {
-            return false
+            return .unavailable
         }
         var minVal: AnyObject?
         let err = AXUIElementCopyAttributeValue(winElem, kAXMinimizedAttribute as CFString, &minVal)
         if err == .invalidUIElement || err == .cannotComplete {
             invalidateWindow(windowID: windowID)
+            return .unavailable
         }
-        if err == .success, let val = minVal {
-            if let boolVal = val as? Bool {
-                return boolVal
-            }
-            if CFGetTypeID(val) == CFBooleanGetTypeID() {
-                return CFEqual(val, kCFBooleanTrue)
-            }
+        guard err == .success, let val = minVal else {
+            return .unavailable
         }
-        return false
+        if let boolVal = val as? Bool {
+            return boolVal ? .minimized : .visible
+        }
+        if CFGetTypeID(val) == CFBooleanGetTypeID() {
+            return CFEqual(val, kCFBooleanTrue) ? .minimized : .visible
+        }
+        return .unavailable
     }
 
     /// Sets whether a window is minimized via Accessibility.
@@ -864,7 +881,7 @@ public final class WindowDetector: @unchecked Sendable {
             guard rect.width >= 100 && rect.height >= 100 else { continue }
             guard !HiddenWindowPlacement.isParkedOrHidden(rect) else { continue }
             let axTimeout: TimeInterval = pendingWindowIDs.contains(wid) ? 0.120 : 0.050
-            guard !isWindowMinimized(windowID: wid, pid: pid, timeout: axTimeout) else { continue }
+            guard minimizedState(windowID: wid, pid: pid, timeout: axTimeout) != .minimized else { continue }
             guard isStandardWindow(windowID: wid, pid: pid, timeout: axTimeout) else { continue }
 
             if let screen = screenBounds {

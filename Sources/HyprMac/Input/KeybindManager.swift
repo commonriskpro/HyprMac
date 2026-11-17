@@ -704,6 +704,11 @@ public final class KeybindManager: @unchecked Sendable {
                 }
                 self?.onWindowMinimize?(wid)
                 MainActor.assumeIsolated {
+                    // Request-time intent: Accessibility reports the window as visible for a few
+                    // frames after a successful minimize request, so the layout must already
+                    // know the window is leaving. Reconcilers converge only in the opposite
+                    // direction (confirmed minimized => out of layout) and never treat that
+                    // transient .visible reading as a user restore.
                     WorkspaceManager.shared.setWindowMinimized(wid, minimized: true)
                 }
             }

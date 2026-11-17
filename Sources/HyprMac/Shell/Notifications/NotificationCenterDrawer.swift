@@ -255,7 +255,8 @@ public final class NotificationCenterDrawer: NSPanel {
 
         cardsStackView.translatesAutoresizingMaskIntoConstraints = false
         cardsStackView.orientation = .vertical
-        cardsStackView.alignment = .leading
+        cardsStackView.alignment = .width
+        cardsStackView.distribution = .fill
         cardsStackView.spacing = 8.0
         flippedDoc.addSubview(cardsStackView)
 
@@ -298,7 +299,7 @@ public final class NotificationCenterDrawer: NSPanel {
             cardsStackView.leadingAnchor.constraint(equalTo: flippedDoc.leadingAnchor),
             cardsStackView.trailingAnchor.constraint(equalTo: flippedDoc.trailingAnchor),
             cardsStackView.bottomAnchor.constraint(equalTo: flippedDoc.bottomAnchor),
-            cardsStackView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            cardsStackView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
 
             emptyLabel.centerXAnchor.constraint(equalTo: flippedDoc.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: flippedDoc.centerYAnchor, constant: 40.0)
@@ -637,9 +638,11 @@ public final class NotificationCardView: NSView {
     public let notification: HyprNotification
     private let dismissButton = ClickablePill()
     private let dismissLabel = NSTextField(labelWithString: "✕")
-    private let summaryLabel = NSTextField()
-    private let timeLabel = NSTextField()
-    private let bodyLabel = NSTextField()
+    private let summaryLabel = NSTextField(labelWithString: "")
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let timeLabel = NSTextField(labelWithString: "")
+    private let bodyLabel = NSTextField(labelWithString: "")
+    private let textContainer = NSView()
 
     public init(notification: HyprNotification) {
         self.notification = notification
@@ -683,8 +686,6 @@ public final class NotificationCardView: NSView {
         addSubview(dismissButton)
 
         dismissLabel.translatesAutoresizingMaskIntoConstraints = false
-        dismissLabel.isEditable = false
-        dismissLabel.isSelectable = false
         dismissLabel.font = .barFont(ofSize: 10.0, weight: .bold)
         dismissLabel.textColor = theme.primary
         dismissButton.addSubview(dismissLabel)
@@ -694,8 +695,7 @@ public final class NotificationCardView: NSView {
             dismissLabel.centerYAnchor.constraint(equalTo: dismissButton.centerYAnchor)
         ])
 
-        // Middle text container
-        let textContainer = NSView()
+        // Text column: app name + timestamp header, title, body
         textContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(textContainer)
 
@@ -705,37 +705,45 @@ public final class NotificationCardView: NSView {
         headerStack.distribution = .fill
         headerStack.alignment = .centerY
         headerStack.spacing = 6.0
-        textContainer.addSubview(headerStack)
 
         summaryLabel.stringValue = notification.appName.isEmpty ? notification.title : notification.appName
-        summaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        summaryLabel.isEditable = false
-        summaryLabel.isSelectable = false
         summaryLabel.font = .barFont(ofSize: 11.5, weight: .bold, italic: true)
         summaryLabel.textColor = theme.primary
         summaryLabel.lineBreakMode = .byTruncatingTail
+        summaryLabel.maximumNumberOfLines = 1
         summaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         headerStack.addArrangedSubview(summaryLabel)
 
         timeLabel.stringValue = notification.formattedTimestamp
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.isEditable = false
-        timeLabel.isSelectable = false
         timeLabel.font = .barFont(ofSize: 10.5, weight: .bold, italic: true)
         timeLabel.textColor = theme.tertiary
         timeLabel.alignment = .right
+        timeLabel.maximumNumberOfLines = 1
         timeLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         headerStack.addArrangedSubview(timeLabel)
 
-        bodyLabel.stringValue = notification.body.isEmpty ? notification.title : notification.body
-        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-        bodyLabel.isEditable = false
-        bodyLabel.isSelectable = false
+        titleLabel.stringValue = notification.title
+        titleLabel.font = .barFont(ofSize: 11.5, weight: .semibold)
+        titleLabel.textColor = theme.onSurface
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.isHidden = notification.title.isEmpty || notification.title == summaryLabel.stringValue
+
+        bodyLabel.stringValue = notification.body
         bodyLabel.font = .barFont(ofSize: 11.0, weight: .regular)
-        bodyLabel.textColor = theme.onSurface
+        bodyLabel.textColor = theme.onSurface.withAlphaComponent(0.85)
         bodyLabel.maximumNumberOfLines = 3
         bodyLabel.lineBreakMode = .byTruncatingTail
-        textContainer.addSubview(bodyLabel)
+        bodyLabel.cell?.wraps = true
+        bodyLabel.isHidden = notification.body.isEmpty
+
+        let textStack = NSStackView(views: [headerStack, titleLabel, bodyLabel])
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.orientation = .vertical
+        textStack.alignment = .width
+        textStack.distribution = .fill
+        textStack.spacing = 2.0
+        textContainer.addSubview(textStack)
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10.0),
@@ -752,16 +760,24 @@ public final class NotificationCardView: NSView {
             textContainer.trailingAnchor.constraint(equalTo: dismissButton.leadingAnchor, constant: -8.0),
             textContainer.topAnchor.constraint(equalTo: topAnchor, constant: 10.0),
             textContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10.0),
+            textContainer.heightAnchor.constraint(greaterThanOrEqualTo: iconView.heightAnchor),
 
-            headerStack.topAnchor.constraint(equalTo: textContainer.topAnchor),
-            headerStack.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
-            headerStack.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
-
-            bodyLabel.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 4.0),
-            bodyLabel.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
-            bodyLabel.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
-            bodyLabel.bottomAnchor.constraint(equalTo: textContainer.bottomAnchor)
+            headerStack.widthAnchor.constraint(equalTo: textStack.widthAnchor),
+            titleLabel.widthAnchor.constraint(equalTo: textStack.widthAnchor),
+            bodyLabel.widthAnchor.constraint(equalTo: textStack.widthAnchor),
+            textStack.topAnchor.constraint(equalTo: textContainer.topAnchor),
+            textStack.leadingAnchor.constraint(equalTo: textContainer.leadingAnchor),
+            textStack.trailingAnchor.constraint(equalTo: textContainer.trailingAnchor),
+            textStack.bottomAnchor.constraint(equalTo: textContainer.bottomAnchor)
         ])
+    }
+
+    public override func layout() {
+        super.layout()
+        let availableWidth = textContainer.frame.width
+        guard availableWidth > 0, bodyLabel.preferredMaxLayoutWidth != availableWidth else { return }
+        bodyLabel.preferredMaxLayoutWidth = availableWidth
+        bodyLabel.invalidateIntrinsicContentSize()
     }
 
     public func applyTheme() {
@@ -771,8 +787,9 @@ public final class NotificationCardView: NSView {
         dismissButton.layer?.backgroundColor = theme.surface.withAlphaComponent(0.60).cgColor
         dismissLabel.textColor = theme.primary
         summaryLabel.textColor = theme.primary
+        titleLabel.textColor = theme.onSurface
         timeLabel.textColor = theme.tertiary
-        bodyLabel.textColor = theme.onSurface
+        bodyLabel.textColor = theme.onSurface.withAlphaComponent(0.85)
     }
 
     public override func mouseUp(with event: NSEvent) {

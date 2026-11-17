@@ -685,7 +685,7 @@ public final class CompositorDaemon {
         // 1. Check if the activated application's focused window is minimized and needs unminimizing
         if let f = rawFocused, f.processID == pid {
             let wid = f.windowID
-            if workspaceManager.isMinimized(wid) || WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
+            if WindowDetector.shared.minimizedState(windowID: wid, pid: pid) == .minimized {
                 _ = WindowDetector.shared.setWindowMinimized(windowID: wid, minimized: false, pid: pid)
                 handleUnminimize(wid: wid, pid: pid)
                 return
@@ -694,7 +694,8 @@ public final class CompositorDaemon {
 
         // Check if any window belonging to the activated application unminimized
         for wid in workspaceManager.windowOrder where workspaceManager.getPID(for: wid) == pid {
-            if workspaceManager.isMinimized(wid) && !WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
+            if workspaceManager.isMinimized(wid),
+               WindowDetector.shared.minimizedState(windowID: wid, pid: pid) == .visible {
                 handleUnminimize(wid: wid, pid: pid)
                 return
             }
@@ -710,9 +711,15 @@ public final class CompositorDaemon {
         // If ALL windows of this application are minimized:
         // Do NOT auto-switch workspaces to an inactive workspace!
         // Instead, restore/unminimize into the currently active workspace.
-        let nonMinimizedAppWindows = appWindows.filter { !workspaceManager.isMinimized($0) && !WindowDetector.shared.isWindowMinimized(windowID: $0, pid: pid) }
+        let nonMinimizedAppWindows = appWindows.filter {
+            !workspaceManager.isMinimized($0) &&
+            WindowDetector.shared.minimizedState(windowID: $0, pid: pid) != .minimized
+        }
         if nonMinimizedAppWindows.isEmpty {
-            if let minWid = appWindows.first(where: { workspaceManager.isMinimized($0) || WindowDetector.shared.isWindowMinimized(windowID: $0, pid: pid) }) {
+            if let minWid = appWindows.first(where: {
+                workspaceManager.isMinimized($0) ||
+                WindowDetector.shared.minimizedState(windowID: $0, pid: pid) == .minimized
+            }) {
                 _ = WindowDetector.shared.setWindowMinimized(windowID: minWid, minimized: false, pid: pid)
                 handleUnminimize(wid: minWid, pid: pid)
             }
@@ -931,7 +938,8 @@ public final class CompositorDaemon {
                 self.handleUnminimize(wid: wid, pid: pid)
             } else {
                 for wid in self.workspaceManager.windowOrder where self.workspaceManager.getPID(for: wid) == pid {
-                    if self.workspaceManager.isMinimized(wid) && !WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid) {
+                    if self.workspaceManager.isMinimized(wid),
+                       WindowDetector.shared.minimizedState(windowID: wid, pid: pid) == .visible {
                         self.handleUnminimize(wid: wid, pid: pid)
                         break
                     }
@@ -1167,21 +1175,6 @@ public final class CompositorDaemon {
         let isParked = rawFocused != nil && HiddenWindowPlacement.isParkedOrHidden(rawFocused!.bounds)
         let focusedCandidate = (isBarOrBorder || isParked) ? nil : rawFocused
 
-        // Unminimize to active workspace if a window was unminimized
-        if let fc = focusedCandidate {
-            let wid = fc.windowID
-            let pid = fc.processID
-            let wasMin = workspaceManager.isMinimized(wid)
-            let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
-
-            if wasMin && !isMin {
-                handleUnminimize(wid: wid, pid: pid)
-            } else if wasMin {
-                _ = WindowDetector.shared.setWindowMinimized(windowID: wid, minimized: false, pid: pid)
-                handleUnminimize(wid: wid, pid: pid)
-            }
-        }
-
         // Ensure non-standard windows (popups/dropdowns) do not receive borders.
         let focused: FocusedWindowInfo?
         if let fc = focusedCandidate {
@@ -1307,21 +1300,18 @@ public final class CompositorDaemon {
         var minimizedChanged = false
         for wid in workspaceManager.windowOrder {
             let pid = workspaceManager.getPID(for: wid)
-            let wasMinimized = workspaceManager.isMinimized(wid)
-            let isMin = WindowDetector.shared.isWindowMinimized(windowID: wid, pid: pid)
-            if isMin {
+            // Convergence is one-directional: a confirmed minimized window is pulled out of the
+            // layout. The reverse is never inferred from polling here. Accessibility answers
+            // .visible for a few frames after a minimize request returns success, so
+            // "stored minimized && AX visible" is not proof that the user restored the window;
+            // restores are event-driven (AXWindowDeminiaturized, app activation).
+            if WindowDetector.shared.minimizedState(windowID: wid, pid: pid) == .minimized {
                 workspaceManager.setWindowMinimized(wid, minimized: true)
                 if dwindleEngine.managedWindowSet.contains(wid) {
                     dwindleEngine.removeWindow(windowID: wid, in: tilingBounds)
                     effectsManager.hideOverlay(for: wid)
                     minimizedChanged = true
                 }
-            } else if wasMinimized && !isMin {
-                handleUnminimize(wid: wid, pid: pid)
-                framesChanged = true
-                minimizedChanged = true
-            } else {
-                workspaceManager.setWindowMinimized(wid, minimized: false)
             }
         }
 

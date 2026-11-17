@@ -1323,25 +1323,11 @@ static void strip_window_decorations(NSWindow *window) {
             }
         }
 
-        // Enable window surface transparency and behind-window vibrancy
-        if (window.isOpaque) {
-            window.opaque = NO;
-        }
-        if (![window.backgroundColor isEqual:[NSColor clearColor]]) {
-            window.backgroundColor = [NSColor clearColor];
-        }
-        if ([window.contentView isKindOfClass:[NSVisualEffectView class]]) {
-            NSVisualEffectView *vev = (NSVisualEffectView *)window.contentView;
-            if (vev.material != NSVisualEffectMaterialFullScreenUI) {
-                vev.material = NSVisualEffectMaterialFullScreenUI;
-            }
-            if (vev.blendingMode != NSVisualEffectBlendingModeBehindWindow) {
-                vev.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-            }
-            if (vev.state != NSVisualEffectStateActive) {
-                vev.state = NSVisualEffectStateActive;
-            }
-        }
+        // Window surface opacity is owned by the compositor (config
+        // `decoration.active_opacity` / `inactive_opacity`, applied through
+        // WindowServer alpha). The client hook must never clear the window
+        // backing store: doing so leaves every region the app does not paint
+        // fully see-through and overrides native vibrancy (e.g. Xcode Settings).
 
         // 3. Permanently hide standard traffic light buttons (do NOT zero out frames or disable in Electron)
         NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
